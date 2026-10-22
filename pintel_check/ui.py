@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from core import apple, device, price, setup, sickw, store, verdict
+from core import apple, device, gsheet, price, setup, sickw, store, verdict
 from core.paths import bundled
 
 # ─────────────────────────── внешний вид ───────────────────────────
@@ -723,6 +723,29 @@ class MainWindow(QMainWindow):
                            "поэтому всегда по кнопке."))
         add_card(self.p4, f)
 
+        # — прайс из Google Таблицы —
+        fp, lp_ = card("Прайс из Google Таблицы")
+        try:
+            cfg = price.load()
+        except Exception:
+            cfg = {}
+        upd = cfg.get("прайс_обновлён")
+        n_codes = len(cfg.get("база") or {})
+        lp_.addWidget(box(f"Прайс обновлён {upd} · моделей в базе: {n_codes}", "ok") if upd
+                      else box("Прайс из таблицы ещё не загружался — в базе заглушки.", "warn"))
+        lp_.addWidget(hint("Ссылка на таблицу (доступ: «все, у кого есть ссылка» — Читатель)"))
+        self.sheet_url = QLineEdit(cfg.get("гугл_таблица") or gsheet.DEFAULT_URL)
+        lp_.addWidget(self.sheet_url)
+        sb = QPushButton("Обновить прайс из таблицы")
+        sb.clicked.connect(self.sync_prices)
+        lp_.addWidget(sb, 0, Qt.AlignLeft)
+        self.sheet_result = QVBoxLayout()
+        lp_.addLayout(self.sheet_result)
+        lp_.addWidget(hint("Из таблицы берутся базовые цены по моделям и объёмам. "
+                           "Вычеты и правила отказов остаются в prices.json рядом "
+                           "с программой."))
+        add_card(self.p4, fp)
+
         # — драйверы —
         f2, l2 = card("Драйверы и инструменты")
         self.drv_lay = l2
@@ -743,6 +766,31 @@ class MainWindow(QMainWindow):
         if a == QMessageBox.Yes:
             sickw.save_key("")
             self.build_settings()
+
+    def sync_prices(self):
+        url = self.sheet_url.text().strip()
+        vclear(self.sheet_result)
+        self.sheet_result.addWidget(box("Скачиваю таблицу…", "info"))
+
+        def ok(r):
+            vclear(self.sheet_result)
+            self.sheet_result.addWidget(box(
+                f'Готово: {r["моделей"]} моделей, {r["позиций"]} позиций. '
+                f'Обновлено {r["обновлено"]}.', "ok"))
+            self.sheet_result.addWidget(hint("В базе: " + ", ".join(r["модели"])))
+            if r["не_распознано"]:
+                self.sheet_result.addWidget(box(
+                    "Не распозналось (проверь строки в таблице):\n" +
+                    "\n".join(r["не_распознано"]), "warn"))
+            # если на этапе 1 уже есть результаты — цена пересчитается новым прайсом
+            if self.res:
+                self.reprice()
+
+        def bad(msg):
+            vclear(self.sheet_result)
+            self.sheet_result.addWidget(box("Не получилось: " + msg, "bad"))
+
+        self.work(lambda: gsheet.sync(url), ok, bad)
 
     def check_drivers(self):
         vclear(self.drv_lay)

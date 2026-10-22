@@ -54,6 +54,17 @@ jobs:
       - name: Собрать папку bin (get_bin.py)
         run: python get_bin.py
 
+      - name: Тесты парсера прайса
+        run: python tests/test_gsheet.py
+
+      # Пробная синхронизация с настоящей таблицей магазина. Если таблица
+      # открыта по ссылке — свежий прайс попадёт прямо в дистрибутив.
+      # Если нет — сборка НЕ падает, едут заглушки, и прайс обновляется
+      # кнопкой в Настройках уже на точке.
+      - name: Прайс из Google Таблицы (не блокирует сборку)
+        continue-on-error: true
+        run: python -c "import sys; sys.path.insert(0, '.'); from core import gsheet; import json; print(json.dumps(gsheet.sync(), ensure_ascii=False, indent=1))"
+
       - name: Собрать программу (PyInstaller + Qt)
         run: |
           python -m pip install --quiet pyinstaller pyside6

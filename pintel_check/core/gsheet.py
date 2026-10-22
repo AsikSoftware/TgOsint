@@ -43,8 +43,16 @@ def export_url(url):
 def fetch_csv(url, timeout=30):
     req = urllib.request.Request(export_url(url),
                                  headers={"User-Agent": "PintelCheck/1"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        body = r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403, 404):
+            raise RuntimeError(
+                "Google не пустил к таблице (код %d): она закрыта. Открой доступ: "
+                "в таблице «Настройки доступа» → «Все, у кого есть ссылка» → "
+                "«Читатель» — и нажми кнопку снова." % e.code) from None
+        raise
     text = body.decode("utf-8-sig", "replace")
     if text.lstrip()[:120].lower().startswith(("<!doctype", "<html")):
         raise RuntimeError(

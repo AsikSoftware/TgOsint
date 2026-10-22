@@ -863,7 +863,13 @@ def selftest():
             f.write(line + "\n")
     except Exception:
         pass
-    # Жёсткий выход: уборка Qt без экрана умеет падать в segfault уже ПОСЛЕ
-    # теста, и код выхода врал бы. Отчёт записан — просто выходим.
+    # Жёсткий выход: уборка Qt без экрана умеет падать УЖЕ ПОСЛЕ теста
+    # (на Linux segfault, на Windows fail-fast 0xC0000409 при отцепке DLL),
+    # и код выхода врал бы. Отчёт записан — выходим, минуя уборку.
     sys.stdout.flush()
-    os._exit(0 if ok else 1)
+    code = 0 if ok else 1
+    if os.name == "nt":
+        import ctypes
+        ctypes.windll.kernel32.TerminateProcess(
+            ctypes.windll.kernel32.GetCurrentProcess(), code)
+    os._exit(code)

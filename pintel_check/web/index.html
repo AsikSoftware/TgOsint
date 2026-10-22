@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pintel Проверка</title>
+<link rel="icon" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* Палитра и формы взяты из Оценки Pintel.kz: светлый фон, белые карточки
+   с рамкой 1.5px, тёмно-синие кнопки, радиусы 16/14/999, Manrope + Montserrat. */
+:root{
+  --navy:#1A549D; --navy-dark:#123C74; --sky:#2BA4DB; --sky-soft:#E8F4FB;
+  --sky-text:#0F6B96; --bg:#F6F9FC; --card:#FFFFFF; --ink:#122A44;
+  --muted:#5B7392; --line:#DCE6F0;
+  --ok:#0F7F70; --ok-soft:#E7F5F2; --warn:#A8671A; --warn-soft:#FDF3E3;
+  --bad:#C0352B; --bad-soft:#FBECEA;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.5 'Manrope',system-ui,-apple-system,sans-serif;font-weight:500}
+.nav{display:flex;align-items:center;gap:14px;height:60px;padding:0 18px;
+  background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:9}
+.nav img{height:26px;width:auto;display:block}
+.nav .ttl{font-family:'Montserrat';font-weight:800;font-size:1rem;letter-spacing:-.01em}
+.steps{display:flex;gap:8px;margin-left:auto}
+.step{padding:8px 14px;border-radius:999px;border:1.5px solid var(--line);
+  background:#fff;color:var(--muted);font-weight:800;font-size:.8rem;white-space:nowrap}
+.step.on{background:var(--navy);border-color:var(--navy);color:#fff}
+.step.done{color:var(--ok);border-color:var(--ok);background:var(--ok-soft)}
+main{max-width:1060px;margin:0 auto;padding:20px 18px 60px}
+.card{background:var(--card);border:1.5px solid var(--line);border-radius:16px;
+  padding:18px;margin-bottom:14px}
+.card h2{font-family:'Montserrat';font-size:.78rem;margin:0 0 14px;color:var(--muted);
+  font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.h{font-family:'Montserrat';font-size:1.35rem;font-weight:800;letter-spacing:-.01em;margin:2px 0 6px}
+button{background:var(--navy);color:#fff;border:0;border-radius:14px;padding:15px 22px;
+  font-family:'Manrope';font-weight:800;font-size:.98rem;cursor:pointer;transition:filter .2s}
+button:hover:not(:disabled){filter:brightness(1.1)}
+button:disabled{opacity:.4;cursor:default}
+button.sec{background:#fff;border:1.5px solid var(--line);color:var(--ink)}
+.row{display:flex;justify-content:space-between;gap:14px;padding:9px 0;
+  border-bottom:1px solid var(--line)}
+.row:last-child{border:0}
+.row .k{color:var(--muted);font-weight:600}
+.row .v{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px}
+.v-ok{color:var(--ok)}.v-warn{color:var(--warn)}.v-bad{color:var(--bad)}
+.price{font-family:'Montserrat';font-size:2.3rem;font-weight:800;color:var(--ok);
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.ded{display:flex;justify-content:space-between;padding:6px 0;font-weight:600}
+.ded .m{color:var(--bad);font-variant-numeric:tabular-nums;font-weight:700}
+.hint{color:var(--muted);font-size:.86rem;margin-top:10px;font-weight:500}
+.box{border-radius:14px;padding:12px 14px;margin-top:11px;font-weight:600;font-size:.9rem;
+  border:1.5px solid}
+.box.ok{background:var(--ok-soft);border-color:#9FD5CB;color:#0B5F54}
+.box.warn{background:var(--warn-soft);border-color:#E8C68C;color:#7A4A12}
+.box.bad{background:var(--bad-soft);border-color:#E8A9A3;color:#8E2219}
+.box.info{background:var(--sky-soft);border-color:#B8DEF2;color:var(--sky-text)}
+.spin{display:inline-block;width:15px;height:15px;border:2.5px solid var(--line);
+  border-top-color:var(--navy);border-radius:50%;animation:s .7s linear infinite;
+  vertical-align:-3px;margin-right:8px}
+@keyframes s{to{transform:rotate(360deg)}}
+label.chk{display:flex;gap:12px;align-items:flex-start;padding:11px 12px;cursor:pointer;
+  border:1.5px solid var(--line);border-radius:14px;margin-bottom:8px;background:#fff;
+  transition:.13s;font-weight:600}
+label.chk:hover{border-color:var(--sky)}
+label.chk:has(input:checked){border-color:var(--navy);background:var(--sky-soft)}
+input[type=checkbox]{width:18px;height:18px;margin:1px 0 0;accent-color:var(--navy);flex:none}
+input[type=text],textarea,select{background:#fff;border:1.5px solid var(--line);
+  color:var(--ink);border-radius:12px;padding:12px 14px;font:inherit;font-weight:600;width:100%}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--navy)}
+.muted{color:var(--muted);font-weight:500}
+code{background:var(--sky-soft);color:var(--sky-text);padding:2px 8px;border-radius:7px;
+  font-size:.86rem;font-weight:700}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+@media(max-width:620px){.nav .ttl{display:none}.steps{gap:5px}.step{padding:7px 10px;font-size:.72rem}}
+</style></head><body>
+<div class="nav">
+  <img src="logo.png" alt="Pintel">
+  <div class="ttl">Проверка</div>
+  <div class="steps">
+    <div class="step on" id="s1">1 · Кабель и оценка</div>
+    <div class="step" id="s2">2 · Ручные проверки</div>
+    <div class="step" id="s3">3 · Финал</div>
+  </div>
+</div>
+<main>
+  <div id="stage1"></div>
+  <div id="stage2" hidden></div>
+  <div id="stage3" hidden></div>
+</main>
+<script src="app.js"></script>
+</body></html>

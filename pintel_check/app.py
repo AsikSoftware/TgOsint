@@ -6,6 +6,17 @@
 """
 import os, sys, threading, webbrowser
 
+# Русский текст в консоли Windows. Без этого собранный exe ПАДАЕТ на первом
+# же print: консоль живёт в cp1252/cp866, а PyInstaller игнорирует PYTHONUTF8.
+# errors="replace" — чтобы вывод не мог уронить программу ни при какой кодировке.
+if os.name == "nt":
+    os.system("chcp 65001 >nul 2>&1")
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.server import serve
 

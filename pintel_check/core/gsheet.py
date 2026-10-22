@@ -61,6 +61,24 @@ def sa_email():
         return ""
 
 
+def _google_error(resp):
+    """Человеческий текст из ответа Google: что именно не так."""
+    try:
+        msg = resp.json()["error"]["message"]
+    except Exception:
+        msg = (resp.text or "")[:300]
+    if "has not been used in project" in msg or "it is disabled" in msg:
+        return ("В проекте сервис-аккаунта не включён Google Sheets API. "
+                "Включи: console.cloud.google.com → APIs & Services → "
+                "Library → Google Sheets API → Enable. Затем минуту подожди.\n"
+                f"(Google: {msg[:160]})")
+    if resp.status_code in (403, 404):
+        return ("Таблица не открыта сервис-аккаунту. Поделись ею (Читатель) с: "
+                + (sa_email() or "email из gservice.json")
+                + f"\n(Google: {msg[:160]})")
+    return f"Google ответил {resp.status_code}: {msg[:200]}"
+
+
 def api_rows(url):
     """Строки листа через Sheets API от имени сервис-аккаунта."""
     import requests
@@ -73,17 +91,20 @@ def api_rows(url):
             sa_path(), scopes=[SCOPE])
     except Exception as e:
         raise RuntimeError(f"gservice.json не читается: {e}") from None
-    creds.refresh(Request())
+    try:
+        creds.refresh(Request())
+    except Exception as e:
+        raise RuntimeError(
+            "Не удалось получить токен по gservice.json: "
+            f"{e}\nПроверь, что это ключ СЕРВИС-АККАУНТА (JSON с private_key) "
+            "и что на компьютере верное время.") from None
     h = {"Authorization": f"Bearer {creds.token}"}
 
     meta = requests.get(
         f"https://sheets.googleapis.com/v4/spreadsheets/{sid}"
         "?fields=sheets.properties", headers=h, timeout=30)
-    if meta.status_code in (403, 404):
-        raise RuntimeError(
-            "Таблица не открыта сервис-аккаунту. Поделись ею (Читатель) с:\n"
-            + (sa_email() or "email из gservice.json"))
-    meta.raise_for_status()
+    if meta.status_code != 200:
+        raise RuntimeError(_google_error(meta))
     sheets = meta.json().get("sheets") or []
     if not sheets:
         raise RuntimeError("В таблице нет листов")
@@ -95,7 +116,8 @@ def api_rows(url):
         f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
         + urllib.parse.quote(f"'{title}'!A1:T500", safe="!:'"),
         headers=h, timeout=30)
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
     return r.json().get("values") or []
 
 

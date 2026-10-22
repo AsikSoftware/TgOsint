@@ -7,11 +7,13 @@ IMEI, повторное подключение бесплатно) и непр�
 вердикта Apple, пока телефон не отключат. Интерфейсу отдаются готовые к
 показу строки: вся логика и суждения — здесь и в core, QML только рисует.
 """
-import json, re, threading, time
+import json, os, re, tempfile, threading, time, uuid
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
-from core import apple, device, gsheet, price, setup, sickw, store, verdict
+from core import apple, device, gsheet, phoneweb, price, setup, sickw, store, verdict
+
+PORT = 8765
 
 MANUAL = [
     ("экран_пятна",    "Экран: пятна, засветы"),
@@ -56,6 +58,7 @@ class Backend(QObject):
     driversChanged = Signal()
     settingsInfoChanged = Signal()
     syncInfoChanged = Signal()
+    phoneTestChanged = Signal()
 
     def __init__(self, watch=True, parent=None):
         super().__init__(parent)
@@ -76,9 +79,14 @@ class Backend(QObject):
         self._res = None
         self._sickw_data = None
         self._apple_items = None
+        self._phone_test = {"state": "off"}
+        self._phone_marks = {}
         self._refresh_settings()
         if watch:
+            self._phonesrv = phoneweb.start(PORT)   # тест на телефоне по Wi-Fi
             threading.Thread(target=self._watch, daemon=True).start()
+        else:
+            self._phonesrv = None
 
     # ---------- свойства для QML ----------
 
@@ -127,6 +135,10 @@ class Backend(QObject):
     def syncInfo(self):
         return self._sync
 
+    @Property("QVariant", notify=phoneTestChanged)
+    def phoneTest(self):
+        return self._phone_test
+
     @Property("QVariant", constant=True)
     def manualChecks(self):
         return [{"key": k, "label": t} for k, t in MANUAL]
@@ -158,6 +170,9 @@ class Backend(QObject):
         self._session += 1            # все потоки старой приёмки замолкают
         self._udid = self._cid = self._res = None
         self._sickw_data = self._apple_items = None
+        self._phone_marks = {}
+        phoneweb.clear()
+        self._set("_phone_test", {"state": "off"}, self.phoneTestChanged)
         self._error = ""
         self._set("_result", {}, self.resultChanged)
         self._set("_price", {}, self.priceInfoChanged)
@@ -204,6 +219,56 @@ class Backend(QObject):
         # Вердикт Apple — слушаем непрерывно, пока телефон на проводе.
         self._set("_apple", {"state": "wait"}, self.appleInfoChanged)
         threading.Thread(target=self._apple_job, args=(s,), daemon=True).start()
+
+        # Тест на телефоне: QR на экран, результат прилетит сам.
+        self._arm_phone_test(s)
+
+    # ---------- тест на телефоне ----------
+
+    def _arm_phone_test(self, s):
+        if not self._phonesrv:
+            return
+        token = uuid.uuid4().hex[:12]
+        url = f"http://{phoneweb.lan_ip()}:{PORT}/t/{token}"
+        qr = ""
+        try:
+            import segno
+            p = os.path.join(tempfile.gettempdir(), f"pintel_qr_{token}.png")
+            segno.make(url, error="m").save(p, scale=9, border=2,
+                                            dark="#0B2240", light="#FFFFFF")
+            qr = QUrl.fromLocalFile(p).toString()
+        except Exception:
+            pass
+        phoneweb.set_session(token, lambda data, s=s: self._phone_cb(s, data))
+        self._set("_phone_test", {"state": "wait", "url": url, "qr": qr},
+                  self.phoneTestChanged)
+
+    def _phone_cb(self, s, data):
+        """Результат с телефона (поток сервера). Сырьё — в базу, сводку — на экран."""
+        if s != self._session:
+            return
+        marks = {}
+        if data.get("тач") == "fail":
+            marks["тач_мертвые"] = True
+        if data.get("экран") == "fail":
+            marks["экран_пятна"] = True
+        self._phone_marks = marks
+
+        def row(k, v, ok):
+            return {"k": k, "v": v, "tone": "ok" if ok else "bad"}
+        names = {"тач": ("Сенсор", "вся сетка закрашена", "есть мёртвые зоны"),
+                 "мультитач": ("Мультитач", "5 касаний разом", "не собрал 5 касаний"),
+                 "экран": ("Экран", "без пятен и битых точек", "отмечены дефекты"),
+                 "динамик": ("Динамик", "звук чистый", "проблема со звуком")}
+        rows = []
+        for key, (label, ok_t, bad_t) in names.items():
+            v = data.get(key)
+            if v in ("ok", "fail"):
+                rows.append(row(label, ok_t if v == "ok" else bad_t, v == "ok"))
+        if self._cid:
+            store.update(self._cid, этап2={"веб_тест": data, **marks})
+        self._set("_phone_test", {"state": "got", "rows": rows},
+                  self.phoneTestChanged)
 
     def _render(self, res):
         p, b, ju = res["паспорт"], res["батарея"], res["юридический"]
@@ -345,10 +410,23 @@ class Backend(QObject):
 
     @Slot("QVariant", str, str)
     def saveStage2(self, checks, colour, notes):
-        r = dict(checks.toVariant() if hasattr(checks, "toVariant") else (checks or {}))
+        manual = dict(checks.toVariant() if hasattr(checks, "toVariant") else (checks or {}))
+        # Проблемы, найденные телефоном, не теряются, даже если продавец
+        # не отметил их руками: ИЛИ, а не перезапись.
+        r = dict(self._phone_marks)
+        for k, v in manual.items():
+            r[k] = bool(v) or bool(r.get(k))
         r["цвет"] = colour.strip()
         r["заметки"] = notes.strip()
         if self._cid:
+            # сырьё веб-теста, записанное раньше, не теряем
+            try:
+                prev = store.get(self._cid)
+                old = json.loads(prev["этап2"]) if prev and prev.get("этап2") else {}
+                if isinstance(old, dict) and old.get("веб_тест"):
+                    r["веб_тест"] = old["веб_тест"]
+            except Exception:
+                pass
             store.update(self._cid, этап=2, этап2=r)
 
     @Slot(str, str)

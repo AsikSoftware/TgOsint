@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pintel · Тест телефона</title>
+<style>
+/* Тёмное стекло — в тон киоску. Страницу видит клиент. */
+*{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+body{background:linear-gradient(160deg,#050F1F,#081B34 55%,#0D2B52);
+  color:#F4F8FD;font:17px/1.45 -apple-system,'SF Pro Text',system-ui,sans-serif;
+  display:flex;flex-direction:column;touch-action:none}
+.screen{flex:1;display:none;flex-direction:column;align-items:center;
+  justify-content:center;padding:28px;text-align:center;gap:18px}
+.screen.on{display:flex}
+h1{font-size:30px;font-weight:300;letter-spacing:.3px}
+.sub{color:#9FB4CF;font-size:16px;max-width:320px}
+.step{color:#6C83A6;font-size:13px;letter-spacing:2px;font-weight:700}
+button{background:linear-gradient(180deg,#7ADCFF,#2BA4DB);color:#06203A;
+  border:0;border-radius:999px;padding:16px 34px;font-size:17px;font-weight:800;
+  font-family:inherit}
+button.ghost{background:rgba(255,255,255,.07);color:#F4F8FD;
+  border:1px solid rgba(255,255,255,.16)}
+button:active{transform:scale(.96)}
+.card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);
+  border-radius:22px;padding:20px 22px;max-width:340px;width:100%}
+.row{display:flex;justify-content:space-between;padding:8px 0;font-size:16px}
+.ok{color:#37D9A0;font-weight:700}.fail{color:#FF7A6B;font-weight:700}
+.muted{color:#9FB4CF}
+#grid{position:fixed;inset:0;display:grid;z-index:10;background:#061427}
+#grid div{border:1px solid rgba(255,255,255,.05)}
+#grid div.hit{background:rgba(55,217,160,.55);border-color:transparent}
+#gridHud{position:fixed;left:0;right:0;bottom:26px;z-index:11;text-align:center;
+  pointer-events:none}
+#gridHud b{font-size:40px;font-weight:300}
+#gridBtns{position:fixed;left:0;right:0;top:20px;z-index:12;text-align:center}
+#gridBtns button{pointer-events:auto;padding:10px 18px;font-size:14px}
+#colorbox{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;
+  justify-content:center;padding-bottom:50px}
+#colorbox span{color:rgba(128,128,128,.85);font-size:15px;background:rgba(0,0,0,.35);
+  padding:8px 16px;border-radius:999px}
+.fingers{font-size:64px;letter-spacing:6px}
+.pulse{width:11px;height:11px;border-radius:6px;background:#4FC3F7;display:inline-block;
+  animation:p 1s infinite}
+@keyframes p{50%{opacity:.15}}
+</style></head><body>
+
+<!-- 0. старт -->
+<div class="screen on" id="s0">
+  <div class="step">PINTEL · ПРОВЕРКА</div>
+  <h1>Тест телефона</h1>
+  <p class="sub">Четыре коротких теста: сенсор, мультитач, экран и звук.
+  Около минуты. Результат сам улетит на кассу.</p>
+  <button onclick="go(1)">Начать</button>
+</div>
+
+<!-- 1. тач-сетка -->
+<div class="screen" id="s1">
+  <div id="grid"></div>
+  <div id="gridBtns"><button class="ghost" onclick="gridFail()">Есть места, где не красится</button></div>
+  <div id="gridHud"><div class="step">ЗАКРАСЬТЕ ВЕСЬ ЭКРАН ПАЛЬЦЕМ</div><b id="gridPct">0%</b></div>
+</div>
+
+<!-- 2. мультитач -->
+<div class="screen" id="s2">
+  <div class="step">ТЕСТ 2 ИЗ 4</div>
+  <h1>Мультитач</h1>
+  <p class="sub">Поставьте на экран <b>5 пальцев одновременно</b></p>
+  <div class="fingers" id="fcount">0</div>
+  <button class="ghost" onclick="res.мультитач='fail';go(3)">Не получается</button>
+</div>
+
+<!-- 3. экран: цвета -->
+<div class="screen" id="s3">
+  <div class="step">ТЕСТ 3 ИЗ 4</div>
+  <h1>Экран</h1>
+  <p class="sub">Сейчас экран зальётся цветами. Смотрите внимательно:
+  пятна, полосы, битые точки. Тапайте, чтобы листать цвета.</p>
+  <button onclick="startColors()">Поехали</button>
+</div>
+<div id="colorbox" style="display:none"><span>тапните — следующий цвет</span></div>
+<div class="screen" id="s3q">
+  <div class="step">ЭКРАН</div>
+  <h1>Как экран?</h1>
+  <p class="sub">Были видны пятна, полосы, выгорание или битые точки?</p>
+  <button class="ghost" onclick="res.экран='fail';go(4)">Да, есть дефекты</button>
+  <button onclick="res.экран='ok';go(4)">Нет, чистый</button>
+</div>
+
+<!-- 4. звук -->
+<div class="screen" id="s4">
+  <div class="step">ТЕСТ 4 ИЗ 4</div>
+  <h1>Звук</h1>
+  <p class="sub">Проверьте, что звук на телефоне включён (боковой
+  переключатель), и нажмите кнопку — прозвучит мелодия.</p>
+  <button onclick="playTone()">▶ Проиграть звук</button>
+  <div id="s4q" style="display:none;flex-direction:column;gap:14px;align-items:center">
+    <p class="sub">Звук был чистый и громкий?</p>
+    <div style="display:flex;gap:12px">
+      <button class="ghost" onclick="res.динамик='fail';finish()">Нет / хрипит</button>
+      <button onclick="res.динамик='ok';finish()">Да</button>
+    </div>
+  </div>
+</div>
+
+<!-- 5. финал -->
+<div class="screen" id="s5">
+  <div class="step">ГОТОВО</div>
+  <h1 id="doneTitle">Отправляю…<span class="pulse"></span></h1>
+  <div class="card" id="summary"></div>
+  <p class="sub" id="doneSub">Секундочку…</p>
+</div>
+
+<script>
+var token = location.pathname.split("/").pop();
+var res = {тач:null, мультитач:null, экран:null, динамик:null};
+
+function go(n){
+  document.querySelectorAll(".screen").forEach(function(s){s.classList.remove("on")});
+  document.getElementById("s"+n).classList.add("on");
+  if(n===1) buildGrid();
+  if(n===2) armMultitouch();
+}
+
+/* ─── 1. тач-сетка: авто-зачёт, когда закрашено всё ─── */
+var cells=[], hit=0;
+function buildGrid(){
+  var g=document.getElementById("grid");
+  var cols=8, rows=Math.round(cols*innerHeight/innerWidth);
+  g.style.gridTemplateColumns="repeat("+cols+",1fr)";
+  g.style.gridTemplateRows="repeat("+rows+",1fr)";
+  g.innerHTML=""; cells=[]; hit=0;
+  for(var i=0;i<cols*rows;i++){var d=document.createElement("div");g.appendChild(d);cells.push(d);}
+  function mark(t){
+    for(var i=0;i<t.length;i++){
+      var el=document.elementFromPoint(t[i].clientX,t[i].clientY);
+      if(el&&el.parentNode===g&&!el.classList.contains("hit")){
+        el.classList.add("hit"); hit++;
+      }
+    }
+    var pct=Math.round(100*hit/cells.length);
+    document.getElementById("gridPct").textContent=pct+"%";
+    if(hit===cells.length){res.тач="ok"; setTimeout(function(){go(2)},350);}
+  }
+  g.ontouchstart=g.ontouchmove=function(e){e.preventDefault();mark(e.touches)};
+}
+function gridFail(){res.тач="fail";go(2)}
+
+/* ─── 2. мультитач ─── */
+function armMultitouch(){
+  var el=document.getElementById("s2"), best=0;
+  el.ontouchstart=el.ontouchmove=function(e){
+    e.preventDefault();
+    best=Math.max(best,e.touches.length);
+    document.getElementById("fcount").textContent=e.touches.length;
+    if(best>=5){res.мультитач="ok"; el.ontouchstart=el.ontouchmove=null;
+                setTimeout(function(){go(3)},400);}
+  };
+}
+
+/* ─── 3. цвета экрана ─── */
+var COLORS=["#FF0000","#00FF00","#0000FF","#FFFFFF","#000000"], ci=0;
+function startColors(){
+  var b=document.getElementById("colorbox");
+  document.getElementById("s3").classList.remove("on");
+  b.style.display="flex"; ci=0; document.body.style.background=COLORS[0];
+  b.onclick=function(){
+    ci++;
+    if(ci>=COLORS.length){
+      b.style.display="none"; b.onclick=null;
+      document.body.style.background="";
+      go("3q");
+      return;
+    }
+    document.body.style.background=COLORS[ci];
+  };
+}
+
+/* ─── 4. звук ─── */
+function playTone(){
+  try{
+    var ctx=new (window.AudioContext||window.webkitAudioContext)();
+    var notes=[523,659,784,1047], t=ctx.currentTime;
+    notes.forEach(function(f,i){
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.frequency.value=f; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001,t+i*0.22);
+      g.gain.exponentialRampToValueAtTime(0.6,t+i*0.22+0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+i*0.22+0.2);
+      o.start(t+i*0.22); o.stop(t+i*0.22+0.22);
+    });
+  }catch(e){}
+  document.getElementById("s4q").style.display="flex";
+}
+
+/* ─── 5. отправка ─── */
+function finish(){
+  go(5);
+  var map={тач:"Сенсор",мультитач:"Мультитач",экран:"Экран",динамик:"Динамик"};
+  var html="";
+  for(var k in map){
+    var v=res[k];
+    html+='<div class="row"><span class="muted">'+map[k]+'</span><span class="'+
+      (v==="ok"?"ok":"fail")+'">'+(v==="ok"?"✓ в порядке":(v==="fail"?"✗ проблема":"—"))+
+      "</span></div>";
+  }
+  document.getElementById("summary").innerHTML=html;
+  res.ua=navigator.userAgent;
+  fetch("/api/phone/"+token,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(res)})
+    .then(function(r){
+      document.getElementById("doneTitle").textContent =
+        r.ok ? "Готово ✓" : "Не отправилось";
+      document.getElementById("doneSub").textContent =
+        r.ok ? "Результат уже на кассе. Верните телефон продавцу."
+             : "Покажите этот экран продавцу.";
+    })
+    .catch(function(){
+      document.getElementById("doneTitle").textContent="Нет связи с кассой";
+      document.getElementById("doneSub").textContent =
+        "Телефон должен быть в том же Wi-Fi, что и касса. Покажите экран продавцу.";
+    });
+}
+</script>
+</body></html>

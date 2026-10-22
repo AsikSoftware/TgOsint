@@ -49,6 +49,19 @@ def _hard_exit(code):
 
 
 def main():
+    # Диагностика прайса без интерфейса: показывает НАСТОЯЩУЮ ошибку Google.
+    # Этим же CI ловит пропавшие из сборки модули (как было с cryptography).
+    if "--sync-test" in sys.argv:
+        try:
+            from core import gsheet
+            r = gsheet.sync()
+            print("SYNC OK " + json.dumps(
+                {k: r[k] for k in ("моделей", "позиций", "обновлено")},
+                ensure_ascii=False), flush=True)
+        except Exception as e:
+            print(f"SYNC ERR {type(e).__name__}: {e}", flush=True)
+        _hard_exit(0)
+
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QGuiApplication, QIcon
     from PySide6.QtQml import QQmlApplicationEngine

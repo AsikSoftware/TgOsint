@@ -471,6 +471,47 @@ ApplicationWindow {
                     }
                 }
 
+                // тест на телефоне клиента: QR → результат прилетает сам
+                GlassCard {
+                    Layout.fillWidth: true
+                    visible: backend.phoneTest["state"] === "wait"
+                             || backend.phoneTest["state"] === "got"
+                    implicitHeight: phCol.height + 44
+                    ColumnLayout {
+                        id: phCol
+                        anchors { left: parent.left; right: parent.right; top: parent.top
+                                  margins: 22 }
+                        spacing: 10
+                        SectionTitle { text: "ТЕСТ НА ТЕЛЕФОНЕ КЛИЕНТА" }
+                        RowLayout {
+                            visible: backend.phoneTest["state"] === "wait"
+                            spacing: 22
+                            Rectangle {
+                                width: 150; height: 150; radius: 16
+                                color: "white"
+                                Image { anchors.centerIn: parent
+                                        source: backend.phoneTest["qr"] || ""
+                                        width: 134; height: 134
+                                        smooth: false; fillMode: Image.PreserveAspectFit }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Text { text: "Отсканируйте QR камерой телефона"
+                                       color: win.txt; font.pixelSize: 19; font.bold: true }
+                                Text { Layout.fillWidth: true; wrapMode: Text.Wrap
+                                       text: "Сенсор, мультитач, экран и звук телефон проверит сам — результат прилетит сюда и учтётся в приёмке. Телефон и касса должны быть в одной Wi-Fi-сети."
+                                       color: win.mutedC; font.pixelSize: 15 }
+                                Text { text: backend.phoneTest["url"] || ""
+                                       color: win.dimC; font.pixelSize: 13 }
+                            }
+                        }
+                        Repeater { model: backend.phoneTest["rows"] || []
+                            RowLine { k: modelData.k; v: modelData.v
+                                      tone: modelData.tone } }
+                    }
+                }
+
                 Repeater { model: backend.result["alerts"] || []
                            AlertBox { kind: modelData.kind; text: modelData.text } }
                 Repeater { model: (backend.sickwInfo["alerts"]) || []
@@ -604,9 +645,12 @@ ApplicationWindow {
                 y: 34; spacing: 16
                 Text { text: "Ручные проверки"; color: win.txt
                        font.pixelSize: 34; font.weight: Font.Light }
-                Text { text: "Отметьте найденные проблемы. Веб-тест на телефоне: barcode-scan.duckdns.org/apps/diag.html"
+                Text { text: "Отметьте найденные проблемы."
                        color: win.mutedC; font.pixelSize: 16; wrapMode: Text.Wrap
                        Layout.fillWidth: true }
+                AlertBox { visible: backend.phoneTest["state"] === "got"
+                           kind: "info"
+                           text: "Телефон уже отчитался по QR-тесту: найденные им проблемы учтутся автоматически, их можно не отмечать." }
 
                 Flow {
                     Layout.fillWidth: true

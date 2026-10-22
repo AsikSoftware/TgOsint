@@ -67,7 +67,7 @@ jobs:
 
       - name: Собрать программу (PyInstaller + Qt)
         run: |
-          python -m pip install --quiet pyinstaller pyside6 google-auth requests
+          python -m pip install --quiet pyinstaller pyside6 google-auth requests segno
           python -m PyInstaller --clean --noconfirm PintelCheck.spec
 
       - name: Дымовой тест собранного exe
@@ -84,6 +84,16 @@ jobs:
           if (Test-Path $rep) { Get-Content $rep | Write-Host }
           if ($p.ExitCode -ne 0) { throw "selftest провален, код $($p.ExitCode)" }
           Write-Host "Дымовой тест пройден: окно строится, инструменты на месте."
+
+          # Прайс: --sync-test должен упасть ТОЛЬКО об Google (нет ключа),
+          # а не об пропавший из сборки модуль — так ловится регрессия
+          # вида «No module named cryptography».
+          $q = Start-Process -FilePath $exe -ArgumentList '--sync-test' -PassThru -Wait `
+               -RedirectStandardOutput sync_out.txt -RedirectStandardError sync_err.txt
+          Get-Content sync_out.txt, sync_err.txt -ErrorAction SilentlyContinue | Write-Host
+          if (Select-String -Path sync_out.txt, sync_err.txt -Pattern 'No module named|ModuleNotFoundError|ImportError' -Quiet) {
+            throw "в сборке не хватает модуля для синхронизации прайса"
+          }
 
       - name: Упаковать
         shell: pwsh

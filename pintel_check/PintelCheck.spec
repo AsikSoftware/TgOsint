@@ -8,6 +8,7 @@ import os
 
 datas = [
     ('qml', 'qml'),                      # киоск-интерфейс (Qt Quick)
+    ('phone', 'phone'),                  # страница QR-теста для телефона
     ('web', 'web'),                      # логотип и иконка
     ('core/models.json', 'core'),        # справочник моделей
     ('prices.json', '.'),                # прайс
@@ -24,7 +25,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=['core.device', 'core.verdict', 'core.apple', 'core.sickw',
                    'core.price', 'core.store', 'core.server', 'core.setup',
-                   'core.gsheet', 'backend',
+                   'core.gsheet', 'core.phoneweb', 'backend', 'segno',
                    'PySide6.QtQuick', 'PySide6.QtQuickControls2'],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
     # Лишние куски Qt не тащим; QtQml/QtQuick нужны киоску.

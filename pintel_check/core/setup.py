@@ -7,7 +7,7 @@
 Скрипт говорит, чего не хватает, и даёт точную ссылку.
 """
 import os, platform, subprocess, sys
-from .device import _tool
+from .device import _tool, NOWIN
 
 NEEDED = ["idevice_id", "ideviceinfo", "idevicediagnostics", "idevicesyslog"]
 AMDS_URL = "https://support.apple.com/ru-ru/106372"   # страница Apple про iTunes/AMDS
@@ -17,7 +17,7 @@ def _amds_windows():
     """Служба Apple Mobile Device Service — без неё Windows не видит iPhone."""
     try:
         r = subprocess.run(["sc", "query", "Apple Mobile Device Service"],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=10, **NOWIN)
         if "RUNNING" in r.stdout:
             return "работает"
         if "STOPPED" in r.stdout:

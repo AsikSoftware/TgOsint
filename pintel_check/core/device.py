@@ -11,6 +11,14 @@ import os, plistlib, re, shutil, subprocess, tempfile, time
 BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin",
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin")]
 
+# Консольные утилиты из оконного приложения БЕЗ этих флагов открывают на
+# каждый вызов мигающее чёрное окно. Передавать во ВСЕ subprocess-вызовы.
+NOWIN = {}
+if os.name == "nt":
+    _si = subprocess.STARTUPINFO()
+    _si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    NOWIN = {"creationflags": subprocess.CREATE_NO_WINDOW, "startupinfo": _si}
+
 def _tool(name):
     for d in BIN_DIRS:
         for ext in ("", ".exe"):
@@ -26,7 +34,8 @@ def udid():
     t = _tool("idevice_id")
     if not t:
         raise NoDevice("libimobiledevice не найден. Под Windows положи бинарники в папку bin/.")
-    out = subprocess.run([t, "-l"], capture_output=True, text=True, timeout=15).stdout
+    out = subprocess.run([t, "-l"], capture_output=True, text=True,
+                         timeout=15, **NOWIN).stdout
     ids = [x.strip() for x in out.split("\n") if x.strip()]
     if not ids:
         raise NoDevice("Телефон не подключён или не нажато «Доверять».")
@@ -35,7 +44,7 @@ def udid():
 def _info(u, domain=None):
     t = _tool("ideviceinfo")
     cmd = [t, "-u", u, "--xml"] + (["-q", domain] if domain else [])
-    r = subprocess.run(cmd, capture_output=True, timeout=40)
+    r = subprocess.run(cmd, capture_output=True, timeout=40, **NOWIN)
     try:
         return plistlib.loads(r.stdout)
     except Exception:
@@ -47,7 +56,7 @@ def _entry(u, name, tries=3):
     t = _tool("idevicediagnostics")
     for _ in range(tries):
         r = subprocess.run([t, "-u", u, "ioregentry", name],
-                           capture_output=True, timeout=30)
+                           capture_output=True, timeout=30, **NOWIN)
         try:
             d = plistlib.loads(r.stdout)
             if d.get("IORegistry"):

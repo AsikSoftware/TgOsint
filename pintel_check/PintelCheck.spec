@@ -7,7 +7,8 @@
 import os
 
 datas = [
-    ('web', 'web'),                      # интерфейс
+    ('qml', 'qml'),                      # киоск-интерфейс (Qt Quick)
+    ('web', 'web'),                      # логотип и иконка
     ('core/models.json', 'core'),        # справочник моделей
     ('prices.json', '.'),                # прайс
 ]
@@ -22,16 +23,42 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=['core.device', 'core.verdict', 'core.apple', 'core.sickw',
-                   'core.price', 'core.store', 'core.server', 'core.setup', 'ui'],
+                   'core.price', 'core.store', 'core.server', 'core.setup',
+                   'core.gsheet', 'backend',
+                   'PySide6.QtQuick', 'PySide6.QtQuickControls2'],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
-    # Лишние куски Qt не тащим: нужен только виджетный стек.
-    excludes=['tkinter', 'unittest', 'pydoc', 'doctest',
-              'PySide6.QtNetwork', 'PySide6.QtQml', 'PySide6.QtQuick',
+    # Лишние куски Qt не тащим; QtQml/QtQuick нужны киоску.
+    # cryptography (14 МБ) не нужна: google-auth сам переключается на чистый
+    # python-rsa, когда её нет.
+    excludes=['tkinter', 'unittest', 'pydoc', 'doctest', 'cryptography',
               'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
               'PySide6.QtMultimedia', 'PySide6.QtSql', 'PySide6.QtTest',
-              'PySide6.QtPdf', 'PySide6.QtOpenGL', 'PySide6.Qt3DCore'],
+              'PySide6.QtPdf', 'PySide6.Qt3DCore'],
     noarchive=False,
 )
+# Хук PySide6 тащит ВЕСЬ Qt (3D, WebEngine, мультимедиа, переводы) — больше
+# 500 МБ. Киоску нужен только стек Quick: режем по спискам жёстко.
+def _keep(entry):
+    dest = str(entry[0]).replace('\\', '/').lower()
+    if 'pyside6/qml/' in dest:
+        tail = dest.split('pyside6/qml/', 1)[1]
+        if tail.startswith('qtquick3d'):
+            return False
+        return tail.startswith(('qtquick', 'qtqml'))
+    bad = ('webengine', 'quick3d', 'qt63d', 'charts', 'datavisualization',
+           'multimedia', 'qt6pdf', 'qt6test', 'sensors', 'qt6location',
+           'positioning', 'virtualkeyboard', 'remoteobjects', 'scxml',
+           'opengl32sw', 'qt6designer', 'qt6help', 'lupdate', 'lrelease',
+           'assistant', 'linguist', 'translations/', 'avcodec', 'avformat',
+           'avutil', 'swscale', 'swresample', 'qt6graphs', 'qt6spatialaudio',
+           'qt6texttospeech', 'qt6serialport', 'qt6serialbus', 'qt6nfc',
+           'qt6bluetooth', 'qt6websockets', 'qt6webchannel', 'qt6webview',
+           'qt6statemachine', 'qt6quicktimeline')
+    return not any(b in dest for b in bad)
+
+a.binaries = [e for e in a.binaries if _keep(e)]
+a.datas = [e for e in a.datas if _keep(e)]
+
 pyz = PYZ(a.pure)
 
 # Собираем В ПАПКУ, а не одним файлом. Один файл распаковывает ~10 МБ при

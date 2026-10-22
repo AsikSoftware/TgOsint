@@ -67,7 +67,7 @@ jobs:
 
       - name: Собрать программу (PyInstaller + Qt)
         run: |
-          python -m pip install --quiet pyinstaller pyside6
+          python -m pip install --quiet pyinstaller pyside6 google-auth requests
           python -m PyInstaller --clean --noconfirm PintelCheck.spec
 
       - name: Дымовой тест собранного exe

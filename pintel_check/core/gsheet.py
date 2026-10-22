@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """Прайс из Google Таблицы магазина.
 
-Программа по кнопке в Настройках скачивает таблицу (CSV-экспорт, работает
-для таблиц с доступом «все, у кого есть ссылка») и обновляет базовые цены
-в prices.json. Вычеты и правила отказов остаются локальными — в таблице
-только цены по моделям и объёмам.
+Основной путь — Google Sheets API с сервис-аккаунтом: рядом с программой
+лежит файл gservice.json (ключ сервис-аккаунта), а таблицей поделились
+с его email как с читателем. Таблица остаётся ЗАКРЫТОЙ для всех остальных.
+Если gservice.json нет — запасной путь через CSV-экспорт, он требует
+доступа «все, у кого есть ссылка».
 
 Парсер терпим к оформлению:
   • модели по строкам, объёмы по столбцам (шапка «64 / 128 / 256…»);
@@ -14,10 +15,12 @@
 
 Что не распозналось — честно возвращается списком, а не выдумывается.
 """
-import csv, io, json, re, time, urllib.request
+import csv, io, json, re, time, urllib.parse, urllib.request
 
 from . import price
-from .paths import bundled
+from .paths import beside, bundled
+
+SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 
 # Таблица магазина по умолчанию; в Настройках ссылку можно заменить.
 DEFAULT_URL = ("https://docs.google.com/spreadsheets/d/"
@@ -30,14 +33,70 @@ _CAP_RE = re.compile(r"(\d+)\s*(tb|тб|gb|гб)\b", re.I)
 _KNOWN_GB = (16, 32, 64, 128, 256, 512, 1024, 2048)
 
 
-def export_url(url):
+def sheet_ids(url):
     m = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", str(url or ""))
     if not m:
         raise ValueError("Это не ссылка на Google Таблицу")
     g = re.search(r"[#?&]gid=(\d+)", url)
-    gid = g.group(1) if g else "0"
-    return (f"https://docs.google.com/spreadsheets/d/{m.group(1)}"
+    return m.group(1), (g.group(1) if g else "0")
+
+
+def export_url(url):
+    sid, gid = sheet_ids(url)
+    return (f"https://docs.google.com/spreadsheets/d/{sid}"
             f"/export?format=csv&gid={gid}")
+
+
+# ---------- сервис-аккаунт (Sheets API) ----------
+
+def sa_path():
+    return beside("gservice.json")
+
+
+def sa_email():
+    """Email сервис-аккаунта — с ним нужно поделиться таблицей."""
+    try:
+        return json.load(open(sa_path(), encoding="utf-8")).get("client_email", "")
+    except Exception:
+        return ""
+
+
+def api_rows(url):
+    """Строки листа через Sheets API от имени сервис-аккаунта."""
+    import requests
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request
+
+    sid, gid = sheet_ids(url)
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            sa_path(), scopes=[SCOPE])
+    except Exception as e:
+        raise RuntimeError(f"gservice.json не читается: {e}") from None
+    creds.refresh(Request())
+    h = {"Authorization": f"Bearer {creds.token}"}
+
+    meta = requests.get(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{sid}"
+        "?fields=sheets.properties", headers=h, timeout=30)
+    if meta.status_code in (403, 404):
+        raise RuntimeError(
+            "Таблица не открыта сервис-аккаунту. Поделись ею (Читатель) с:\n"
+            + (sa_email() or "email из gservice.json"))
+    meta.raise_for_status()
+    sheets = meta.json().get("sheets") or []
+    if not sheets:
+        raise RuntimeError("В таблице нет листов")
+    title = next((s["properties"]["title"] for s in sheets
+                  if str(s["properties"].get("sheetId")) == gid),
+                 sheets[0]["properties"]["title"])
+
+    r = requests.get(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
+        + urllib.parse.quote(f"'{title}'!A1:T500", safe="!:'"),
+        headers=h, timeout=30)
+    r.raise_for_status()
+    return r.json().get("values") or []
 
 
 def fetch_csv(url, timeout=30):
@@ -115,13 +174,16 @@ def _price_of(cell):
     return v if v >= 5000 else None
 
 
-def parse(text, models):
-    """CSV → (база {код: {гб: цена}}, не_распознанные строки)."""
+def parse(rows, models):
+    """Строки таблицы → (база {код: {гб: цена}}, не_распознанные строки).
+    Принимает и готовые строки (Sheets API), и CSV-текст (запасной путь)."""
+    if isinstance(rows, str):
+        rows = list(csv.reader(io.StringIO(rows)))
     name_map = _name_map(models)
     base, unknown = {}, []
     cap_cols = {}                         # столбец → гб (последняя шапка объёмов)
 
-    for row in csv.reader(io.StringIO(text)):
+    for row in rows:
         # Строка-шапка с объёмами? Шапка — это объёмы БЕЗ цен и БЕЗ моделей:
         # так «Модель, 64» (один столбец) тоже распознаётся, а строка данных
         # с ценами шапкой не считается.
@@ -185,7 +247,12 @@ def sync(url=None):
     url = (url or cfg.get("гугл_таблица") or DEFAULT_URL).strip()
     models = json.load(open(bundled("core", "models.json"), encoding="utf-8"))
 
-    base, unknown = parse(fetch_csv(url), models)
+    import os
+    if os.path.isfile(sa_path()):
+        rows, source = api_rows(url), "api"
+    else:
+        rows, source = fetch_csv(url), "csv"
+    base, unknown = parse(rows, models)
     if not base:
         raise RuntimeError(
             "В таблице не нашлось ни одной знакомой модели с ценой. "
@@ -194,6 +261,7 @@ def sync(url=None):
 
     cfg["база"] = base
     cfg["гугл_таблица"] = url
+    cfg["источник_прайса"] = source
     cfg["прайс_обновлён"] = time.strftime("%Y-%m-%d %H:%M")
     cfg.pop("_комментарий", None)          # заглушек больше нет
     with open(price.cfg_path(), "w", encoding="utf-8") as f:

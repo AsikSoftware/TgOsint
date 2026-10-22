@@ -110,19 +110,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "win-build-${{ github.run_number }}"
-          $notes = @"
-Готовая сборка PintelCheck для Windows x64 — всё в комплекте, включая libimobiledevice.
-
-**Установка на точке:**
-1. Скачай и распакуй zip. Копируется ВСЯ папка PintelCheck, не один файл.
-2. Поставь iTunes с сайта Apple (нужен его драйвер USB). Один раз.
-3. Запусти PintelCheck.exe — откроется браузер.
-
-Сборка прошла дымовой тест: программа запускалась на Windows-машине,
-интерфейс и API отвечали, все 4 инструмента libimobiledevice на месте.
-Прайс в prices.json — заглушки, заполнить перед работой.
-"@
           gh release create $tag PintelCheck_Windows_x64.zip `
             --target $env:GITHUB_SHA `
             --title "PintelCheck для Windows — сборка #${{ github.run_number }}" `
-            --notes $notes
+            --notes-file "$env:GITHUB_WORKSPACE\.github\release-notes-windows.md"

@@ -17,6 +17,47 @@ def load():
     return json.load(open(cfg_path(), encoding="utf-8"))
 
 
+def _pick_gb(tbl, gb):
+    """Ключ объёма с округлением к ближайшей известной ступени: телефон
+    рапортует 128, а в прайсе может стоять 127 или 256*10^9//10^9=256."""
+    if not tbl:
+        return None
+    if gb in tbl:
+        return gb
+    try:
+        want = int(gb)
+        best = min(tbl, key=lambda k: abs(int(k) - want))
+        if abs(int(best) - want) <= max(8, want * 0.1):
+            return best
+    except Exception:
+        pass
+    return None
+
+
+import re as _re
+
+
+def _wear_price(grid, wear, cycles):
+    """Цена из сетки износа: (цена|None, ключ|None). Ключ без цены означает
+    «диапазон в прайсе есть, но магазин не задал цену» — это стоп-сигнал."""
+    if not grid:
+        return None, None
+    if wear is None:
+        k = "неизвестно"
+        return (grid.get(k), k) if k in grid else (None, None)
+    if wear >= 100:
+        if cycles is not None and cycles <= 30 and "100новый" in grid:
+            return grid["100новый"], "100новый"
+        if "100" in grid:
+            return grid["100"], "100"
+        return None, None
+    for k, v in grid.items():
+        m = _re.match(r"^(\d+)-(\d+)$", k)
+        if m and int(m.group(1)) <= wear <= int(m.group(2)):
+            return v, k
+    return None, None
+
+
 def estimate(res, sick=None, apple=None):
     cfg = load()
     cur = cfg.get("валюта", "₸")
@@ -24,19 +65,33 @@ def estimate(res, sick=None, apple=None):
     pt = res["паспорт"]["код_модели"]
     gb = str(res["паспорт"]["память_гб"] or "")
     base_tbl = cfg["база"].get(pt, {})
-    # Объём округляем к ближайшей известной ступени: телефон рапортует 128,
-    # а в прайсе может стоять 128 — но бывает 127 или 256000000000/10^9=256.
-    base = base_tbl.get(gb)
-    if base is None and base_tbl:
-        try:
-            want = int(gb)
-            best = min(base_tbl, key=lambda k: abs(int(k) - want))
-            if abs(int(best) - want) <= max(8, want * 0.1):
-                base = base_tbl[best]
-        except Exception:
-            base = None
+    gb_key = _pick_gb(base_tbl, gb)
+    base = base_tbl.get(gb_key) if gb_key else None
 
-    lines, refuse = [], []
+    lines, refuse, lack = [], [], []
+
+    # --- сетка износа: магазин сам задал цену за каждый диапазон батареи ---
+    # Если она есть и даёт цену — берём её КАК БАЗУ и не применяем вычеты
+    # за износ (иначе батарея была бы посчитана дважды).
+    wear_used = False
+    wg = cfg.get("сетка_износа", {}).get(pt, {})
+    wg_key = _pick_gb(wg, gb)
+    grid = wg.get(wg_key) if wg_key else None
+    if grid:
+        w = res["батарея"]["износ"]
+        p, k = _wear_price(grid, w, res["батарея"]["циклы"])
+        if p:
+            base = p
+            wear_used = True
+            if k and k != "100новый":
+                lines.append((f"батарея {w if w is not None else '?'}% — "
+                              f"цена прайса за «{k}»", 0))
+        elif k:          # диапазон есть, но магазин не задал для него цену
+            base = None
+            what = (f"износа {w}%" if w is not None
+                    else "аппарата, у которого износ не определился")
+            lack.append(f"прайс не задаёт цену для {what} "
+                        f"(столбец «{k}» пуст) — согласуй с руководителем")
 
     # --- отказы: цену не считаем вообще ---
     if sick and str(sick.get("чёрный_список", "")).strip().upper() not in ("", "CLEAN", "CLEAR"):
@@ -48,11 +103,12 @@ def estimate(res, sick=None, apple=None):
 
     # --- вычеты по состоянию ---
     bat = res["батарея"]
-    if bat["износ"] is not None:
-        if bat["износ"] < 80:
-            lines.append(("износ батареи %d%%" % bat["износ"], d["износ_батареи_ниже_80"]))
-        elif bat["износ"] < 85:
-            lines.append(("износ батареи %d%%" % bat["износ"], d["износ_батареи_ниже_85"]))
+    if not wear_used:
+        if bat["износ"] is not None:
+            if bat["износ"] < 80:
+                lines.append(("износ батареи %d%%" % bat["износ"], d["износ_батареи_ниже_80"]))
+            elif bat["износ"] < 85:
+                lines.append(("износ батареи %d%%" % bat["износ"], d["износ_батареи_ниже_85"]))
     if bat["циклы"] and bat["циклы"] > 800:
         lines.append(("%d циклов" % bat["циклы"], d["циклов_больше_800"]))
 
@@ -99,13 +155,14 @@ def estimate(res, sick=None, apple=None):
                           d["память_перепаяна"]))
 
     total = (base or 0) + sum(v for _, v in lines)
+    if base is None and not lack:
+        lack.append(f"нет базовой цены для {pt} / {gb} ГБ — обнови прайс из таблицы")
     return {
         "валюта": cur,
         "база": base,
         "база_известна": base is not None,
-        "вычеты": [{"за_что": t, "сумма": v} for t, v in lines],
+        "вычеты": [{"за_что": t, "сумма": v} for t, v in lines if v or "цена прайса" in t],
         "итого": max(0, total) if base is not None else None,
         "отказ": refuse,
-        "чего_не_хватает": ([] if base is not None else
-                            [f"нет базовой цены для {pt} / {gb} ГБ — заполни prices.json"]),
+        "чего_не_хватает": [] if base is not None else lack,
     }

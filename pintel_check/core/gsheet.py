@@ -200,16 +200,59 @@ def _price_of(cell):
     return v if v >= 5000 else None
 
 
+_RANGE_RE = re.compile(r"^(\d{1,3})\s*[-–]\s*(\d{1,3})$")
+
+
+def _wear_key(cell):
+    """Ячейка шапки сетки износа батареи → ключ диапазона.
+    По сырой ячейке: «100 (0-30)» живёт в скобках, которые _norm вырезает."""
+    s = str(cell or "").strip().lower().replace("ё", "е").replace("\xa0", " ")
+    if not s:
+        return None
+    if "нет информации" in s or "неизвест" in s:
+        return "неизвестно"
+    m = _RANGE_RE.match(s)
+    if m:
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if hi <= 100:
+            return f"{lo}-{hi}"
+        return None
+    if re.fullmatch(r"100\s*\(\s*0\s*[-–]\s*30\s*\)", s):
+        return "100новый"
+    if s == "100":
+        return "100"
+    return None
+
+
 def parse(rows, models):
-    """Строки таблицы → (база {код: {гб: цена}}, не_распознанные строки).
+    """Строки таблицы → (база {код: {гб: цена}}, сетка_износа, не_распознанное).
+
+    Понимает два мира:
+      • прайс магазина с СЕТКОЙ ПО ИЗНОСУ БАТАРЕИ: шапка «Память | нет
+        информации | 0-74 | … | 100 | 100 (0-30)», строка на каждый объём;
+        база = цена идеала, сетка сохраняется целиком;
+      • простые форматы: объёмы в шапке, в названии или отдельным столбцом.
+    Варианты «(Esim)» — отдельные позиции региона, в базу не пишутся.
     Принимает и готовые строки (Sheets API), и CSV-текст (запасной путь)."""
     if isinstance(rows, str):
         rows = list(csv.reader(io.StringIO(rows)))
     name_map = _name_map(models)
-    base, unknown = {}, []
+    base = {}
+    wear_grid = {}                        # код → {гб → {диапазон → цена}}
     cap_cols = {}                         # столбец → гб (последняя шапка объёмов)
+    wear_cols = {}                        # столбец → диапазон износа
+    esim_skipped = 0
+    unmatched = {}                        # незнакомое имя → сколько строк
+    no_price = set()                      # знакомые модели, но без цен в листе
 
     for row in rows:
+        # шапка сетки износа? («Память | нет информации | 0-74 | … | 100»)
+        cand_w = {i: k for i, cell in enumerate(row) if (k := _wear_key(cell))}
+        if len(cand_w) >= 3:
+            wear_cols = cand_w
+            cap_cols = {}
+            continue
+
         # Строка-шапка с объёмами? Шапка — это объёмы БЕЗ цен и БЕЗ моделей:
         # так «Модель, 64» (один столбец) тоже распознаётся, а строка данных
         # с ценами шапкой не считается.
@@ -222,12 +265,13 @@ def parse(rows, models):
 
         # строка с моделью?
         codes = gb = name_col = None
-        looks_like_iphone = False
+        iphone_cell = ""
         for i, cell in enumerate(row):
             s = _norm(cell)
             if "iphone" not in s:
                 continue
-            looks_like_iphone = True
+            if not iphone_cell:
+                iphone_cell = str(cell).strip()
             g, rest = _cap_token(s)
             found = name_map.get(_squash(rest))
             if not found and g is None:
@@ -242,18 +286,35 @@ def parse(rows, models):
             if found:
                 codes, gb, name_col = found, g, i
                 break
+        # по сырой ячейке: _norm вырезает скобки, а «(Esim)» живёт именно в них
+        if codes and "esim" in str(row[name_col]).lower():
+            esim_skipped += 1             # региональный вариант — не перетираем обычный
+            continue
         if not codes:
-            if looks_like_iphone and any(str(c).strip() for c in row):
-                unknown.append(" | ".join(str(c).strip() for c in row
-                                          if str(c).strip())[:90])
+            if iphone_cell:
+                unmatched[iphone_cell] = unmatched.get(iphone_cell, 0) + 1
             continue
 
         if gb is None and not cap_cols:
             # формат «модель | объём | цена»: объём отдельной ячейкой без шапки
             caps = [(j, g2) for j, c in enumerate(row) if j != name_col
-                    and (g2 := _cap_of_cell(c))]
+                    and j not in wear_cols and (g2 := _cap_of_cell(c))]
             if len(caps) == 1:
                 gb = caps[0][1]
+
+        # сетка износа: цены по диапазонам, база — идеал. Пустые ячейки
+        # СОХРАНЯЮТСЯ как None: «магазин не задал цену для этого износа» —
+        # это стоп-сигнал, а не повод посчитать по-своему.
+        if wear_cols and gb:
+            cells = {k: (_price_of(row[j]) if j < len(row) else None)
+                     for j, k in wear_cols.items()}
+            filled = [v for v in cells.values() if v]
+            if filled:
+                ideal = cells.get("100новый") or cells.get("100") or max(filled)
+                for c in codes:
+                    base.setdefault(c, {})[str(gb)] = ideal
+                    wear_grid.setdefault(c, {})[str(gb)] = cells
+                continue
 
         got = False
         if gb:                              # объём прямо в названии
@@ -275,9 +336,15 @@ def parse(rows, models):
                             base.setdefault(c, {})[str(g)] = p
                         got = True
         if not got:
-            unknown.append(" | ".join(str(c).strip() for c in row
-                                      if str(c).strip())[:90])
-    return base, unknown
+            no_price.add(models.get(codes[0], iphone_cell))
+    unknown = [k + (f" ×{v}" if v > 1 else "") for k, v in unmatched.items()]
+    if no_price:
+        unknown.append("без цены в прайсе (пропущено): "
+                       + ", ".join(sorted(no_price)))
+    if esim_skipped:
+        unknown.append(f"(esim-вариантов пропущено: {esim_skipped} — "
+                       "регион по кабелю не определяется)")
+    return base, wear_grid, unknown
 
 
 # ---------- синхронизация ----------
@@ -294,7 +361,7 @@ def sync(url=None):
         rows, source = api_rows(url), "api"
     else:
         rows, source = fetch_csv(url), "csv"
-    base, unknown = parse(rows, models)
+    base, wear_grid, unknown = parse(rows, models)
     if not base:
         # Показываем, что программа ВИДИТ в листе: гадать больше не нужно.
         if isinstance(rows, str):
@@ -313,6 +380,7 @@ def sync(url=None):
             "Начало листа, как я его вижу:\n" + "\n".join(sample))
 
     cfg["база"] = base
+    cfg["сетка_износа"] = wear_grid
     cfg["гугл_таблица"] = url
     cfg["источник_прайса"] = source
     cfg["прайс_обновлён"] = time.strftime("%Y-%m-%d %H:%M")
@@ -323,6 +391,7 @@ def sync(url=None):
     names = sorted({models[c] for c in base})
     return {"моделей": len(names),
             "позиций": sum(len(v) for v in base.values()),
+            "по_износу": bool(wear_grid),
             "модели": names,
             "не_распознано": unknown[:12],
             "обновлено": cfg["прайс_обновлён"]}

@@ -46,3 +46,17 @@ u = gsheet.export_url("https://docs.google.com/spreadsheets/d/ABC123/edit?gid=77
 assert u == "https://docs.google.com/spreadsheets/d/ABC123/export?format=csv&gid=777", u
 
 print("OK: все тесты парсера прайса прошли")
+
+# Новые форматы: объём без единицы; «модель | объём | цена»; шапка «Цена 128»
+b4, _ = gsheet.parse("iPhone 13 Pro Max 256,450 000\niPhone 16 128, 300000\n", models)
+assert b4["iPhone14,3"]["256"] == 450000, b4
+assert b4["iPhone17,3"]["128"] == 300000, b4          # «16» — номер модели, «128» — объём
+
+b5, _ = gsheet.parse("что,объём,цена\niPhone 13,128,150000\nАйфон 12 Про,256,180000\n", models)
+assert b5["iPhone14,5"]["128"] == 150000, b5
+assert b5["iPhone13,3"]["256"] == 180000, b5
+
+b6, _ = gsheet.parse("Модель,Цена 128,Цена 256\niPhone 12,95000,110000\n", models)
+assert b6["iPhone13,2"] == {"128": 95000, "256": 110000}, b6
+
+print("OK: новые форматы прайса распознаются")

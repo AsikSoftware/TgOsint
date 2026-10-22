@@ -174,14 +174,18 @@ def _cap_token(s):
 
 
 def _cap_of_cell(cell):
-    """Ячейка шапки «128», «256 GB», «1 ТБ» → гб."""
-    s = _norm(cell)
-    m = re.fullmatch(r"\s*(\d+)\s*(tb|тб|gb|гб)?\s*", s)
-    if not m:
+    """Ячейка «128», «256 GB», «1 ТБ», «Цена 128» → гб."""
+    s = _norm(cell).strip()
+    if len(s) > 14:
         return None
-    n, unit = int(m.group(1)), m.group(2)
-    if unit:
-        return n * 1024 if unit in ("tb", "тб") else n
+    nums = re.findall(r"\d+", s)
+    if len(nums) != 1:
+        return None
+    n = int(nums[0])
+    if re.search(r"\d+\s*(tb|тб)\b", s):
+        return n * 1024
+    if re.search(r"\d+\s*(gb|гб)\b", s):
+        return n
     return n if n in _KNOWN_GB else None
 
 
@@ -226,6 +230,15 @@ def parse(rows, models):
             looks_like_iphone = True
             g, rest = _cap_token(s)
             found = name_map.get(_squash(rest))
+            if not found and g is None:
+                # объём без единицы: «iPhone 13 Pro Max 256» — пробуем выкинуть
+                # одно известное число (но не номер модели: сперва прямое имя)
+                for m in re.finditer(r"\b(16|32|64|128|256|512|1024|2048)\b", s):
+                    rest2 = s[:m.start()] + " " + s[m.end():]
+                    found2 = name_map.get(_squash(rest2))
+                    if found2:
+                        found, g = found2, int(m.group(1))
+                        break
             if found:
                 codes, gb, name_col = found, g, i
                 break
@@ -234,6 +247,13 @@ def parse(rows, models):
                 unknown.append(" | ".join(str(c).strip() for c in row
                                           if str(c).strip())[:90])
             continue
+
+        if gb is None and not cap_cols:
+            # формат «модель | объём | цена»: объём отдельной ячейкой без шапки
+            caps = [(j, g2) for j, c in enumerate(row) if j != name_col
+                    and (g2 := _cap_of_cell(c))]
+            if len(caps) == 1:
+                gb = caps[0][1]
 
         got = False
         if gb:                              # объём прямо в названии
@@ -276,10 +296,21 @@ def sync(url=None):
         rows, source = fetch_csv(url), "csv"
     base, unknown = parse(rows, models)
     if not base:
+        # Показываем, что программа ВИДИТ в листе: гадать больше не нужно.
+        if isinstance(rows, str):
+            rows = list(csv.reader(io.StringIO(rows)))
+        sample = []
+        for row in rows:
+            line = " | ".join(str(c).strip() for c in row if str(c).strip())
+            if line:
+                sample.append(line[:72])
+            if len(sample) >= 8:
+                break
         raise RuntimeError(
             "В таблице не нашлось ни одной знакомой модели с ценой. "
             "Ожидаю лист, где в строках модели (iPhone 13, Айфон 13 Про…), "
-            "а объёмы — в шапке столбцов или прямо в названии.")
+            "а объёмы — в шапке столбцов, в названии или отдельным столбцом.\n\n"
+            "Начало листа, как я его вижу:\n" + "\n".join(sample))
 
     cfg["база"] = base
     cfg["гугл_таблица"] = url

@@ -28,9 +28,10 @@ a = Analysis(
                    'PySide6.QtQuick', 'PySide6.QtQuickControls2'],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
     # Лишние куски Qt не тащим; QtQml/QtQuick нужны киоску.
-    # cryptography (14 МБ) не нужна: google-auth сам переключается на чистый
-    # python-rsa, когда её нет.
-    excludes=['tkinter', 'unittest', 'pydoc', 'doctest', 'cryptography',
+    # cryptography выбрасывать НЕЛЬЗЯ: свежий google-auth без неё падает
+    # («No module named cryptography» на точке) — fallback на python-rsa
+    # из него убрали.
+    excludes=['tkinter', 'unittest', 'pydoc', 'doctest',
               'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
               'PySide6.QtMultimedia', 'PySide6.QtSql', 'PySide6.QtTest',
               'PySide6.QtPdf', 'PySide6.Qt3DCore'],

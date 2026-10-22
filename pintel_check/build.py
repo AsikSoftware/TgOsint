@@ -48,11 +48,11 @@ def main():
     скажи(f"  Python {sys.version.split()[0]}")
     скажи(f"  Папка  {HERE}")
 
-    шаг(1, 3, "Ставлю PyInstaller…")
+    шаг(1, 3, "Ставлю PyInstaller и Qt (PySide6)…")
     r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                        "--upgrade", "pyinstaller"])
+                        "--upgrade", "pyinstaller", "pyside6"])
     if r.returncode:
-        скажи("  Не удалось поставить PyInstaller.")
+        скажи("  Не удалось поставить PyInstaller/PySide6.")
         скажи("  Проверь интернет и права. Если компьютер за прокси —")
         скажи("  попроси администратора настроить pip.")
         return 1

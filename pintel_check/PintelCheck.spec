@@ -22,9 +22,14 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=['core.device', 'core.verdict', 'core.apple', 'core.sickw',
-                   'core.price', 'core.store', 'core.server', 'core.setup'],
+                   'core.price', 'core.store', 'core.server', 'core.setup', 'ui'],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
-    excludes=['tkinter', 'unittest', 'pydoc', 'doctest'],
+    # Лишние куски Qt не тащим: нужен только виджетный стек.
+    excludes=['tkinter', 'unittest', 'pydoc', 'doctest',
+              'PySide6.QtNetwork', 'PySide6.QtQml', 'PySide6.QtQuick',
+              'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
+              'PySide6.QtMultimedia', 'PySide6.QtSql', 'PySide6.QtTest',
+              'PySide6.QtPdf', 'PySide6.QtOpenGL', 'PySide6.Qt3DCore'],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -38,7 +43,8 @@ exe = EXE(
     name='PintelCheck',
     debug=False, bootloader_ignore_signals=False, strip=False, upx=True,
     upx_exclude=[], runtime_tmpdir=None,
-    console=True,            # окно консоли нужно: в нём видно адрес и ошибки
+    console=False,           # полноценный клиент: чёрное окно консоли не нужно,
+                             # ошибки пишутся в app_log.txt рядом с программой
     disable_windowed_traceback=False, argv_emulation=False,
     target_arch=None, codesign_identity=None, entitlements_file=None,
     # Иконка ТОЛЬКО .ico: PyInstaller под Windows на .png падает с ошибкой,

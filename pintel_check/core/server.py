@@ -83,6 +83,7 @@ class H(SimpleHTTPRequestHandler):
                 return self._send(setup.check())
             if u.path == "/api/config":
                 return self._send({"sickw_ключ": sickw.key_available(),
+                                   "sickw_ключ_хвост": sickw.key_tail(),
                                    "прайс": price.load()})
         except Exception as e:
             return self._send({"ошибка": f"{type(e).__name__}: {e}"}, 500)
@@ -141,6 +142,14 @@ class H(SimpleHTTPRequestHandler):
                 est = price.estimate(res, sk, ap)
                 store.update(cid, цена=est["итого"] or 0)
                 return self._send({"оценка": est})
+
+            # --- настройки: ключ Sickw ---
+            if u.path == "/api/settings":
+                if "sickw_key" in b:
+                    sickw.save_key(str(b.get("sickw_key") or ""))
+                return self._send({"сохранено": True,
+                                   "sickw_ключ": sickw.key_available(),
+                                   "sickw_ключ_хвост": sickw.key_tail()})
 
             # --- ЭТАП 2: ручные проверки ---
             if u.path == "/api/stage2":

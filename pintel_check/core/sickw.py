@@ -35,7 +35,30 @@ def _key():
     p = os.path.expanduser("~/.sickw_key")
     if os.path.isfile(p):
         return open(p, encoding="utf-8").read().strip()
-    raise RuntimeError("Нет ключа Sickw: положи его в ~/.sickw_key")
+    raise RuntimeError("Нет ключа Sickw: впиши его в Настройках")
+
+
+def key_tail():
+    """Последние 4 знака ключа — показать «какой ключ стоит», не раскрывая его."""
+    try:
+        return _key()[-4:]
+    except Exception:
+        return ""
+
+
+def save_key(key):
+    """Сохраняет ключ из окна настроек в ~/.sickw_key. Пустая строка — удалить.
+    Ключ по-прежнему живёт в файле у пользователя, не внутри программы."""
+    p = os.path.expanduser("~/.sickw_key")
+    key = str(key or "").strip()
+    if key:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(key + "\n")
+    else:
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
 
 
 def luhn_ok(imei):

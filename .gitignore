@@ -1,0 +1,5 @@
+__pycache__/
+pintel_check/build/
+pintel_check/dist/
+pintel_check/build_log.txt
+pintel_check/data/checks.db

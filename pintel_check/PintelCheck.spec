@@ -1,8 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Общий файл сборки для Windows и macOS. Зависимостей у программы нет,
 # поэтому собирается всё, что нужно, одним файлом.
-import os, sys
-block_cipher = None
+#
+# Написан под PyInstaller 6: старые параметры (block_cipher, a.zipped_data,
+# win_no_prefer_redirects) из него убраны — шестая версия на них падает.
+import os
 
 datas = [
     ('web', 'web'),                      # интерфейс
@@ -23,10 +25,9 @@ a = Analysis(
                    'core.price', 'core.store', 'core.server', 'core.setup'],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=['tkinter', 'unittest', 'pydoc', 'doctest'],
-    win_no_prefer_redirects=False, win_private_assemblies=False,
-    cipher=block_cipher, noarchive=False,
+    noarchive=False,
 )
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 # Собираем В ПАПКУ, а не одним файлом. Один файл распаковывает ~10 МБ при
 # КАЖДОМ запуске: замерено 15 секунд молчания до старта. На точке продавец
@@ -47,7 +48,7 @@ exe = EXE(
 )
 
 coll = COLLECT(
-    exe, a.binaries, a.zipfiles, a.datas,
+    exe, a.binaries, a.datas,
     strip=False, upx=True, upx_exclude=[],
     name='PintelCheck',
 )

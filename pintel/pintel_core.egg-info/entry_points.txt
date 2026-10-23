@@ -1,0 +1,2 @@
+[console_scripts]
+pintel-doctor = pintel_core.doctor:main

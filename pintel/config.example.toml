@@ -1,0 +1,9 @@
+# Скопируйте в config.toml рядом с pintel-doctor и заполните.
+# config.toml и gservice.json в репозиторий не попадают (.gitignore).
+
+[sickw]
+key = "ВАШ-КЛЮЧ-SICKW"
+
+[price]
+sheet_url = "https://docs.google.com/spreadsheets/d/1TJWXvVC9eBFhKW38mfRBUvOftSUrWL_LmzsR-VlF-ZA/edit?gid=1917713663"
+gservice_json = "gservice.json"     # ключ сервис-аккаунта, таблица поделена с его email

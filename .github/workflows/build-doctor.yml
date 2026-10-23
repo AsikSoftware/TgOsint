@@ -1,0 +1,68 @@
+# pintel-doctor для Windows: тесты → сборка → дымовой тест собранного exe → релиз
+name: Сборка pintel-doctor
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/new-session-1hqkrp]
+    paths:
+      - 'pintel/**'
+      - '.github/workflows/build-doctor.yml'
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: '1'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: pintel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Зависимости
+        run: python -m pip install --quiet -e . pytest pyinstaller
+
+      - name: Тесты ядра (архивные слепки — регрессия)
+        run: python -m pytest tests -q -s
+
+      - name: Сборка exe
+        run: python -m PyInstaller --clean --noconfirm pintel-doctor.spec
+
+      - name: Дымовой тест exe
+        shell: pwsh
+        run: |
+          $exe = 'dist\pintel-doctor\pintel-doctor.exe'
+          & $exe selfcheck
+          if ($LASTEXITCODE -ne 0) { throw "selfcheck упал" }
+          # отчёт из архивного слепка через СОБРАННЫЙ exe
+          python -c "import sys; sys.path.insert(0,'tests'); sys.path.insert(0,'.'); from fixtures import INVENTORIES, load_snapshot; from pintel_core.devicelink import snapshot; open('archive.snapshot.json','w',encoding='utf-8').write(snapshot.dumps(load_snapshot(INVENTORIES[-1])))"
+          & $exe report archive.snapshot.json
+          if ($LASTEXITCODE -ne 0) { throw "report упал" }
+          Copy-Item config.example.toml dist\pintel-doctor\config.example.toml
+          Copy-Item README.md dist\pintel-doctor\README.md
+
+      - name: Упаковать
+        shell: pwsh
+        run: Compress-Archive -Path dist\pintel-doctor -DestinationPath pintel-doctor_Windows_x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pintel-doctor_Windows_x64
+          path: pintel/pintel-doctor_Windows_x64.zip
+
+      - name: Релиз
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip `
+            --target $env:GITHUB_SHA --title "pintel-doctor — сборка #${{ github.run_number }}" `
+            --notes "Консольный врач: selfcheck, snapshot --apple 120 --sickw, report, price. Рядом положить config.toml и gservice.json. Папку out\ прислать разработчику."

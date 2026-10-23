@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pintel-core"
+version = "0.1.0"
+description = "Pintel: чтение и оценка iPhone по кабелю — ядро киоска и сервера"
+requires-python = ">=3.11"
+dependencies = [
+    "pymobiledevice3>=4.14",
+    "google-auth>=2.30",
+    "requests>=2.31",
+]
+
+[project.scripts]
+pintel-doctor = "pintel_core.doctor:main"
+
+[tool.setuptools.packages.find]
+include = ["pintel_core*"]
+
+[tool.setuptools.package-data]
+pintel_core = ["analysis/models.json"]

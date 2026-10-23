@@ -1,0 +1,7 @@
+config.toml
+gservice.json
+*.snapshot.json
+out/
+build/
+dist/
+__pycache__/

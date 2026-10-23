@@ -17,17 +17,19 @@
 ## Как пользоваться на Windows
 
 1. Поставьте iTunes с сайта Apple (не из Microsoft Store).
-2. Распакуйте `pintel-doctor` из Releases, рядом положите `config.toml`
-   (образец — `config.example.toml`) и `gservice.json`.
-3. `pintel-doctor selfcheck` — драйвер, ключи, конфиг.
-4. Подключите iPhone, разблокируйте, нажмите «Доверять»:
-   `pintel-doctor snapshot --apple 120 --sickw`
-   — слепок, отчёт, история обслуживания Apple (нужен переход в раздел на
-   телефоне), проверка Sickw. Файлы — в `out\<дата>_<серийник>\`.
-5. Пришлите папку `out\...` разработчику: `snapshot.json` + `report.txt`.
+2. Распакуйте `pintel-doctor` из Releases; `gservice.json` положите рядом
+   с `pintel-doctor.exe`.
+3. **Двойной щелчок по `pintel-doctor.exe`** — откроется меню. При первом
+   запуске программа спросит ключ Sickw и сама создаст `config.toml`.
+4. Пункт **2** — проверка окружения (драйвер, ключи, кабель).
+5. Подключите iPhone, разблокируйте, нажмите «Доверять», пункт **1** —
+   полная проверка: слепок, отчёт, история обслуживания Apple (попросит
+   зайти в раздел на телефоне), Sickw. По окончании откроется папка `out\`.
+6. Пришлите папку `out\<дата>_<серийник>\` разработчику: `snapshot.json`
+   и `report.txt`. Если что-то упало — ещё `doctor_errors.log`.
 
-Другие команды: `wait`, `report файл.json`, `apple`, `sickw IMEI|balance`,
-`price`, `fixtures`.
+Из командной строки то же самое: `pintel-doctor snapshot --apple 120 --sickw`,
+`selfcheck`, `report файл.json`, `apple`, `sickw IMEI|balance`, `price`, `fixtures`.
 
 ## Разработка
 

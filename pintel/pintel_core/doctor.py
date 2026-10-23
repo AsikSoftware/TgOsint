@@ -264,6 +264,91 @@ def cmd_fixtures(args, cfg):
     return 0
 
 
+# ---------- меню для запуска двойным щелчком ----------
+
+class _A:
+    """Аргументы для команд, когда их задаёт меню, а не командная строка."""
+    def __init__(self, **kw):
+        self.out = None; self.apple = 0; self.sickw = False; self.fresh = False
+        self.file = None; self.seconds = 120; self.imei = None
+        self.__dict__.update(kw)
+
+
+def first_run_config(cfg):
+    """Нет config.toml — создаём его диалогом, чтобы не править файлы руками."""
+    if cfg.get("_path"):
+        return cfg
+    path = os.path.join(app_dir(), "config.toml")
+    say("Первый запуск: создаю config.toml рядом с программой.")
+    key = input("  Ключ Sickw (Enter — пропустить): ").strip()
+    gs = os.path.join(app_dir(), "gservice.json")
+    say(f"  gservice.json: {'найден' if os.path.isfile(gs) else 'положите рядом с программой, когда будет'}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('[sickw]\nkey = "%s"\n\n[price]\nsheet_url = "%s"\ngservice_json = "gservice.json"\n'
+                % (key, gsheet.DEFAULT_URL))
+    say(f"  записан: {path}\n")
+    return load_config(path)
+
+
+def interactive(cfg):
+    cfg = first_run_config(cfg)
+    menu = """
+  ┌──────────────────────────────────────────────────────┐
+  │  PINTEL DOCTOR — чтение iPhone по кабелю             │
+  ├──────────────────────────────────────────────────────┤
+  │  1  Полная проверка телефона (слепок + Apple + Sickw)│
+  │  2  Проверка окружения (драйвер, ключи, кабель)      │
+  │  3  Обновить прайс из Google Таблицы                 │
+  │  4  Баланс ключа Sickw                               │
+  │  5  Только история обслуживания Apple                │
+  │  6  Слепок без Apple и Sickw (быстро)                │
+  │  0  Выход                                            │
+  └──────────────────────────────────────────────────────┘"""
+    while True:
+        say(menu)
+        try:
+            choice = input("  Выбор: ").strip()
+        except EOFError:
+            return 0
+        try:
+            if choice == "1":
+                asyncio.run(_snapshot(_A(apple=120, sickw=True), cfg))
+                _open_out()
+            elif choice == "2":
+                cmd_selfcheck(_A(), cfg)
+            elif choice == "3":
+                cmd_price(_A(), cfg)
+            elif choice == "4":
+                cmd_sickw(_A(imei="balance"), cfg)
+            elif choice == "5":
+                asyncio.run(_apple(_A(seconds=120), cfg))
+            elif choice == "6":
+                asyncio.run(_snapshot(_A(), cfg))
+                _open_out()
+            elif choice in ("0", "q", ""):
+                return 0
+            else:
+                say("  нет такого пункта")
+        except KeyboardInterrupt:
+            say("\n  прервано")
+        except Exception as e:
+            say(f"\n  ОШИБКА: {type(e).__name__}: {e}")
+            import traceback
+            with open(os.path.join(app_dir(), "doctor_errors.log"), "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {choice}\n{traceback.format_exc()}\n")
+            say("  подробности — в doctor_errors.log рядом с программой")
+        say("")
+
+
+def _open_out():
+    d = os.path.join(app_dir(), "out")
+    if os.name == "nt" and os.path.isdir(d):
+        try:
+            os.startfile(d)
+        except Exception:
+            pass
+
+
 COMMANDS = {"selfcheck": cmd_selfcheck, "wait": cmd_wait, "snapshot": cmd_snapshot,
             "report": cmd_report, "apple": cmd_apple, "sickw": cmd_sickw,
             "price": cmd_price, "fixtures": cmd_fixtures}
@@ -285,12 +370,26 @@ def main(argv=None):
     s = sub.add_parser("sickw"); s.add_argument("imei"); s.add_argument("--fresh", action="store_true")
     sub.add_parser("price")
     sub.add_parser("fixtures")
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:                                   # двойной щелчок по exe
+        code = interactive(load_config())
+        _pause()
+        return code
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     try:
         return COMMANDS[args.cmd](args, cfg)
     except KeyboardInterrupt:
         say("\nпрервано"); return 130
+
+
+def _pause():
+    if os.name == "nt" and getattr(sys, "frozen", False):
+        try:
+            input("\nНажмите Enter, чтобы закрыть…")
+        except EOFError:
+            pass
 
 
 if __name__ == "__main__":

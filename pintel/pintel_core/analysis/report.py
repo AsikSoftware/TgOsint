@@ -22,7 +22,8 @@ def build(snap):
     parts = serials.collect(snap, pas["код_модели"])
     sk = snap.get("sickw")
     mg = snap.get("mobilegestalt") or {}
-    code = num(mg.get("DeviceEnclosureColor")) if "недоступен" not in mg else None
+    raw_code = mg.get("DeviceEnclosureColor") if "недоступен" not in mg else None
+    code = num(raw_code) if raw_code is not None else None
     pas["код_цвета_корпуса"] = int(code) if code is not None else None
     pas["цвет_по_коду"] = ENCLOSURE_COLOURS.get(pas["код_цвета_корпуса"]) if code is not None else None
     if sk and sk.get("цвет") and not pas["цвет"]:

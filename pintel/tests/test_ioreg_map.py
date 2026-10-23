@@ -68,3 +68,8 @@ def test_report_jailbreak_and_colour_code():
     assert rep["паспорт"]["код_цвета_корпуса"] is None and rep["mobilegestalt"] == "недоступен"
     assert rep["джейлбрейк"].startswith("не проверялся")
     assert not any("джейлбрейк" in x for x in rep["внимание"])
+
+    snap.pop("mobilegestalt"); snap.pop("jailbreak")           # слепок v2 — ключей нет вовсе
+    rep = report_mod.build(snap)
+    assert rep["паспорт"]["код_цвета_корпуса"] is None and rep["паспорт"]["цвет_по_коду"] is None
+    assert rep["mobilegestalt"] == "не запрашивался" and rep["джейлбрейк"] == "не проверялся"

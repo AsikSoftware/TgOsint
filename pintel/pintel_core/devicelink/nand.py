@@ -35,7 +35,7 @@ def parse(blob):
 def _text(vals):
     """u64-слова как ASCII-строка (0x2a8 — версия прошивки)."""
     out = b"".join(struct.pack("<Q", v) for v in vals)
-    return out.rstrip(b"\x00").decode("ascii", "replace")
+    return out.split(b"\x00")[0].decode("ascii", "replace")     # за первым NUL — мусор («561.100.7\x006»)
 
 
 def summarize(blob, nvme_firmware=None):

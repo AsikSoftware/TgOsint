@@ -46,7 +46,7 @@ def test_service61_fixture_stays_honest():
     raw = json.load(open(os.path.join(HERE, "fixtures_real", "sickw_357140400643287_61.json"), encoding="utf-8"))
     n = sickw.normalize(raw["все_поля"])
     assert n["в_чёрном_списке"] is None and n["fmi_включён"] is None
-    assert n["sim_lock"] == "разблокирован" and n["цвет"] == "Black"
+    assert n["sim_lock"] == "разблокирован" and n["цвет"] == "чёрный"
 
 
 def test_lookup_many_merges_caches_and_survives_one_bad_service(monkeypatch, tmp_path):

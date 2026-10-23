@@ -52,6 +52,6 @@ def test_report_matches_3utools():
 def test_sickw_service61_honest():
     raw = json.load(open(os.path.join(HERE, "fixtures_real", "sickw_357140400643287_61.json"), encoding="utf-8"))
     n = sickw.normalize(raw["все_поля"])
-    assert n["цвет"] == "Black" and n["объём_гб"] == 64 and n["sim_lock"] == "разблокирован"
+    assert n["цвет"] == "чёрный" and n["цвет_исходный"] == "Black" and n["объём_гб"] == 64 and n["sim_lock"] == "разблокирован"
     assert n["дата_покупки"] == "2022-07-05" and "2023-07-04" in n["гарантия"]
     assert n["чёрный_список"] is None and n["icloud"] is None   # услуга 61 этого не отдаёт

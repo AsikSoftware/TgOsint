@@ -112,7 +112,7 @@ def signals(snap):
     c = coverglass(n.get("product"))
     put("Экран: стекло ↔ панель", c, "серийник стекла входит в серийник панели",
         "серийник стекла не совпадает с панелью")
-    p = proximity(n.get("product"), n.get("AppleProxHIDEventDriver"))
+    p = proximity(n.get("product"), n.get("prox") or n.get("AppleProxHIDEventDriver"))
     put("Датчик приближения", p, "серийник совпадает с записанным в плате",
         "серийник отличается от записанного в плате")
     ok, errs = touch(n.get("AppleMultitouchDevice"))

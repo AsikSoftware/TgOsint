@@ -87,7 +87,8 @@ def fmt_report(rep):
         L.append(f"  NANDInfo: записей {nd['записей']}, остаток {nd['остаток_байт']} байт, "
                  f"прошивка {nd['прошивка']} (совпала с NVMe: {nd['прошивка_совпала_с_nvme']})")
     L.append(f"  Статусы: Найти iPhone — {l['найти_iphone']}; активация — {l['активация'] or '?'}; "
-             f"пароль — {'стоит' if l['пароль'] else 'нет'}; MDM — {'ЕСТЬ' if l['mdm'] else 'нет'}")
+             f"пароль — {'стоит' if l['пароль'] else 'нет'}; "
+             f"MDM — {'ЕСТЬ' if l['mdm'] is True else ('нет' if l['mdm'] is False else 'не определился')}")
     L.append("  Сигналы сопряжения:")
     for name, sg in rep["сигналы"].items():
         mark = "✓" if sg["ок"] is True else ("✗" if sg["ок"] is False else "·")
@@ -111,9 +112,15 @@ def fmt_report(rep):
         L.append(f"  Sickw (службы {srv or '?'}{', из кэша' if sk.get('из_кэша') else ''}): "
                  f"{sk.get('описание') or sk.get('модель_строка') or '?'}; цвет {sk.get('цвет') or '?'}; "
                  f"оператор {sk.get('оператор') or na}; sim-lock {sk.get('sim_lock') or na}")
-        L.append(f"         гарантия: {sk.get('гарантия') or na}; покупка {sk.get('дата_покупки') or '?'} "
-                 f"({sk.get('страна_покупки') or '?'}); чёрный список: {sk.get('чёрный_список') or na}; "
-                 f"«Найти iPhone»: {sk.get('icloud') or na}")
+        L.append(f"         гарантия: {sk.get('гарантия') or na}"
+                 f"{' до ' + sk['гарантия_до'] if sk.get('гарантия_до') else ''}; "
+                 f"покупка {sk.get('дата_покупки') or '?'} ({sk.get('страна_покупки') or '?'}); "
+                 f"чёрный список: {sk.get('чёрный_список') or na}; «Найти iPhone»: {sk.get('icloud') or na}")
+        flags = [name for key, name in (("подменный", "ПОДМЕННЫЙ (Loaner)"), ("демо", "демо-образец"),
+                                        ("восстановленный", "восстановленный"),
+                                        ("замена_по_гарантии", "выдан по замене")) if sk.get(key) is True]
+        if flags:
+            L.append("         особые отметки Apple: " + ", ".join(flags))
         for s, e in (sk.get("ошибки_служб") or {}).items():
             L.append(f"         служба {s} не ответила: {e}")
     L.append(f"  Джейлбрейк: {rep.get('джейлбрейк')}; MobileGestalt: {rep.get('mobilegestalt')}"

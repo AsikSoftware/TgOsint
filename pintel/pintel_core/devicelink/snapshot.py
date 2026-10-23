@@ -17,7 +17,8 @@ from datetime import datetime
 
 from . import jailbreak, nand
 from .nodes import (CAMERA_FALLBACK, CAMERA_RE, DOMAINS, FIXED_NODES, MG_KEYS, MG_KEYS_COLOUR,
-                    NVME_FALLBACK, NVME_RE, OPTIONAL_NODES, collect_entry_names, deep, pick_names, txt)
+                    NVME_FALLBACK, NVME_RE, OPTIONAL_CLASSES, OPTIONAL_NODES, PROX_FALLBACK, PROX_RE,
+                    collect_entry_names, deep, num, pick_names, txt)
 
 SNAPSHOT_VERSION = 3      # 3: планы IOService/IODeviceTree целиком, доп. узлы, MobileGestalt, джейлбрейк
 
@@ -99,8 +100,11 @@ async def collect(ld, diag, log=lambda *a: None):
         second = {}
     if second:
         changed = []
+        cap = num(first.get("TotalDataCapacity")) or 0
         for k in ("TotalDataAvailable", "TotalDataCapacity"):
-            if first.get(k) != second.get(k):
+            a, b = num(first.get(k)) or 0, num(second.get(k)) or 0
+            # свободное место гуляет на сотни МБ само по себе — устаревшим считаем сдвиг > 1 %
+            if a != b and (k != "TotalDataAvailable" or not cap or abs(a - b) > cap * 0.01):
                 changed.append(k)
         if _nand_stamp(first) != _nand_stamp(second):
             changed.append("NANDInfo/0x039")
@@ -121,6 +125,7 @@ async def collect(ld, diag, log=lambda *a: None):
     t = time.monotonic()
     dtree = await _retry(lambda: diag.ioregistry(plane="IODeviceTree"), "ioreg:IODeviceTree", quality, tries=2)
     quality["время_с"]["дерево"] = round(time.monotonic() - t, 2)
+    names_all = set(names) | (collect_entry_names(dtree) if dtree else set())
 
     cam_names = pick_names(names, CAMERA_RE, CAMERA_FALLBACK)
     nvme_names = pick_names(names, NVME_RE, NVME_FALLBACK)
@@ -128,8 +133,24 @@ async def collect(ld, diag, log=lambda *a: None):
     log("узлы…")
     t = time.monotonic()
     nodes = {}
+    quality["нет_в_карте"] = []
     for name in FIXED_NODES:
+        # Драйверных узлов, которых нет в карте телефона, не ждём по 5 секунд:
+        # у iPhone 17 Pro нет AIDBus (USB-C) — это не сбой чтения, а устройство другое.
+        if names_all and name[0].isupper() and name not in names_all:
+            nodes[name] = None
+            quality["нет_в_карте"].append(name)
+            continue
         nodes[name] = await _retry(lambda n=name: diag.ioregistry(name=n), name, quality)
+    nodes["prox"] = None
+    for n in pick_names(names_all, PROX_RE, PROX_FALLBACK):
+        if names_all and n not in names_all:
+            continue
+        v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2)
+        if v:
+            nodes["prox"] = v
+            quality["prox_узел"] = n
+            break
     for key, cands in (("camera", cam_names), ("nvme", nvme_names)):
         nodes[key] = None
         for n in cands:
@@ -141,7 +162,9 @@ async def collect(ld, diag, log=lambda *a: None):
     # узлы «по возможности» — одна попытка, отсутствие не считается ошибкой чтения
     for key, (rx, fallback) in OPTIONAL_NODES.items():
         nodes[key] = None
-        for n in pick_names(names, rx, fallback):
+        for n in pick_names(names_all, rx, fallback):
+            if names_all and n not in names_all:
+                continue
             try:
                 v = await diag.ioregistry(name=n)
             except Exception:
@@ -150,6 +173,11 @@ async def collect(ld, diag, log=lambda *a: None):
                 nodes[key] = v
                 quality[f"{key}_узел"] = n
                 break
+    for key, cls in OPTIONAL_CLASSES.items():
+        try:
+            nodes[key] = await diag.ioregistry(ioclass=cls) or None
+        except Exception:
+            nodes[key] = None
     quality["время_с"]["узлы"] = round(time.monotonic() - t, 2)
 
     # MobileGestalt: до iOS 17.4 отдаёт цвета корпуса и серийники модулей,

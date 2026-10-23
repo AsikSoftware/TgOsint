@@ -22,7 +22,16 @@ def build(snap):
         find_my = "включён" if fmip_assoc else "выключен"
     channels_agree = None if not (fm_root and fm_opt) else (fm_root == fm_opt)
 
-    mdm = boolish(deep(nodes.get("AIDBus") or {}, "TRM_TransportSupervised")) is True
+    # Надзор (MDM): флаг TRM_TransportSupervised. На Lightning-аппаратах он в AIDBus,
+    # на USB-C узла AIDBus нет — ищем в узлах аксессуарного порта; не нашли — None,
+    # и это честное «не определился», а не «нет».
+    trm = None
+    for key in ("AIDBus", "accessory", "accessory_mgr", "accessory_port"):
+        v = deep(nodes.get(key) or {}, "TRM_TransportSupervised")
+        if v is not None:
+            trm = v
+            break
+    mdm = boolish(trm) if trm is not None else None
     restr = doms.get("com.apple.mobile.restriction") or {}
     purple = doms.get("com.apple.purplebuddy") or {}
     return {

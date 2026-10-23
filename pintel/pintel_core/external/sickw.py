@@ -159,20 +159,83 @@ FMI_EXACT = ("iCloud Lock", "Find My iPhone", "FMI", "FMI Status", "iCloud Statu
 FMI_SUBS = ("find my", "fmi", "icloud", "activation lock")
 
 
+# Код/слово цвета из GSX → по-русски. Коды вида ORN видны в Model Description
+# («IPHONE 17 PRO,NAJP,256GB,ORN»), слова — в поле Model («iPhone 12 64GB Black»).
+COLOURS = {
+    "BLACK": "чёрный", "BLK": "чёрный", "WHITE": "белый", "WHT": "белый",
+    "SILVER": "серебристый", "SLV": "серебристый", "GOLD": "золотой", "GLD": "золотой",
+    "BLUE": "синий", "BLU": "синий", "GREEN": "зелёный", "GRN": "зелёный", "RED": "красный",
+    "YELLOW": "жёлтый", "YLW": "жёлтый", "PINK": "розовый", "PNK": "розовый",
+    "PURPLE": "фиолетовый", "PRP": "фиолетовый", "ORANGE": "оранжевый", "ORN": "оранжевый",
+    "GRAY": "серый космос", "GREY": "серый космос", "GRY": "серый космос", "SPACE GRAY": "серый космос",
+    "SPG": "серый космос", "MIDNIGHT": "тёмная ночь", "MDN": "тёмная ночь",
+    "STARLIGHT": "сияющая звезда", "STR": "сияющая звезда", "GRAPHITE": "графитовый", "GRA": "графитовый",
+    "SIERRA BLUE": "сьерра-блю", "PACIFIC BLUE": "тихоокеанский синий", "NATURAL": "натуральный титан",
+    "NAT": "натуральный титан", "NATURAL TITANIUM": "натуральный титан", "DESERT": "пустынный титан",
+    "DST": "пустынный титан", "DESERT TITANIUM": "пустынный титан", "TEAL": "бирюзовый", "TEL": "бирюзовый",
+    "ULTRAMARINE": "ультрамарин", "ULT": "ультрамарин", "LAVENDER": "лавандовый", "LAV": "лавандовый",
+    "SAGE": "шалфейный", "SGE": "шалфейный", "MIST BLUE": "туманно-голубой", "MST": "туманно-голубой",
+    "SKY BLUE": "небесно-голубой", "SKY": "небесно-голубой", "CLOUD WHITE": "облачно-белый",
+    "CLD": "облачно-белый", "DEEP BLUE": "тёмно-синий", "DBL": "тёмно-синий", "DEEP PURPLE": "тёмно-фиолетовый",
+    "DPR": "тёмно-фиолетовый", "SPACE BLACK": "чёрный космос", "SPB": "чёрный космос",
+    "CORAL": "коралловый", "CRL": "коралловый", "ROSE GOLD": "розовое золото", "RSG": "розовое золото",
+    "JET BLACK": "чёрный оникс", "ALPINE GREEN": "альпийский зелёный", "COSMIC ORANGE": "оранжевый",
+    "BLACK TITANIUM": "чёрный титан", "WHITE TITANIUM": "белый титан", "BLUE TITANIUM": "синий титан",
+}
+
+
+def colour_ru(word):
+    w = str(word or "").strip()
+    return COLOURS.get(w.upper(), w.title() if w else None)
+
+
+def parse_gsx_description(desc):
+    """'IPHONE 17 PRO,NAJP,256GB,ORN' → {модель, регион_gsx, объём_гб, цвет_код}.
+    Последний элемент — цвет, объём — элемент вида 256GB, второй — регион партии."""
+    parts = [p.strip() for p in str(desc or "").split(",")]
+    if len(parts) < 2 or not parts[0]:
+        return {}
+    out = {"модель": re.sub(r"(?i)^iphone", "iPhone", parts[0].title())}
+    rest = []
+    for p in parts[1:]:
+        m = re.fullmatch(r"(\d+)\s?(GB|TB)", p, re.I)
+        if m:
+            out["объём_гб"] = int(m.group(1)) * (1024 if m.group(2).upper() == "TB" else 1)
+        elif p:
+            rest.append(p)
+    if rest:
+        out["цвет_код"] = rest[-1]
+        if len(rest) > 1:
+            out["регион_gsx"] = rest[0]
+    return out
+
+
+def _yes(v):
+    l = str(v or "").strip().lower()
+    return True if l in ("yes", "true", "1") else (False if l in ("no", "false", "0") else None)
+
+
 def normalize(raw_fields):
     f = raw_fields
-    model = _pick(f, "Model", "Model Description", "Description")
+    gsx = parse_gsx_description(_pick(f, "Model Description"))
+    model = _pick(f, "Model", "Description") or gsx.get("модель", "")
     cap = re.search(r"\b(\d+)\s?(GB|TB)\b", model, re.I)
-    colour = re.sub(r"\[.*?\]", "", model)
-    colour = re.sub(r"\b\d+\s?(GB|TB)\b", "", colour, flags=re.I)
-    colour = re.sub(r"^\s*iPhone[\w\s]*?(Pro Max|Pro|Plus|mini|Air|SE)?\s*\d*\s*",
-                    "", colour, flags=re.I).strip(" -,")
+    colour_raw = ""
+    if _pick(f, "Model"):
+        colour_raw = re.sub(r"\[.*?\]", "", _pick(f, "Model"))
+        colour_raw = re.sub(r"\b\d+\s?(GB|TB)\b", "", colour_raw, flags=re.I)
+        colour_raw = re.sub(r"^\s*iPhone[\w\s]*?(Pro Max|Pro|Plus|mini|Air|SE)?\s*\d*\s*",
+                            "", colour_raw, flags=re.I).strip(" -,")
+    colour_raw = colour_raw or gsx.get("цвет_код", "")
+    colour = colour_ru(colour_raw)
     blk, blk_flag = _strictest(_all(f, BLK_EXACT, BLK_SUBS), blacklist_flag)
     fmi, fmi_on = _strictest(_all(f, FMI_EXACT, FMI_SUBS), fmi_flag)
-    carrier = _pick(f, "Locked Carrier", "Carrier", "Sim-Lock Status")
-    simlock = _pick(f, "SIM-Lock", "SIM Lock", "Simlock")
-    if not simlock and carrier:
-        simlock = "разблокирован" if "unlock" in carrier.lower() else carrier
+    carrier = _pick(f, "Locked Carrier", "Carrier")
+    simlock = _pick(f, "SIM-Lock", "SIM Lock", "Simlock", "Sim-Lock Status")
+    probe = (simlock or carrier).lower()
+    if probe:
+        simlock = "разблокирован" if "unlock" in probe else (
+            f"заблокирован под оператора: {carrier or simlock}" if "lock" in probe else (simlock or carrier))
     warranty = _pick(f, "Warranty Status", "Coverage", "Repairs and Service Coverage")
     exp = _pick(f, "Repairs and Service Expiration Date", "Coverage Expiration Date")
     if exp and not warranty:
@@ -182,8 +245,18 @@ def normalize(raw_fields):
             warranty += f" (истекло: {by})"
     return {
         "модель_строка": model,
-        "объём_гб": (int(cap.group(1)) * (1024 if cap.group(2).upper() == "TB" else 1)) if cap else None,
+        "объём_гб": ((int(cap.group(1)) * (1024 if cap.group(2).upper() == "TB" else 1)) if cap
+                     else gsx.get("объём_гб")),
         "цвет": colour or None,
+        "цвет_исходный": colour_raw or None,
+        "регион_gsx": gsx.get("регион_gsx"),
+        "подменный": _yes(_pick(f, "Loaner Device")),
+        "демо": _yes(_pick(f, "Demo Unit")),
+        "восстановленный": _yes(_pick(f, "Refurbished Device")),
+        "замена_по_гарантии": _yes(_pick(f, "Replaced Device")),
+        "applecare": _yes(_pick(f, "AppleCare Eligible")),
+        "гарантия_до": _pick(f, "Repairs and Service Expiration Date", "Coverage Expiration Date") or None,
+        "регистрация": _pick(f, "Registration Status") or None,
         "чёрный_список": blk or None,                   # None = услуга не отдаёт
         "в_чёрном_списке": blk_flag,                    # True/False/None
         "icloud": fmi or None,
@@ -196,8 +269,6 @@ def normalize(raw_fields):
         "дата_покупки": _pick(f, "Estimated Purchase Date", "Purchase Date") or None,
         "описание": _pick(f, "Model Description") or None,
         "дата_активации": _pick(f, "First Activation Date", "Activation Status"),
-        "замена_по_гарантии": _pick(f, "Replaced Device"),
-        "подменный": _pick(f, "Loaner Device"),
         "все_поля": f,
     }
 

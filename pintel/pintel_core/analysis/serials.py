@@ -26,8 +26,11 @@ _WEEK_CODES = "123456789CDFGHJKLMNPQRTVWXY"   # 1..9, затем буквы = н
 
 _PANEL_VENDOR = {"GVH": "LG", "GVC": "LG", "G9N": "Samsung", "G9P": "Samsung", "GV7": "Samsung",
                  "GH0": "BOE"}
-_FACTORY = {"FG9": "Desay (Китай)", "FG1": "Desay (Китай)", "DNL": "Sharp/Sunny", "DNM": "Sharp/Sunny",
-            "FWP": "Foxconn"}
+# Таблицы «префикс → фабрика» для плат/батарей/камер не подтверждены ничем, кроме
+# слухов (у 3uTools FG — SIMPLO для батарей и FIH Vietnam для аксессуаров, у нас было
+# Desay — и всё это для одного и того же префикса). Показываем только то, что
+# сверено с отчётом 3uTools: производителя панели.
+_FACTORY = {}
 
 
 def release_year(product_type):
@@ -102,5 +105,9 @@ def collect(snap, product_type=None):
     if panel:
         add("Экран (панель)", panel, _PANEL_VENDOR.get(panel[:3]))
     add("Экран (стекло)", deep(prod, "coverglass-serial-number"))
-    add("Датчик приближения", deep(prod, "rosaline-serial-num"))
+    arc = nodes.get("AppleHapticsSupportArcEEPROM") or {}
+    add("Taptic Engine", deep(arc, "ArcSerialNumber"))
+    prox_node = nodes.get("prox") or nodes.get("AppleProxHIDEventDriver") or {}
+    add("Датчик приближения", deep(prod, "rosaline-serial-num") or deep(prox_node, "SerialNumber"))
+    add("Модуль Nova (назначение уточняется)", deep(prod, "nova-serial-num"))
     return items

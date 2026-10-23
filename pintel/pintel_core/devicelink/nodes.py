@@ -16,7 +16,6 @@ FIXED_NODES = [
     "AppleMultitouchDevice",        # тач: Critical Errors
     "AppleHapticsSupportArcEEPROM", # серийник Taptic (сторона модуля)
     "haptics-support-interface",    # pscl-cal (сторона платы)
-    "AppleProxHIDEventDriver",      # серийник датчика приближения
     "product",                      # coverglass / raw-panel serial, rosaline
     "device-tree",
     "options",                      # fm-activation-locked (второй канал Find My)
@@ -36,14 +35,23 @@ NVME_FALLBACK = ["AppleANS3NVMeController", "AppleANS2NVMeController",
 CAMERA_RE = re.compile(r"^Apple(H\d+CamIn|Camera)$")
 NVME_RE = re.compile(r"^Apple(ANS\d\w*(NVMe)?Controller|EmbeddedNVMeController)$")
 
+# Датчик приближения: до iPhone 16 — AppleProxHIDEventDriver, у iPhone 17 Pro —
+# AppleSphinxProxHIDEventDriver. Берём по шаблону из карты.
+PROX_RE = re.compile(r"^Apple\w*ProxHIDEventDriver$")
+PROX_FALLBACK = ["AppleProxHIDEventDriver", "AppleSphinxProxHIDEventDriver"]
+
 # Узлы «по возможности»: имена взяты из того, что спрашивает у телефона 3uTools
-# (idm_info.dll). Нет узла — не ошибка, просто None.
+# (idm_info.dll) и из карт реальных аппаратов (iPhone 12 — BCMWLANCore/TriStar,
+# iPhone 17 Pro — AppleWLANDriver/AppleHPM*, IOAccessoryPortUSB). Нет узла — не ошибка.
 OPTIONAL_NODES = {
-    "wifi":      (re.compile(r"^AppleBCMWLAN(Core|BusInterface)?$"), ["AppleBCMWLANCore"]),
+    "wifi":      (re.compile(r"^Apple(BCMWLANCore|WLANDriver)$"), ["AppleBCMWLANCore", "AppleWLANDriver"]),
     "touchid":   (re.compile(r"^AppleMesa"), ["AppleMesa"]),
-    "port":      (re.compile(r"^Apple(TriStar|SandDollar|HPM|ACE)\w*$"), ["AppleTriStarBuiltIn", "AppleSandDollar"]),
-    "accessory": (re.compile(r"^IOAccessoryManager$"), ["IOAccessoryManager"]),
+    "port":      (re.compile(r"^Apple(TriStar\w*|SandDollar\w*|HPMDevice\w*|ACE\w*)$"),
+                  ["AppleTriStarBuiltIn", "AppleHPMDeviceHALType4"]),
+    "accessory": (re.compile(r"^IOAccessory(Manager|PortUSB)$"), ["IOAccessoryPortUSB", "IOAccessoryManager"]),
 }
+# Запрос по классу, когда имя узла непредсказуемо (MDM-флаг на USB-C живёт не в AIDBus)
+OPTIONAL_CLASSES = {"accessory_mgr": "IOAccessoryManager", "accessory_port": "IOAccessoryPort"}
 
 # Ключи MobileGestalt (до iOS 17.4 телефон отдаёт их через diagnostics;
 # новее — нет, 3uTools ради них поднимает RemoteXPC-туннель). Запрашиваем

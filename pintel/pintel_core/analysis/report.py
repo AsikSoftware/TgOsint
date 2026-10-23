@@ -13,6 +13,14 @@ def build(snap):
     pas = passport.build(snap.get("root"))
     leg = legal.build(snap)
     sig = pairing.signals(snap)
+    # История обслуживания Apple закрывает дыры там, где криптопривязка по кабелю
+    # не читается (iPhone 17 Pro: нет FrontIRCameraSerialNumber), и даёт факты о заменах.
+    hist = snap.get("repair_history") or {}
+    for sig_name, hist_key in (("Face ID ↔ плата", "FaceID"), ("Тачскрин", "Display")):
+        h = hist.get(hist_key)
+        if sig_name in sig and sig[sig_name]["ок"] is None and h and h.get("меняли") is False:
+            sig[sig_name] = {"ок": True, "почему": "по кабелю не читается; история Apple: не меняли",
+                             "источник": "Apple"}
     disk = doms.get("com.apple.disk_usage") or {}
     if disk.get("NANDInfo"):
         from ..devicelink.nodes import deep as _deep, txt as _txt
@@ -37,8 +45,11 @@ def build(snap):
         stop.append("батарея: " + bat["подделка"][0])
     if not bat["есть_данные"]:
         unknown.append("батарея не прочиталась")
-    if leg["mdm"]:
+    if leg["mdm"] is True:
         stop.append("аппарат под корпоративным надзором (MDM) — перепродать нельзя")
+    elif leg["mdm"] is None:
+        todo.append("MDM по кабелю не определился — проверить на телефоне: "
+                    "Настройки → Основные → VPN и управление устройством")
     if leg["каналы_сошлись"] is False:
         stop.append("статус «Найти iPhone» различается в двух источниках — данные подменены")
     if leg["найти_iphone"] == "включён":
@@ -75,6 +86,22 @@ def build(snap):
     if bat["циклы"] and bat["циклы"] > 800:
         warn.append(f"{bat['циклы']} циклов — ресурс выработан")
     warn.extend(bat["сомнения"])
+    for h in hist.values():
+        if h.get("меняли"):
+            when = f", {h['дата']}" if h.get("дата") else ""
+            if h.get("бу"):
+                stop.append(f"по истории Apple: {h['деталь']} меняли, установлена б/у деталь{when}")
+            else:
+                warn.append(f"по истории Apple: {h['деталь']} меняли (новая деталь{when})")
+    if sk:
+        if sk.get("подменный") is True:
+            stop.append("Sickw: подменный аппарат Apple (Loaner) — собственность Apple")
+        if sk.get("демо") is True:
+            warn.append("Sickw: демонстрационный образец (Demo Unit)")
+        if sk.get("восстановленный") is True:
+            warn.append("Sickw: восстановленный аппарат (Refurbished)")
+        if sk.get("замена_по_гарантии") is True:
+            warn.append("Sickw: аппарат выдан Apple по замене (Replaced Device)")
     if jb and jb.get("проверено") and jb.get("признаки"):
         warn.append("джейлбрейк: " + jailbreak.verdict(jb) + " — сбросить до заводских перед выкупом")
 

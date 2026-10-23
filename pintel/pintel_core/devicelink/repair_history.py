@@ -38,21 +38,37 @@ def parse(text):
 async def capture(ld, seconds=120, keep_going=None, on_tick=None):
     """Слушает журнал до записей или до истечения времени.
     Возвращает (items, сырой_текст, секунд_ждали)."""
-    svc = SyslogService(ld)
-    await svc.connect()
     q = asyncio.Queue()
+    state = {"svc": None, "task": None}
+    notes = []
 
-    async def reader():
+    async def start_reader():
+        svc = SyslogService(ld)
+        await svc.connect()
+
+        async def reader():
+            try:
+                async for line in svc.watch():
+                    await q.put(line)
+                await q.put(EOFError("поток syslog закончился"))
+            except Exception as e:                      # noqa: BLE001
+                await q.put(e)
+        state["svc"], state["task"] = svc, asyncio.create_task(reader())
+
+    async def stop_reader():
+        if state["task"]:
+            state["task"].cancel()
         try:
-            async for line in svc.watch():
-                await q.put(line)
-        except Exception as e:
-            await q.put(e)
+            if state["svc"]:
+                await state["svc"].close()
+        except Exception:                               # noqa: BLE001
+            pass
 
-    task = asyncio.create_task(reader())
+    await start_reader()
     buf, found = [], {}
     start = time.monotonic()
     grace_until = None
+    reconnects = 0
     try:
         while True:
             now = time.monotonic()
@@ -67,7 +83,20 @@ async def capture(ld, seconds=120, keep_going=None, on_tick=None):
                     on_tick(int(now - start))
                 continue
             if isinstance(line, Exception):
-                break
+                # Поток журнала оборвался раньше срока (так было на живом iPhone 12 через
+                # 20 с) — переподключаемся и слушаем дальше, пока не вышло время.
+                notes.append(f"# syslog оборвался через {round(now - start, 1)} с: {type(line).__name__}: {line}\n")
+                if grace_until or reconnects >= 5 or now - start > seconds:
+                    break
+                reconnects += 1
+                await stop_reader()
+                await asyncio.sleep(1.0)
+                try:
+                    await start_reader()
+                except Exception as e:                  # noqa: BLE001
+                    notes.append(f"# переподключение не удалось: {type(e).__name__}: {e}\n")
+                    break
+                continue
             if isinstance(line, bytes):
                 line = line.decode("utf-8", "replace")
             if "CRRepairHistoryItem" in line:
@@ -76,9 +105,5 @@ async def capture(ld, seconds=120, keep_going=None, on_tick=None):
                 if found and not grace_until:
                     grace_until = time.monotonic() + 2.0   # записи идут пачкой — добираем
     finally:
-        task.cancel()
-        try:
-            await svc.close()
-        except Exception:
-            pass
-    return found, "".join(buf), round(time.monotonic() - start, 1)
+        await stop_reader()
+    return found, "".join(buf) + "".join(notes), round(time.monotonic() - start, 1)

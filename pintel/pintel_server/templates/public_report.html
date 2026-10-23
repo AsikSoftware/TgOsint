@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Оценка вашего iPhone · Pintel</title><link rel="stylesheet" href="/static/app.css"></head>
+<body>
+{% set pas = rep.get('паспорт') or {} %}{% set bat = rep.get('батарея') or {} %}{% set hist = rep.get('apple_история') or {} %}{% set leg = rep.get('правовой') or {} %}{% set sk = rep.get('sickw') or {} %}
+<main style="max-width:720px;margin:0 auto;padding:24px 16px;gap:16px">
+  <img src="/static/logo.png" alt="Pintel" style="height:36px;width:auto;align-self:flex-start">
+  <h1>{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}</h1>
+  <div class="muted">Оценка №{{ ev.number }} от {{ ev.created_at|dt }}{% if ev.point %} · {{ ev.point.name }}{% endif %}</div>
+  <section class="sec"><h2>Цена выкупа на момент оценки</h2>
+    <div class="price" style="font-size:40px">{% if ev.verdict == 'ПРОБЛЕМНЫЙ' %}не принимаем{% elif ev.price_offer %}{{ ev.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</div>
+    <div class="note">{{ (rep.get('цена') or {}).get('основание') or '' }} Цена предварительная: сотрудник осматривает корпус и экран на месте.</div></section>
+  <section class="sec"><h2>Батарея</h2>
+    <div class="row" style="align-items:baseline"><span class="price" style="font-size:34px">{{ bat.get('здоровье_%') if bat.get('здоровье_%') is not none else '?' }} %</span><span class="muted">{{ bat.get('циклы') or '?' }} циклов</span></div></section>
+  <section class="sec"><h2>Что говорит Apple</h2>
+    {% if hist %}{% for k, v in hist.items() %}<div class="kv"><span>{{ v['деталь'] }}</span><span class="{{ 'warn' if v['меняли'] else 'ok' }}">{{ 'менялась/менялся' if v['меняли'] else 'не менялся' }}</span></div>{% endfor %}
+    {% else %}<div class="note">История обслуживания не была открыта на телефоне.</div>{% endif %}</section>
+  <section class="sec"><h2>Блокировки</h2>
+    <div class="kv"><span>Чёрный список</span><span class="{{ 'bad' if sk.get('в_чёрном_списке') else 'ok' }}">{{ 'да' if sk.get('в_чёрном_списке') else ('нет' if sk.get('в_чёрном_списке') is false else 'не проверялось') }}</span></div>
+    <div class="kv"><span>Найти iPhone</span><span class="{{ 'warn' if leg.get('найти_iphone') == 'включён' else 'ok' }}">{{ leg.get('найти_iphone') or '?' }}{% if leg.get('найти_iphone') == 'включён' %} — выключите перед продажей{% endif %}</span></div>
+    <div class="kv"><span>Серийный номер</span><span>{{ ev.serial or '?' }}</span></div></section>
+  <div class="note">Данные прочитаны с вашего телефона по кабелю с вашего согласия. Pintel · выкуп iPhone.</div>
+</main></body></html>

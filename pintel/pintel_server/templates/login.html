@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Вход{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <form class="login" method="post" action="/login" autocomplete="on">
+    <img src="/static/logo.png" alt="Pintel" style="height:40px;width:auto;align-self:flex-start">
+    <h1>Касса сотрудника</h1>
+    <div class="note">Войдите своей учётной записью. Каждый вход записывается в журнал.</div>
+    {% if error %}<div class="flash err">Неверный логин или пароль, либо доступ отключён</div>{% endif %}
+    <label class="f">Логин<input type="text" name="login" required autofocus autocapitalize="off"></label>
+    <label class="f">Пароль<input type="password" name="password" required></label>
+    <button class="btn primary" type="submit" style="height:48px;font-size:16px">Войти</button>
+  </form>
+</div>
+{% endblock %}

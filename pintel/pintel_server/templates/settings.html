@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% set active = 'settings' %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<h1>Настройки</h1>
+{% if new_token %}
+<div class="sec" style="border-color:var(--primary)">
+  <h2>Токен нового киоска — показывается один раз</h2>
+  <div class="row"><code style="font-size:18px;padding:10px 14px;background:var(--bg);border-radius:10px">{{ new_token }}</code></div>
+  <div class="note">Впишите его в <b>kiosk.toml</b> рядом с pintel-kiosk.exe: <code>token = "{{ new_token }}"</code>, и адрес сервера <code>server = "{{ settings.public_url }}"</code>.</div>
+</div>
+{% endif %}
+<div class="grid2">
+  <section class="sec">
+    <h2>Прайс из Google Таблицы</h2>
+    {% if grid %}<div class="row"><span class="dot"></span><b class="ok">Обновлён {{ grid.fetched_at|dt }} · {{ grid.models_count }} моделей · {{ grid.positions_count }} позиций · сетка по износу</b></div>
+    {% else %}<div class="row"><span class="dot off"></span><b class="warn">Прайс ещё не загружен</b></div>{% endif %}
+    <div class="note">Таблица закрыта для всех, кроме сервис-аккаунта{{ ' (gservice.json найден)' if gservice_set else ' — gservice.json НЕ найден на сервере' }}. Цена берётся по фактическому износу батареи из вашей сетки.</div>
+    <div class="note">Ссылка: <a href="{{ settings.price_sheet_url }}" target="_blank">{{ settings.price_sheet_url[:70] }}…</a></div>
+    <div class="row">
+      <form method="post" action="/settings/price/refresh"><button class="btn primary" type="submit">Обновить прайс сейчас</button></form>
+      {% if grid and grid.grid.get('не_распознано') %}<details><summary>Не распозналось ({{ grid.grid.get('не_распознано')|length }})</summary><pre>{{ grid.grid.get('не_распознано')|join('\n') }}</pre></details>{% endif %}
+    </div>
+  </section>
+  <section class="sec">
+    <h2>Внешние сервисы</h2>
+    <div class="kv"><span>Sickw (чёрный список, GSX)</span><span class="{{ 'ok' if sickw_key_set else 'warn' }}">{{ 'ключ задан на сервере' if sickw_key_set else 'ключ не задан (PINTEL_SICKW_KEY)' }}{% if balance %} · баланс {{ balance }}{% endif %}</span></div>
+    <div class="row"><form method="post" action="/settings/sickw/balance"><button class="btn sm" type="submit">Проверить баланс</button></form></div>
+    <div class="kv"><span>Службы Sickw</span><span>{{ settings.sickw_services|join(', ') }}</span></div>
+    <div class="kv"><span>МойСклад</span><span class="warn">не подключён</span></div>
+    <div class="kv"><span>Pintel Pay</span><span class="warn">не подключён</span></div>
+    <div class="note">Ключи хранятся только на сервере (в .env), киоски и кассы их не видят.</div>
+  </section>
+  <section class="sec">
+    <h2>Киоски</h2>
+    {% for k in kiosks %}
+    <div class="kv"><span><span class="dot {{ '' if k.last_seen_at and (now - k.last_seen_at).total_seconds() < 180 else 'off' }}"></span>{{ k.name }}{% if k.point %} · {{ k.point.name }}{% endif %}</span>
+      <span>{{ ('на связи ' + k.last_seen_at|dt) if k.last_seen_at else 'ещё не подключался' }}{% if k.version %} · v{{ k.version }}{% endif %}{% if not k.is_active %} · <span class="bad">отключён</span>{% endif %}
+      {% if user.role == 'admin' %}<form method="post" action="/settings/kiosks/{{ k.id }}/toggle" style="display:inline"><button class="btn sm" type="submit">{{ 'Отключить' if k.is_active else 'Включить' }}</button></form>{% endif %}</span></div>
+    {% else %}<div class="note">Киосков пока нет.</div>{% endfor %}
+    {% if user.role == 'admin' %}
+    <form method="post" action="/settings/kiosks" class="row" style="margin-top:8px">
+      <input type="text" name="name" placeholder="имя киоска, например Алматы-1" required style="width:240px">
+      <select name="point_id" style="width:200px"><option value="">точка не выбрана</option>{% for p in points %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+      <button class="btn primary sm" type="submit">Создать киоск и выдать токен</button>
+    </form>
+    {% endif %}
+  </section>
+  <section class="sec">
+    <h2>Точки</h2>
+    {% for p in points %}<div class="kv"><span>{{ p.name }}</span><span>{{ p.city or '' }}</span></div>{% else %}<div class="note">Точек пока нет — добавьте первую, чтобы привязывать киоски и сотрудников.</div>{% endfor %}
+    {% if user.role == 'admin' %}
+    <form method="post" action="/settings/points" class="row" style="margin-top:8px">
+      <input type="text" name="name" placeholder="название, например Алматы-1" required style="width:220px">
+      <input type="text" name="city" placeholder="город" style="width:160px">
+      <button class="btn primary sm" type="submit">Добавить точку</button>
+    </form>
+    {% endif %}
+    <div class="kv" style="margin-top:10px"><span>Сервер</span><span>{{ settings.public_url }} · часовой пояс {{ settings.tz }} · возврат киоска {{ settings.kiosk_return_seconds }} с</span></div>
+  </section>
+</div>
+{% endblock %}

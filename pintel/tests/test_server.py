@@ -1,0 +1,188 @@
+# -*- coding: utf-8 -*-
+"""Сервер: учётные записи, роли, журнал, API киоска, оценки и решения кассы (SQLite во временной папке)."""
+import json, os, re, tempfile
+from urllib.parse import unquote
+
+_TMP = tempfile.mkdtemp()
+os.environ["PINTEL_DATABASE_URL"] = f"sqlite:///{_TMP}/test.db"
+os.environ["PINTEL_SECRET_KEY"] = "test"
+os.environ["PINTEL_SICKW_KEY"] = "test-key"
+os.environ["PINTEL_PUBLIC_URL"] = "http://testserver"
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from pintel_server.main import create_app
+from pintel_server.db import SessionLocal, init_db
+from pintel_server.models import AuditLog, Device, Evaluation, Kiosk, LoginEvent, User, ROLE_ADMIN, ROLE_CASHIER, ROLE_SENIOR
+from pintel_server.auth import hash_password
+from pintel_server.services import price as price_service
+from pintel_core.devicelink import snapshot
+from pintel_core.analysis import report as report_mod
+from pintel_core.external import sickw
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+@pytest.fixture(scope="module")
+def app():
+    init_db()
+    db = SessionLocal()
+    db.add(User(login="admin", name="Администратор", role=ROLE_ADMIN, password_hash=hash_password("admin123")))
+    db.add(User(login="asel", name="Асель Бекова", role=ROLE_CASHIER, password_hash=hash_password("asel123")))
+    db.add(User(login="daniyar", name="Данияр Сапаров", role=ROLE_SENIOR, password_hash=hash_password("dan123")))
+    db.commit(); db.close()
+    return create_app(init_sqlite=False)
+
+
+def loc(r):
+    return unquote(r.headers.get("location", ""))
+
+
+def client_for(app, login=None, password=None):
+    c = TestClient(app, follow_redirects=False)
+    if login:
+        r = c.post("/login", data={"login": login, "password": password})
+        assert r.status_code == 303 and r.headers["location"] == "/queue", r.headers
+    return c
+
+
+def real_report():
+    snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"), encoding="utf-8").read())
+    rep = report_mod.build(snap)
+    rep["цена"] = {"валюта": "₸", "цена": 75000, "основание": "батарея 78% → столбец «75-79»", "нехватка": []}
+    # киоск шлёт JSON как его пишет snapshot.dumps (bytes → {"__b64__": …})
+    return json.loads(snapshot.dumps(rep)), json.loads(snapshot.dumps({"root": snap["root"], "quality": snap["quality"]}))
+
+
+def test_login_and_audit(app):
+    c = client_for(app)
+    r = c.post("/login", data={"login": "asel", "password": "wrong"})
+    assert r.status_code == 303 and "e=1" in loc(r)
+    r = c.post("/login", data={"login": "asel", "password": "asel123"})
+    assert r.status_code == 303 and "pintel_session" in r.cookies
+    assert c.get("/queue").status_code == 200
+    db = SessionLocal()
+    ev = db.scalars(select(LoginEvent).order_by(LoginEvent.id)).all()
+    assert [e.ok for e in ev][-2:] == [False, True] and ev[-2].reason == "неверный пароль"
+    assert db.scalar(select(AuditLog).where(AuditLog.action == "login")).actor_name == "Асель Бекова"
+    db.close()
+    r = c.post("/logout")
+    assert r.status_code == 303
+    assert c.get("/queue").status_code == 303 and c.get("/queue").headers["location"] == "/login"
+
+
+def test_roles(app):
+    asel = client_for(app, "asel", "asel123")
+    assert asel.get("/settings").status_code == 403 and asel.get("/employees").status_code == 403
+    dan = client_for(app, "daniyar", "dan123")
+    assert dan.get("/settings").status_code == 200 and dan.get("/employees").status_code == 403
+    admin = client_for(app, "admin", "admin123")
+    assert admin.get("/settings").status_code == 200 and admin.get("/employees").status_code == 200
+    assert TestClient(app, follow_redirects=False).get("/settings").status_code == 303
+
+
+def test_kiosk_flow_and_decisions(app, monkeypatch):
+    admin = client_for(app, "admin", "admin123")
+    assert admin.post("/settings/points", data={"name": "Алматы-1", "city": "Алматы"}).status_code == 303
+    r = admin.post("/settings/kiosks", data={"name": "Киоск-1", "point_id": "1"})
+    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
+    assert admin.get(f"/settings?t={token}").status_code == 200
+
+    k = TestClient(app, follow_redirects=False)
+    assert k.get("/api/kiosk/config").status_code == 401
+    H = {"X-Kiosk-Token": token}
+    cfg = k.get("/api/kiosk/config", headers=H).json()
+    assert cfg["киоск"] == "Киоск-1" and cfg["точка"] == "Алматы-1" and cfg["прайс_версия"] is None
+    assert k.get("/api/kiosk/price", headers=H).status_code == 404
+
+    # прайс: подменяем Google Таблицу
+    fake_grid = {"база": {"iPhone13,2": {64: 80000}}, "сетка_износа": {}, "источник": "api", "моделей": 1, "позиций": 1, "не_распознано": []}
+    monkeypatch.setattr(price_service.gsheet, "fetch_grid", lambda url=None, models=None: fake_grid)
+    r = admin.post("/settings/price/refresh")
+    assert r.status_code == 303 and "Прайс обновлён" in loc(r)
+    p = k.get("/api/kiosk/price", headers=H).json()
+    assert p["версия"] >= 1 and p["сетка"]["моделей"] == 1
+
+    # оценка с киоска, идемпотентно
+    rep, snap = real_report()
+    body = {"client_id": "c-1", "report": rep, "snapshot": snap}
+    r1 = k.post("/api/kiosk/evaluations", json=body, headers=H).json()
+    assert r1["номер"] == 1 and r1["создана"] is True and r1["ссылка_отчёта"].startswith("http://testserver/r/")
+    r2 = k.post("/api/kiosk/evaluations", json=body, headers=H).json()
+    assert r2["id"] == r1["id"] and r2["создана"] is False
+    r3 = k.post("/api/kiosk/evaluations", json={**body, "client_id": "c-2"}, headers=H).json()
+    assert r3["номер"] == 2 and r3["уже_приносили"] is True
+    assert k.post(f"/api/kiosk/evaluations/{r1['id']}/decision", json={"decision": "sell"}, headers=H).json()["статус"] == "at_counter"
+    assert k.post("/api/kiosk/heartbeat", json={"version": "1.0", "status": {"драйвер": True}}, headers=H).json()["ok"]
+
+    db = SessionLocal()
+    ev = db.get(Evaluation, r1["id"])
+    assert ev.model_name == "iPhone 12" and ev.battery_health == 78 and ev.price_offer == 75000 and ev.apple_summary == "всё родное"
+    assert ev.locks_summary == "Найти iPhone вкл." and ev.point_id == 1 and ev.snapshot["root"]["ProductType"] == "iPhone13,2"
+    dev = db.scalar(select(Device).where(Device.serial == ev.serial))
+    assert dev.evaluations_count == 2
+    assert db.scalar(select(Kiosk)).version == "1.0"
+    public = ev.public_token
+    db.close()
+
+    # касса: очередь, карточка, решение
+    asel = client_for(app, "asel", "asel123")
+    page = asel.get("/queue").text
+    assert "iPhone 12" in page and "Клиент идёт к кассе" in page and "уже приносили" in page
+    assert asel.get(f"/deal/{r1['id']}").status_code == 200
+    assert asel.post(f"/deal/{r1['id']}/take").status_code == 303
+    r = asel.post(f"/deal/{r1['id']}/decide", data={"kind": "bought", "final_price": "80 000", "note": ""})
+    assert "старший" in loc(r)
+    r = asel.post(f"/deal/{r1['id']}/decide", data={"kind": "bought", "final_price": "74000", "note": "царапины", "scratches": "on"})
+    assert "Решение записано" in loc(r)
+    db = SessionLocal()
+    ev = db.get(Evaluation, r1["id"])
+    assert ev.status == "bought" and ev.final_price == 74000 and ev.inspection["царапины_экрана"] is True and ev.decided_by.login == "asel"
+    logs = [l.text for l in db.scalars(select(AuditLog).where(AuditLog.entity_id == ev.id, AuditLog.entity == "evaluation")).all()]
+    assert any("Оформил(а) выкуп №1" in t and "(прайс 75000)" in t for t in logs)
+    db.close()
+    dan = client_for(app, "daniyar", "dan123")
+    r = dan.post(f"/deal/{r3['id']}/decide", data={"kind": "bought", "final_price": "80000"})
+    assert "Решение записано" in loc(r)
+    assert "ВЫКУПЛЕНО" in asel.get("/queue").text.upper()
+    pub = TestClient(app).get(f"/r/{public}")
+    assert pub.status_code == 200 and "iPhone 12" in pub.text and "75 000" in pub.text
+
+
+def test_sickw_via_server_uses_db_cache(app, monkeypatch):
+    calls = []
+    def fake_get(params, timeout=60):
+        calls.append(params)
+        return {"status": "success", "result": 'Model: iPhone 12 64GB Black [A2403]<br>Blacklist Status: <font color="green">CLEAN</font><br>iCloud Lock: <font color="red">ON</font><br>'}
+    monkeypatch.setattr(sickw, "_get", fake_get)
+    db = SessionLocal(); token_hash = db.scalar(select(Kiosk)).token_hash; db.close()
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/kiosks", data={"name": "Киоск-2", "point_id": ""})
+    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
+    k = TestClient(app)
+    H = {"X-Kiosk-Token": token}
+    r = k.post("/api/kiosk/sickw", json={"imei": "490154203237518"}, headers=H).json()
+    assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True and r["цвет"] == "чёрный"
+    r = k.post("/api/kiosk/sickw", json={"imei": "490154203237518"}, headers=H).json()
+    assert r["из_кэша"] is True and len(calls) == 1
+    assert k.post("/api/kiosk/sickw", json={"imei": "123"}, headers=H).status_code == 502
+
+
+def test_employees_create_update_and_revoke(app):
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/employees", data={"name": "Мадина Ержанова", "login": "madina", "role": "cashier", "password": "madina1", "point_id": ""})
+    assert "Сотрудник добавлен" in loc(r)
+    madina = client_for(app, "madina", "madina1")
+    assert madina.get("/queue").status_code == 200
+    db = SessionLocal(); uid = db.scalar(select(User).where(User.login == "madina")).id; db.close()
+    r = admin.post(f"/employees/{uid}", data={"name": "Мадина Ержанова", "role": "cashier", "point_id": ""})   # без is_active → отключить
+    assert "Сохранено" in loc(r)
+    assert madina.get("/queue").status_code == 303                     # сессия отозвана
+    r = TestClient(app, follow_redirects=False).post("/login", data={"login": "madina", "password": "madina1"})
+    assert "e=1" in loc(r)
+    r = admin.post("/employees/1", data={"name": "Администратор", "role": "cashier", "point_id": "", "is_active": "on"})
+    assert "самого себя" in loc(r)
+    page = admin.get("/employees?show=logins").text
+    assert "доступ отключён" in page and "Неудачная попытка" in page

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pintel-core"
-version = "0.1.0"
-description = "Pintel: чтение и оценка iPhone по кабелю — ядро киоска и сервера"
+version = "0.2.0"
+description = "Pintel: чтение и оценка iPhone по кабелю — ядро, сервер, касса и киоск"
 requires-python = ">=3.11"
 dependencies = [
     "pymobiledevice3>=4.14",
@@ -13,11 +13,33 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "psycopg[binary]>=3.1",
+    "httpx>=0.27",
+]
+kiosk = [
+    "PySide6>=6.6",
+    "httpx>=0.27",
+    "qrcode>=7.4",
+]
+test = ["pytest>=8", "httpx>=0.27"]
+
 [project.scripts]
 pintel-doctor = "pintel_core.doctor:main"
+pintel-server = "pintel_server.cli:main"
+pintel-kiosk = "pintel_kiosk.app:main"
 
 [tool.setuptools.packages.find]
-include = ["pintel_core*"]
+include = ["pintel_core*", "pintel_server*", "pintel_kiosk*"]
 
 [tool.setuptools.package-data]
 pintel_core = ["analysis/models.json"]
+pintel_server = ["templates/*.html", "static/*", "static/fonts/*", "migrations/*", "migrations/versions/*"]
+pintel_kiosk = ["assets/*", "assets/fonts/*"]

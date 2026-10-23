@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Pintel{% endblock %} · Pintel</title>
+<link rel="icon" href="/static/logo.png">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+{% block body %}
+<div class="layout">
+  <nav class="side" aria-label="Разделы">
+    <img class="logo" src="/static/logo.png" alt="Pintel">
+    <a href="/queue" class="{{ 'active' if active == 'queue' else '' }}">Очередь</a>
+    <a href="/queue?period=all" class="{{ 'active' if active == 'deals' else '' }}">Сделки</a>
+    {% if user and user.role in ('admin', 'senior') %}<a href="/settings" class="{{ 'active' if active == 'settings' else '' }}">Настройки</a>{% endif %}
+    {% if user and user.role == 'admin' %}<a href="/employees" class="{{ 'active' if active == 'employees' else '' }}">Сотрудники</a>{% endif %}
+    <div class="status">
+      {% block sidestatus %}{% endblock %}
+      {% if user %}Вы вошли как<br><b>{{ user.role_label }} · {{ user.name }}</b>
+      <form method="post" action="/logout" style="margin-top:10px"><button class="btn sm" type="submit">Выйти</button></form>{% endif %}
+    </div>
+  </nav>
+  <main>
+    {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+    {% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}
+</body>
+</html>

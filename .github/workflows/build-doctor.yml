@@ -1,5 +1,5 @@
-# pintel-doctor для Windows: тесты → сборка → дымовой тест собранного exe → релиз
-name: Сборка pintel-doctor
+# Pintel: тесты сервера (Linux) → сборка pintel-doctor и pintel-kiosk для Windows → релиз
+name: Сборка Pintel
 
 on:
   workflow_dispatch:
@@ -16,8 +16,26 @@ env:
   PYTHONUTF8: '1'
 
 jobs:
+  server-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pintel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Зависимости (ядро + сервер)
+        run: python -m pip install --quiet -e ".[server,test]"
+      - name: Тесты ядра и сервера
+        run: python -m pytest tests -q
+      - name: Миграции на чистой базе
+        run: PINTEL_DATABASE_URL=sqlite:////tmp/mig.db alembic upgrade head
+
   build:
     runs-on: windows-latest
+    needs: server-tests
     defaults:
       run:
         working-directory: pintel
@@ -28,10 +46,10 @@ jobs:
           python-version: '3.12'
 
       - name: Зависимости
-        run: python -m pip install --quiet -e . pytest pyinstaller
+        run: python -m pip install --quiet -e ".[kiosk,test]" pyinstaller
 
       - name: Тесты ядра (архивные слепки — регрессия)
-        run: python -m pytest tests -q -s
+        run: python -m pytest tests -q -s --ignore=tests/test_server.py
 
       - name: Сборка exe
         run: python -m PyInstaller --clean --noconfirm pintel-doctor.spec
@@ -49,20 +67,36 @@ jobs:
           Copy-Item config.example.toml dist\pintel-doctor\config.example.toml
           Copy-Item README.md dist\pintel-doctor\README.md
 
-      - name: Упаковать
+      - name: Упаковать доктора
         shell: pwsh
         run: Compress-Archive -Path dist\pintel-doctor -DestinationPath pintel-doctor_Windows_x64.zip
+
+      - name: Сборка киоска
+        run: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
+
+      - name: Дымовой тест киоска (импорт без экрана)
+        shell: pwsh
+        run: |
+          Copy-Item kiosk.example.toml dist\pintel-kiosk\kiosk.example.toml
+          $size = (Get-ChildItem dist\pintel-kiosk -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host ("pintel-kiosk: {0:N0} MB" -f $size)
+          if (-not (Test-Path dist\pintel-kiosk\pintel-kiosk.exe)) { throw "exe киоска не собрался" }
+          Compress-Archive -Path dist\pintel-kiosk -DestinationPath pintel-kiosk_Windows_x64.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: pintel-doctor_Windows_x64
           path: pintel/pintel-doctor_Windows_x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pintel-kiosk_Windows_x64
+          path: pintel/pintel-kiosk_Windows_x64.zip
 
       - name: Релиз
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip `
-            --target $env:GITHUB_SHA --title "pintel-doctor — сборка #${{ github.run_number }}" `
-            --notes "Консольный врач: selfcheck, snapshot --apple 120 --sickw, report, price. Рядом положить config.toml и gservice.json. Папку out\ прислать разработчику."
+          gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip pintel-kiosk_Windows_x64.zip `
+            --target $env:GITHUB_SHA --title "Pintel — сборка #${{ github.run_number }}" `
+            --notes "pintel-kiosk: киоск для клиента (kiosk.toml рядом: server, token). pintel-doctor: консольный врач (config.toml, gservice.json). Сервер разворачивается из pintel/deploy (docker compose)."

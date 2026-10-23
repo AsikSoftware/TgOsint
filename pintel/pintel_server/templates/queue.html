@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set active = 'deals' if period == 'all' else 'queue' %}
+{% block title %}Очередь{% endblock %}
+{% block sidestatus %}
+  {% for k in kiosks %}<span class="dot {{ '' if k.last_seen_at and (now - k.last_seen_at).total_seconds() < 180 else 'off' }}"></span>Киоск {{ k.name }}: {{ 'на связи' if k.last_seen_at and (now - k.last_seen_at).total_seconds() < 180 else 'не отвечает' }}<br>{% endfor %}
+  Прайс: {{ ('обновлён ' + grid.fetched_at|dt) if grid else 'не загружен' }}<br>
+{% endblock %}
+{% block content %}
+<div class="head">
+  <h1>{{ 'Сделки' if period == 'all' else 'Очередь оценок' }}</h1>
+  <div class="sub">{{ now|dt('%d.%m.%Y') }}</div>
+  <form class="search right" method="get" action="/queue">
+    <input type="hidden" name="period" value="{{ period }}">
+    <input type="text" name="q" value="{{ q }}" placeholder="номер, серийный, IMEI, модель">
+    <button class="btn sm primary" type="submit">Найти</button>
+  </form>
+  <div class="row"><span class="avatar">{{ user.name[:2]|upper }}</span><b>{{ user.name }}</b></div>
+</div>
+<div class="row">
+  <a class="btn sm {{ 'primary' if period == 'today' else '' }}" href="/queue?period=today">Сегодня</a>
+  <a class="btn sm {{ 'primary' if period == 'week' else '' }}" href="/queue?period=week">Неделя</a>
+  <a class="btn sm {{ 'primary' if period == 'all' else '' }}" href="/queue?period=all">Все</a>
+</div>
+<div class="cards">
+  <div class="card"><div class="label">Оценок сегодня</div><div class="big">{{ stats['оценок'] }}</div></div>
+  <div class="card"><div class="label">Выкуплено</div><div class="big ok">{{ stats['выкуплено'] }}</div></div>
+  <div class="card"><div class="label">Сумма выкупа</div><div class="big">{{ stats['сумма']|money }} {{ settings.currency }}</div></div>
+  <div class="card"><div class="label">Конверсия</div><div class="big">{{ stats['конверсия'] }} %</div></div>
+</div>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>№</th><th>Время</th><th>Телефон</th><th>Батарея</th><th>Apple</th><th>Блокировки</th><th>Цена</th><th>Статус</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr class="{{ 'hot' if r.status == 'at_counter' else '' }}">
+    <td class="num">{{ r.number }}</td>
+    <td class="muted">{{ r.created_at|time }}{% if period != 'today' %}<br><small>{{ r.day }}</small>{% endif %}</td>
+    <td><b>{{ r.model_name or '?' }}{% if r.capacity_gb %} · {{ r.capacity_gb }}{% endif %}</b>{% if r.device and r.device.evaluations_count > 1 %} <span class="pill gray">уже приносили</span>{% endif %}</td>
+    <td class="{{ 'ok' if r.battery_health and r.battery_health >= 85 else 'warn' }}">{{ r.battery_health if r.battery_health is not none else '?' }} % · {{ r.battery_cycles or '?' }} ц.</td>
+    <td class="{{ 'ok' if r.apple_summary == 'всё родное' else ('muted' if r.apple_summary == 'история не получена' else 'warn') }}">{{ r.apple_summary }}</td>
+    <td class="{{ 'ok' if r.locks_summary == 'чисто' else ('bad' if 'ЧЁРНЫЙ' in (r.locks_summary or '') or 'MDM' in (r.locks_summary or '') else 'warn') }}">{{ r.locks_summary }}</td>
+    <td><b>{% if r.verdict == 'ПРОБЛЕМНЫЙ' %}<span class="bad">не принимаем</span>{% elif r.price_offer %}{{ r.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</b></td>
+    <td>
+      {% if r.status == 'bought' %}<span class="pill ok">Выкуплен · {{ r.final_price|money }} {{ settings.currency }}</span>
+      {% elif r.status == 'declined' %}<span class="pill bad">Отказ</span>
+      {% elif r.status == 'at_counter' %}<span class="pill warn">Клиент идёт к кассе</span>
+      {% elif r.status == 'in_work' %}<span class="pill info">В работе{% if r.assigned_user %} · {{ r.assigned_user.name.split(' ')[0] }}{% endif %}</span>
+      {% elif r.status == 'viewed' %}<span class="pill gray">Просто смотрел</span>
+      {% else %}<span class="pill gray">Новая</span>{% endif %}
+    </td>
+    <td><a class="btn sm {{ 'primary' if r.status == 'at_counter' else '' }}" href="/deal/{{ r.id }}">Открыть</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="9" class="muted" style="text-align:center;padding:32px">Пока пусто{% if q %} — по запросу «{{ q }}» ничего не нашлось{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

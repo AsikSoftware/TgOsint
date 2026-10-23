@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% set active = 'queue' %}
+{% block title %}Оценка №{{ ev.number }}{% endblock %}
+{% set pas = rep.get('паспорт') or {} %}{% set bat = rep.get('батарея') or {} %}{% set leg = rep.get('правовой') or {} %}
+{% set sk = rep.get('sickw') or {} %}{% set sig = rep.get('сигналы') or {} %}{% set hist = rep.get('apple_история') or {} %}
+{% set sto = rep.get('память') or {} %}{% set price = rep.get('цена') or {} %}{% set itog = rep.get('итог') or {} %}
+{% block content %}
+<div class="head">
+  <div class="mont" style="font-size:44px;font-weight:800;color:var(--primary)">№{{ ev.number }}</div>
+  <div>
+    <h1 style="font-size:24px">{{ ev.model_name or '?' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.colour %} · {{ ev.colour }}{% endif %}</h1>
+    <div class="sub" style="font-size:14px;margin-top:4px">Оценён на киоске {{ ev.created_at|dt }}{% if ev.kiosk %} ({{ ev.kiosk.name }}){% endif %} · серийный {{ ev.serial or '?' }} · IMEI {{ ev.imei or '?' }} · iOS {{ ev.ios or '?' }}</div>
+  </div>
+  <span class="right pill {{ 'ok' if ev.status == 'bought' else ('bad' if ev.status == 'declined' else ('warn' if ev.status == 'at_counter' else ('info' if ev.status == 'in_work' else 'gray'))) }}">{{ ev.status_label }}{% if ev.assigned_user %} · {{ ev.assigned_user.name }}{% endif %}</span>
+  <a class="btn sm" href="/queue">← Очередь</a>
+</div>
+{% if itog.get('вердикт') == 'ПРОБЛЕМНЫЙ' %}<div class="flash err">ПРОБЛЕМНЫЙ: {{ itog.get('почему') }}</div>
+{% elif itog.get('вердикт') == 'ПРОВЕРКА НЕПОЛНАЯ' %}<div class="flash err" style="background:var(--warn-bg);color:var(--warn)">Проверка неполная: {{ itog.get('почему') }}</div>{% endif %}
+{% if history %}<div class="flash" style="background:var(--primary-light);color:var(--primary)">Этот телефон уже приносили: {% for h in history %}<a href="/deal/{{ h.id }}">№{{ h.number }} от {{ h.created_at|dt('%d.%m.%Y') }} ({{ h.status_label }}{% if h.final_price %}, {{ h.final_price|money }}{% endif %})</a>{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
+<div class="deal">
+  <div class="main">
+    <section class="sec span2">
+      <h2>Что говорит Apple — источник правды</h2>
+      {% if hist %}
+      <div class="grid3">
+        {% for k, v in hist.items() %}
+        <div class="tile {{ 'bad' if v['меняли'] and v['бу'] else ('warn' if v['меняли'] else 'ok') }}"><b>{{ v['деталь'] }}</b><small>{% if v['меняли'] %}меняли{% if v['дата'] %} {{ v['дата'] }}{% endif %} · {{ 'б/у деталь' if v['бу'] else 'новая деталь' }}{% else %}не меняли{% endif %}</small></div>
+        {% endfor %}
+      </div>
+      <div class="note">Снято из «Запчасти и история обслуживания» на телефоне клиента. Не из наших догадок, а из реестра Apple.</div>
+      {% else %}
+      <div class="tile gray"><b>История не получена</b><small>Клиент не открыл раздел на телефоне за отведённое время. Можно повторить на киоске.</small></div>
+      {% endif %}
+    </section>
+    <section class="sec">
+      <h2>Батарея</h2>
+      <div class="row" style="align-items:baseline"><span class="price" style="font-size:34px">{{ bat.get('здоровье_%') if bat.get('здоровье_%') is not none else '?' }} %</span><span class="muted">{{ bat.get('ёмкость_мАч') or '?' }} из {{ bat.get('заводская_мАч') or '?' }} мА·ч</span></div>
+      <div class="kv"><span>Циклов</span><span>{{ bat.get('циклы') if bat.get('циклы') is not none else '?' }}</span></div>
+      <div class="kv"><span>Серийный модуля</span><span>{{ bat.get('серийник') or '?' }}</span></div>
+      <div class="kv"><span>Подделка</span><span class="{{ 'bad' if bat.get('подделка') else 'ok' }}">{{ ', '.join(bat.get('подделка') or []) or 'признаков нет' }}</span></div>
+      {% if bat.get('сомнения') %}<div class="kv"><span>Сомнения</span><span class="warn">{{ ', '.join(bat.get('сомнения')) }}</span></div>{% endif %}
+    </section>
+    <section class="sec">
+      <h2>Блокировки · база IMEI</h2>
+      <div class="kv"><span>Чёрный список (Sickw)</span><span class="{{ 'bad' if sk.get('в_чёрном_списке') else ('ok' if sk.get('в_чёрном_списке') is false else 'muted') }}">{{ sk.get('чёрный_список') or 'нет данных' }}</span></div>
+      <div class="kv"><span>Найти iPhone (телефон)</span><span class="{{ 'warn' if leg.get('найти_iphone') == 'включён' else 'ok' }}">{{ leg.get('найти_iphone') or '?' }}</span></div>
+      <div class="kv"><span>Найти iPhone (Sickw)</span><span class="{{ 'warn' if sk.get('fmi_включён') else 'muted' }}">{{ sk.get('icloud') or 'нет данных' }}</span></div>
+      <div class="kv"><span>Активация</span><span>{{ leg.get('активация') or '?' }}</span></div>
+      <div class="kv"><span>MDM-надзор</span><span class="{{ 'bad' if leg.get('mdm') is true else ('ok' if leg.get('mdm') is false else 'warn') }}">{{ 'ЕСТЬ' if leg.get('mdm') is true else ('нет' if leg.get('mdm') is false else 'не определился — проверить на телефоне') }}</span></div>
+      <div class="kv"><span>Пароль</span><span>{{ 'стоит' if leg.get('пароль') else 'нет' }}</span></div>
+      <div class="kv"><span>SIM</span><span>{{ pas.get('sim') or '?' }}{% if pas.get('esim') %} + eSIM-профиль{% endif %}</span></div>
+      <div class="kv"><span>Модель с завода</span><span>{{ sk.get('описание') or sk.get('модель_строка') or '—' }}</span></div>
+      <div class="kv"><span>Гарантия</span><span>{{ sk.get('гарантия') or '—' }}{% if sk.get('гарантия_до') %} до {{ sk.get('гарантия_до') }}{% endif %}</span></div>
+      <div class="kv"><span>Покупка (Sickw)</span><span>{{ sk.get('дата_покупки') or '—' }}</span></div>
+      <div class="kv"><span>Джейлбрейк</span><span>{{ rep.get('джейлбрейк') or '—' }}</span></div>
+    </section>
+    <section class="sec span2">
+      <h2>Дополнительные сигналы с кабеля — только для сотрудника</h2>
+      <div class="grid4">
+        {% for name, s in sig.items() %}
+        <div class="sig"><span>{{ name }}</span><span class="{{ 'ok' if s['ок'] is true else ('bad' if s['ок'] is false else 'muted') }}">{{ s['почему'] }}</span></div>
+        {% endfor %}
+        <div class="sig"><span>Память (NAND)</span><span>{{ sto.get('объём_гб') or '?' }} ГБ{% if sto.get('nand_производитель') %} · {{ sto.get('nand_производитель') }} {{ sto.get('nand_тип') or '' }}{% endif %}{% if sto.get('объём_сошёлся') is false %} · <span class="bad">объём не сходится</span>{% endif %}</span></div>
+      </div>
+      <div class="note">Это подсказки по сопряжению деталей с платой. Если что-то здесь спорит с Apple — верим Apple, сигнал помечаем на разбор.</div>
+      {% if rep.get('стоп') or rep.get('внимание') or rep.get('сделать') %}
+      <div class="row" style="margin-top:6px">
+        {% for x in rep.get('стоп') or [] %}<span class="pill bad">СТОП: {{ x }}</span>{% endfor %}
+        {% for x in rep.get('внимание') or [] %}<span class="pill warn">{{ x }}</span>{% endfor %}
+        {% for x in rep.get('сделать') or [] %}<span class="pill info">{{ x }}</span>{% endfor %}
+      </div>
+      {% endif %}
+    </section>
+    <section class="sec span2">
+      <h2>Серийники деталей</h2>
+      <div class="tablewrap" style="border:0"><table>
+        <thead><tr><th>Деталь</th><th>Серийник</th><th>Дата выпуска</th><th>Производитель</th></tr></thead>
+        <tbody>{% for d in rep.get('детали') or [] %}<tr><td>{{ d['деталь'] }}</td><td style="font-family:monospace">{{ d['серийник'] }}</td><td>{{ d.get('дата') or '' }}</td><td>{{ d.get('производитель') or '' }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+      <details><summary>Полный отчёт (JSON)</summary><pre>{{ rep|tojson(indent=1) }}</pre></details>
+    </section>
+    {% if log %}
+    <section class="sec span2">
+      <h2>Журнал по этой оценке</h2>
+      {% for l in log %}<div class="logline" style="padding:8px 0"><span class="t">{{ l.at|dt }}</span><span class="who">{{ l.actor_name }}</span><span class="what">{{ l.text }}</span></div>{% endfor %}
+    </section>
+    {% endif %}
+  </div>
+  <aside class="aside sec">
+    <h2>Выкуп</h2>
+    <div class="kv"><span>{{ price.get('основание') or 'цены в прайсе нет' }}</span><span style="white-space:nowrap">{% if ev.price_offer %}{{ ev.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</span></div>
+    {% if price.get('нехватка') %}<div class="note">{{ ' '.join(price.get('нехватка')) }}</div>{% endif %}
+    <div style="height:1px;background:var(--border)"></div>
+    {% if ev.status in ('bought', 'declined') %}
+      <div class="tile {{ 'ok' if ev.status == 'bought' else 'bad' }}"><b>{{ ev.status_label }}{% if ev.final_price %} · {{ ev.final_price|money }} {{ settings.currency }}{% endif %}</b><small>{{ ev.decided_at|dt }} · {{ ev.decided_by.name if ev.decided_by else '' }}{% if ev.decision_note %}<br>{{ ev.decision_note }}{% endif %}</small></div>
+      {% if ev.inspection %}<div class="note">Осмотр: {% for k, v in ev.inspection.items() %}{% if v %}{{ k.replace('_', ' ') }}; {% endif %}{% endfor %}</div>{% endif %}
+    {% else %}
+    {% if not ev.assigned_user_id %}<form method="post" action="/deal/{{ ev.id }}/take"><button class="btn primary" type="submit" style="width:100%">Взять в работу</button></form>{% endif %}
+    <form method="post" action="/deal/{{ ev.id }}/decide" style="display:flex;flex-direction:column;gap:12px">
+      <fieldset style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px">
+        <legend class="note" style="margin-bottom:6px">Осмотр на месте</legend>
+        <label class="chk"><input type="checkbox" name="scratches">Царапины на экране</label>
+        <label class="chk"><input type="checkbox" name="dents">Сколы / вмятины корпуса</label>
+        <label class="chk"><input type="checkbox" name="back_glass">Трещина заднего стекла</label>
+        <label class="chk"><input type="checkbox" name="fmi_off" {{ 'checked' if leg.get('найти_iphone') == 'выключен' }}>Найти iPhone выключен</label>
+      </fieldset>
+      <label class="f">Итоговая цена, {{ settings.currency }}<input type="text" name="final_price" value="{{ ev.price_offer or '' }}" style="font-size:24px;font-weight:800" inputmode="numeric"></label>
+      {% if user.role == 'cashier' %}<div class="note">Кассир может оформить только по прайсу или ниже. Выше — старший сотрудник.</div>{% endif %}
+      <div class="row">
+        <label class="chk"><input type="radio" name="deal_kind" value="buyout" checked>Выкуп</label>
+        <label class="chk"><input type="radio" name="deal_kind" value="tradein">Trade-in</label>
+      </div>
+      <label class="f">Комментарий<textarea name="note" rows="2" placeholder="например: царапины, скидка 5 000"></textarea></label>
+      <button class="btn success" type="submit" name="kind" value="bought" style="height:52px;font-size:16px" {{ 'disabled' if itog.get('вердикт') == 'ПРОБЛЕМНЫЙ' and user.role == 'cashier' }}>Оформить выкуп</button>
+      <button class="btn danger" type="submit" name="kind" value="declined">Отказать</button>
+      <div class="note">Приёмка в МойСкладе и выплата появятся на этом же шаге, когда подключим интеграции. Полный сырой снимок телефона сохранён — можно пересчитать позже.</div>
+    </form>
+    {% endif %}
+    <div class="note">Клиенту: <a href="/r/{{ ev.public_token }}" target="_blank">страница отчёта</a> (та же, что по QR на талоне)</div>
+  </aside>
+</div>
+{% endblock %}

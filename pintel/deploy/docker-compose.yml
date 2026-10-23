@@ -1,0 +1,74 @@
+# Pintel Server на VPS: база, приложение, резервные копии, HTTPS.
+#   cp .env.example .env   # заполнить
+#   docker compose up -d --build
+#   docker compose exec app python -m pintel_server.cli create-admin --login admin --name "Руслан"
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pintel
+      POSTGRES_USER: pintel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pintel -d pintel"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PINTEL_DATABASE_URL: postgresql+psycopg://pintel:${POSTGRES_PASSWORD}@db:5432/pintel
+      PINTEL_GSERVICE_JSON: /secrets/gservice.json
+    volumes:
+      - ./secrets:/secrets:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    # каждую ночь в 03:00 — дамп, хранится 30 дней
+    command: >
+      sh -c 'while true; do
+        sleep $$(( ( (3 - $$(date +%-H) + 24) % 24 ) * 3600 - $$(date +%-M) * 60 ));
+        pg_dump -h db -U pintel -d pintel -Fc -f /backups/pintel_$$(date +%F).dump &&
+        find /backups -name "pintel_*.dump" -mtime +30 -delete;
+        sleep 3600; done'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: ["https"]
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% set active = 'employees' %}
+{% block title %}Сотрудники{% endblock %}
+{% block content %}
+<div class="head"><h1>Сотрудники и журнал</h1></div>
+<div class="tablewrap"><table>
+  <thead><tr><th>Сотрудник</th><th>Логин</th><th>Роль</th><th>Точка</th><th>Последний вход</th><th>Выкупов за месяц</th><th></th></tr></thead>
+  <tbody>
+  {% for u in users %}
+  <tr>
+    <td><b>{{ u.name }}</b></td><td>{{ u.login }}</td>
+    <td><span class="pill {{ 'warn' if u.role == 'senior' else ('bad' if u.role == 'admin' else 'info') }}">{{ u.role_label }}</span></td>
+    <td>{{ u.point.name if u.point else '—' }}</td>
+    <td class="{{ 'bad' if not u.is_active else ('ok' if u.id in online else 'muted') }}">{% if not u.is_active %}доступ отключён{% elif u.id in online %}сейчас в системе{% else %}{{ (u.last_login_at|dt) if u.last_login_at else 'ещё не входил(а)' }}{% endif %}</td>
+    <td><b>{{ stats[u.id]['n'] }}{% if stats[u.id]['sum'] %} · {{ stats[u.id]['sum']|money }} {{ settings.currency }}{% endif %}</b></td>
+    <td><details><summary>Изменить</summary>
+      <form method="post" action="/employees/{{ u.id }}" class="row" style="margin-top:8px">
+        <input type="text" name="name" value="{{ u.name }}" required style="width:180px">
+        <select name="role" style="width:160px">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if k == u.role }}>{{ v }}</option>{% endfor %}</select>
+        <select name="point_id" style="width:160px"><option value="">без точки</option>{% for p in points %}<option value="{{ p.id }}" {{ 'selected' if p.id == u.point_id }}>{{ p.name }}</option>{% endfor %}</select>
+        <label class="chk"><input type="checkbox" name="is_active" {{ 'checked' if u.is_active }}>доступ</label>
+        <input type="password" name="password" placeholder="новый пароль (если менять)" style="width:200px" autocomplete="new-password">
+        <button class="btn primary sm" type="submit">Сохранить</button>
+      </form></details></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<section class="sec">
+  <h2>Добавить сотрудника</h2>
+  <form method="post" action="/employees" class="row" autocomplete="off">
+    <input type="text" name="name" placeholder="Имя Фамилия" required style="width:200px">
+    <input type="text" name="login" placeholder="логин" required style="width:140px" autocapitalize="off">
+    <select name="role" style="width:160px">{% for k, v in ROLES.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+    <select name="point_id" style="width:160px"><option value="">без точки</option>{% for p in points %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+    <input type="password" name="password" placeholder="пароль (от 6 знаков)" required style="width:180px" autocomplete="new-password">
+    <button class="btn primary" type="submit">+ Добавить</button>
+  </form>
+</section>
+<div class="head">
+  <h2 class="title" style="margin:0;font-size:18px">Журнал действий</h2>
+  <div class="sub">всё, что делали люди и киоски, хранится всегда</div>
+  <div class="row right">
+    <a class="btn sm {{ 'primary' if show == 'today' else '' }}" href="/employees?show=today">Сегодня</a>
+    <a class="btn sm {{ 'primary' if show == 'week' else '' }}" href="/employees?show=week">Неделя</a>
+    <a class="btn sm {{ 'primary' if show == 'logins' else '' }}" href="/employees?show=logins">Только входы</a>
+  </div>
+</div>
+<div class="tablewrap">
+  {% if show == 'logins' %}
+    {% for e in events %}<div class="logline"><span class="t">{{ e.at|dt }}</span><span class="who">{{ e.user.name if e.user else e.login }}</span><span class="what {{ 'ok' if e.ok else 'bad' }}">{{ 'Вход выполнен' if e.ok else 'Неудачная попытка: ' + (e.reason or '') }}</span><span class="muted">{{ e.ip or '' }}</span></div>
+    {% else %}<div class="logline muted">Входов пока не было</div>{% endfor %}
+  {% else %}
+    {% for l in log %}<div class="logline"><span class="t">{{ l.at|dt }}</span><span class="who">{{ l.actor_name }}</span><span class="what">{% if l.entity == 'evaluation' and l.entity_id %}<a href="/deal/{{ l.entity_id }}">{{ l.text }}</a>{% else %}{{ l.text }}{% endif %}</span><span class="muted">{{ l.actor_type }}</span></div>
+    {% else %}<div class="logline muted">За этот период записей нет</div>{% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

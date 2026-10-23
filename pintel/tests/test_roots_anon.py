@@ -16,7 +16,8 @@ def test_all_roots_build():
         p = passport.build(r)
         if r["ProductType"].startswith("iPhone"):              # справочник моделей — только iPhone
             assert "не в справочнике" not in p["модель"], r["ProductType"]
-        assert p["sim"], r
+        if r.get("SIMStatus") or r.get("SIMTrayStatus"):       # у Wi-Fi-iPad SIM-ключей нет вовсе
+            assert p["sim"], r
         assert p["регион"], r
         if p["регион"].startswith("не распознан"):
             unknown_regions[r["RegionInfo"]] += 1

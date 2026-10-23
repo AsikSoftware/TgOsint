@@ -168,6 +168,9 @@ class KioskWindow(QMainWindow):
         self.net.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()
+        for t in (self.poller, self.net, self.pipeline, *self.tasks):
+            if t is not None and t.isRunning():
+                t.wait(3000)                     # иначе Qt ругается «Destroyed while thread is still running»
         super().closeEvent(e)
 
     # ---------- события ----------

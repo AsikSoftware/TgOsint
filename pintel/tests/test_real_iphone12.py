@@ -34,7 +34,7 @@ def test_report_matches_3utools():
     assert p["серийник"] == "FFXH33T20F0N" and p["серийник_платы"] == "FG120270379PRVVAJ"
     assert p["bluetooth_mac"] == "34:fe:77:8b:e9:36" and p["cellular_mac"] == "34:fe:77:9b:f9:1c"
     assert p["wifi_mac"] == "34:fe:77:8d:0e:8e" and p["sim"] == "SIM не вставлена" and p["esim"]
-    assert p["выпуск"] == "2022, неделя 3" and p["цвет"] == "Black"
+    assert p["выпуск"] == "2022, неделя 3" and p["цвет"] == "чёрный"
     assert b["здоровье_%"] == 80 and b["циклы"] == 1690 and b["серийник"] == "FG92027038HQ68CAT"
     assert s["объём_гб"] == 64 and s["nand_производитель"] == "Toshiba" and s["nand_тип"] == "TLC"
     assert s["объём_сошёлся"] is True and s["свободно_гб"] == 39.1

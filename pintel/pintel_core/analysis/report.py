@@ -3,6 +3,7 @@
 from . import battery, legal, pairing, passport, serials, storage
 from ..devicelink import jailbreak, nand
 from ..devicelink.nodes import ENCLOSURE_COLOURS, num
+from ..external import sickw as sickw_mod
 
 
 def build(snap):
@@ -29,6 +30,10 @@ def build(snap):
         nd = snap.get("nand_summary") or {}
     parts = serials.collect(snap, pas["код_модели"])
     sk = snap.get("sickw")
+    if sk and sk.get("все_поля"):
+        # разбор Sickw пересчитываем из сохранённых полей — правки парсера
+        # применяются и к старым слепкам
+        sk = {**sk, **sickw_mod.normalize(sk["все_поля"])}
     mg = snap.get("mobilegestalt") or {}
     raw_code = mg.get("DeviceEnclosureColor") if "недоступен" not in mg else None
     code = num(raw_code) if raw_code is not None else None

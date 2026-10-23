@@ -88,7 +88,7 @@ def test_sickw_gsx_description_and_flags():
 
 def test_report_loaner_is_stop_and_used_part_is_stop():
     snap = load("iphone17pro_anon")
-    snap["sickw"]["подменный"] = True
+    snap["sickw"]["все_поля"]["Loaner Device"] = "Yes"          # разбор пересчитывается из полей
     rep = report_mod.build(snap)
     assert rep["итог"]["вердикт"] == "ПРОБЛЕМНЫЙ" and any("Loaner" in x for x in rep["стоп"])
     snap = load("iphone12_ios26_anon")

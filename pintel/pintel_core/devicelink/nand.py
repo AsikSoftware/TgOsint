@@ -42,8 +42,10 @@ def summarize(blob, nvme_firmware=None):
     recs, rest = parse(blob)
     fw = _text(recs[0x2a8]) if recs.get(0x2a8) else ""
     ok = bool(recs) and rest == 0
-    consistent = (None if not (fw and nvme_firmware)
-                  else fw.strip() == str(nvme_firmware).strip())
+    # Контроллер отдаёт прошивку обрезанной («532.140.»), NANDInfo — полной
+    # («532.140.2»): сравниваем по префиксу, иначе ложная тревога.
+    a, b = fw.strip().rstrip("."), str(nvme_firmware or "").strip().rstrip(".")
+    consistent = None if not (a and b) else (a.startswith(b) or b.startswith(a))
     return {
         "записей": len(recs),
         "остаток_байт": rest,

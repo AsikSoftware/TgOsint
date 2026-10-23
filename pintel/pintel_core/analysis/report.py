@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Слепок → отчёт. Главный принцип: отсутствие данных НЕ превращается в вердикт."""
-from . import battery, legal, pairing, passport, storage
+from . import battery, legal, pairing, passport, serials, storage
 from ..devicelink import nand
 
 
@@ -12,7 +12,16 @@ def build(snap):
     pas = passport.build(snap.get("root"))
     leg = legal.build(snap)
     sig = pairing.signals(snap)
-    nd = snap.get("nand_summary") or {}
+    disk = doms.get("com.apple.disk_usage") or {}
+    if disk.get("NANDInfo"):
+        from ..devicelink.nodes import deep as _deep, txt as _txt
+        nd = nand.summarize(disk["NANDInfo"], _txt(_deep(nodes.get("nvme") or {}, "Firmware Revision")))
+    else:
+        nd = snap.get("nand_summary") or {}
+    parts = serials.collect(snap, pas["код_модели"])
+    sk = snap.get("sickw")
+    if sk and sk.get("цвет") and not pas["цвет"]:
+        pas["цвет"] = sk["цвет"]
 
     stop, todo, warn, unknown = [], [], [], []
     if bat["подделка"]:
@@ -59,6 +68,8 @@ def build(snap):
         "правовой": leg,
         "сигналы": sig,
         "nand": nd,
+        "детали": parts,
+        "sickw": sk,
         "apple_история": snap.get("repair_history") or None,
         "стоп": stop, "сделать": todo, "внимание": warn, "не_прочиталось": unknown,
         "итог": {"вердикт": verdict[0], "почему": verdict[1]},

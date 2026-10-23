@@ -69,13 +69,17 @@ def fmt_report(rep):
          f"  {p['модель']}  ·  {s['объём_гб'] or '?'} ГБ  ·  iOS {p['ios'] or '?'}  ·  "
          f"{p['номер_модели'] or '—'} ({p['регион'] or 'регион ?'})",
          f"  серийный {p['серийник'] or '—'}  IMEI {p['imei'] or '—'}  плата {p['серийник_платы'] or '—'}",
+         f"  цвет {p.get('цвет') or 'по кабелю не читается'}  ·  выпуск {p.get('выпуск') or 'в серийнике не закодирован'}"
+         f"  ·  {p.get('sim') or 'SIM ?'}{' + eSIM' if p.get('esim') else ''}",
+         f"  Wi-Fi {p.get('wifi_mac') or '—'}  BT {p.get('bluetooth_mac') or '—'}  сотовый {p.get('cellular_mac') or '—'}",
          "═" * 64,
          f"  ИТОГ: {rep['итог']['вердикт']} — {rep['итог']['почему']}", ""]
     L.append(f"  Батарея: здоровье {b['здоровье_%']}% ({b['ёмкость_мАч']}/{b['заводская_мАч']} мА·ч), "
              f"{b['циклы']} циклов, серийник {b['серийник'] or '—'}, шлейф снимали {b['снятий_шлейфа']} раз")
     for f in b["подделка"]:
         L.append(f"    ⛔ {f}")
-    L.append(f"  Память: {s['объём_гб']} ГБ (контроллер {s['nvme_модель'] or '—'} / {s['nvme_объём_гб'] or '?'} ГБ), "
+    nandv = " ".join(x for x in (s.get("nand_производитель"), s.get("nand_тип")) if x)
+    L.append(f"  Память: {s['объём_гб']} ГБ {nandv} (контроллер {s['nvme_модель'] or '—'} / {s['nvme_объём_гб'] or '?'} ГБ), "
              f"занято {s['занято_гб']} ГБ ({s['занято_%']}%), свободно {s['свободно_гб']} ГБ"
              + ("" if s["объём_сошёлся"] is not False else "  ⛔ ОБЪЁМ НЕ СХОДИТСЯ"))
     nd = rep.get("nand") or {}
@@ -88,6 +92,11 @@ def fmt_report(rep):
     for name, sg in rep["сигналы"].items():
         mark = "✓" if sg["ок"] is True else ("✗" if sg["ок"] is False else "·")
         L.append(f"    {mark} {name}: {sg['почему']}")
+    if rep.get("детали"):
+        L.append("  Серийники деталей (дата выпуска из серийника):")
+        for d in rep["детали"]:
+            extra = " · ".join(x for x in (d.get("дата"), d.get("производитель"), d.get("фабрика")) if x)
+            L.append(f"    {d['деталь']:<22} {d['серийник']:<26} {extra}")
     ah = rep.get("apple_история")
     if ah:
         L.append("  История обслуживания Apple:")
@@ -97,8 +106,12 @@ def fmt_report(rep):
                 if v["меняли"] else "не меняли"))
     sk = rep.get("sickw")
     if sk:
-        L.append(f"  Sickw: чёрный список {sk['чёрный_список'] or '?'}; модель {sk['модель_строка']}; "
-                 f"iCloud {sk['icloud'] or '?'}; гарантия {sk['гарантия'] or '?'}")
+        na = "услуга не отдаёт"
+        L.append(f"  Sickw: {sk.get('описание') or sk['модель_строка']}; цвет {sk.get('цвет') or '?'}; "
+                 f"оператор {sk.get('оператор') or na}; sim-lock {sk.get('sim_lock') or na}")
+        L.append(f"         гарантия: {sk.get('гарантия') or na}; покупка {sk.get('дата_покупки') or '?'} "
+                 f"({sk.get('страна_покупки') or '?'}); чёрный список: {sk.get('чёрный_список') or na}; "
+                 f"iCloud: {sk.get('icloud') or na}")
     pr = rep.get("цена")
     if pr:
         L.append(f"  ЦЕНА: {pr['цена'] if pr['цена'] else '—'} {pr['валюта']}  {pr['основание']}  "
@@ -178,8 +191,10 @@ async def _snapshot(args, cfg):
         if sickw.luhn_ok(imei):
             say("  Sickw…")
             try:
-                rep["sickw"] = sickw.lookup(imei, cfg["sickw"]["key"],
-                                            cache_dir=os.path.join(app_dir(), "out", "sickw_cache"))
+                snap["sickw"] = sickw.lookup(imei, cfg["sickw"]["key"],
+                                             cache_dir=os.path.join(app_dir(), "out", "sickw_cache"))
+                open(os.path.join(d, "snapshot.json"), "w", encoding="utf-8").write(snapshot.dumps(snap))
+                rep = report_mod.build(snap)
             except Exception as e:
                 rep["sickw_ошибка"] = str(e)
                 say("  Sickw не ответил:", e)

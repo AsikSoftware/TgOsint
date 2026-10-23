@@ -71,19 +71,33 @@ def normalize(raw_fields):
     colour = re.sub(r"\b\d+\s?(GB|TB)\b", "", colour, flags=re.I)
     colour = re.sub(r"^\s*iPhone[\w\s]*?(Pro Max|Pro|Plus|mini|Air|SE)?\s*\d*\s*",
                     "", colour, flags=re.I).strip(" -,")
-    blk = _pick(f, "Blacklist Status")
+    blk = _pick(f, "Blacklist Status", "Blacklist")
+    fmi = _pick(f, "iCloud Lock", "Find My iPhone", "FMI", "FMI Status", "iCloud Status")
+    carrier = _pick(f, "Locked Carrier", "Carrier", "Sim-Lock Status")
+    simlock = _pick(f, "SIM-Lock", "SIM Lock", "Simlock")
+    if not simlock and carrier:
+        simlock = "разблокирован" if "unlock" in carrier.lower() else carrier
+    warranty = _pick(f, "Warranty Status", "Coverage", "Repairs and Service Coverage")
+    exp = _pick(f, "Repairs and Service Expiration Date", "Coverage Expiration Date")
+    if exp and not warranty:
+        warranty = f"обслуживание до {exp}"
+        by = _pick(f, "Repairs and Service Expired By")
+        if by:
+            warranty += f" (истекло: {by})"
     return {
         "модель_строка": model,
         "объём_гб": (int(cap.group(1)) * (1024 if cap.group(2).upper() == "TB" else 1)) if cap else None,
         "цвет": colour or None,
-        "чёрный_список": blk,
-        "в_чёрном_списке": bool(blk) and blk.strip().upper() not in ("CLEAN", "CLEAR"),
-        "icloud": _pick(f, "iCloud Lock", "Find My iPhone", "FMI"),
-        "sim_lock": _pick(f, "SIM-Lock", "SIM Lock"),
-        "оператор": _pick(f, "Locked Carrier", "Carrier"),
-        "страна_политики": _pick(f, "Locked Activation Policy Country"),
-        "гарантия": _pick(f, "Warranty Status", "Coverage"),
-        "дата_покупки": _pick(f, "Estimated Purchase Date", "Purchase Date"),
+        "чёрный_список": blk or None,                   # None = услуга не отдаёт
+        "в_чёрном_списке": (bool(blk) and blk.strip().upper() not in ("CLEAN", "CLEAR")) if blk else None,
+        "icloud": fmi or None,
+        "sim_lock": simlock or None,
+        "оператор": carrier or None,
+        "страна_политики": _pick(f, "Locked Activation Policy Country") or None,
+        "страна_покупки": _pick(f, "Purchase Country") or None,
+        "гарантия": warranty or None,
+        "дата_покупки": _pick(f, "Estimated Purchase Date", "Purchase Date") or None,
+        "описание": _pick(f, "Model Description") or None,
         "дата_активации": _pick(f, "First Activation Date", "Activation Status"),
         "замена_по_гарантии": _pick(f, "Replaced Device"),
         "подменный": _pick(f, "Loaner Device"),

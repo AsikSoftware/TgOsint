@@ -33,6 +33,10 @@ def analyze(disk, nvme=None):
     m = re.search(r"AP(\d{4})", model)
     nv_model_gb = int(m.group(1)) if m else None
     fw = txt(deep(nv, "Firmware Revision")) if nv else ""
+    cc = (nv.get("Controller Characteristics") or {}) if isinstance(nv, dict) else {}
+    vendor = txt(cc.get("vendor-name")).strip() or None
+    cell = {1: "SLC", 2: "MLC", 3: "TLC", 4: "QLC"}.get(num(cc.get("cell-type") or cc.get("default-bits-per-cell")))
+    marketing = txt(cc.get("nand-marketing-name")).strip() or None
 
     mk = marketed_gb(total)
     sources = [x for x in (mk, marketed_gb(nv_cap) if nv_cap else None, nv_model_gb) if x]
@@ -49,5 +53,8 @@ def analyze(disk, nvme=None):
         "nvme_модель": model,
         "nvme_модель_гб": nv_model_gb,
         "nvme_прошивка": fw,
+        "nand_производитель": vendor,
+        "nand_тип": cell,
+        "nand_маркировка": marketing,
         "объём_сошёлся": agree,
     }

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Паспорт аппарата из корневого домена lockdown."""
 import json, os, re
-from ..devicelink.nodes import txt
+from ..devicelink.nodes import boolish, txt
 
 MODELS = json.load(open(os.path.join(os.path.dirname(__file__), "models.json"), encoding="utf-8"))
 
@@ -26,10 +26,22 @@ def region_from_model_number(mn):
     return REGIONS.get(m.group(1))
 
 
+def sim_status(r):
+    st = txt(r.get("SIMStatus"))
+    tray = txt(r.get("SIMTrayStatus"))
+    if "NotInserted" in st or "NoSIM" in tray:
+        return "SIM не вставлена"
+    if "Ready" in st:
+        return "SIM есть"
+    return st or None
+
+
 def build(root):
+    from .serials import device_production
     r = root or {}
     pt = txt(r.get("ProductType"))
     mn = txt(r.get("ModelNumber")) + txt(r.get("RegionInfo"))
+    prod = device_production(r.get("SerialNumber"), pt)
     return {
         "модель": MODELS.get(pt, f"{pt} — модель не в справочнике"),
         "код_модели": pt,
@@ -49,6 +61,11 @@ def build(root):
         "модем": txt(r.get("BasebandVersion")),
         "wifi_mac": txt(r.get("WiFiAddress")),
         "bluetooth_mac": txt(r.get("BluetoothAddress")),
+        "cellular_mac": txt(r.get("EthernetAddress")),
+        "sim": sim_status(r),
+        "esim": boolish(r.get("SIM2IsEmbedded")) is True,
+        "выпуск": (f'{prod["год"]}, неделя {prod["неделя"]}' if prod else None),
+        "модель_apple": txt(r.get("HardwareModel")),
         "часовой_пояс": txt(r.get("TimeZone")),
         # DeviceColor равнялся 1 на всех собранных аппаратах — цвет по кабелю
         # не определяется, его даёт только внешняя база.

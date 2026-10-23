@@ -1,0 +1,31 @@
+{
+ "модель_строка": "iPhone 12 64GB Black [A2403] [iPhone13,2]",
+ "объём_гб": 64,
+ "цвет": "Black",
+ "чёрный_список": "",
+ "в_чёрном_списке": false,
+ "icloud": "",
+ "sim_lock": "",
+ "оператор": "10 - Unlock.",
+ "страна_политики": "",
+ "гарантия": "",
+ "дата_покупки": "2022-07-05",
+ "дата_активации": "",
+ "замена_по_гарантии": "",
+ "подменный": "",
+ "все_поля": {
+  "Model Description": "IPHONE 12,ROW,64GB,BLACK",
+  "Model": "iPhone 12 64GB Black [A2403] [iPhone13,2]",
+  "IMEI": "357140400643287",
+  "IMEI2": "357140400173988",
+  "MEID": "35714040064328",
+  "Serial Number": "FFXH33T20F0N",
+  "Repairs and Service Expired By": "3 Years, 3 Months and 19 Days",
+  "Repairs and Service Expiration Date": "2023-07-04",
+  "Estimated Purchase Date": "2022-07-05",
+  "Purchase Country": "N/A",
+  "Locked Carrier": "10 - Unlock."
+ },
+ "служба": 61,
+ "получено": "2026-10-23 14:29:33"
+}

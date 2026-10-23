@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: pintel-core
-Version: 0.1.0
-Summary: Pintel: чтение и оценка iPhone по кабелю — ядро киоска и сервера
-Requires-Python: >=3.11
-Requires-Dist: pymobiledevice3>=4.14
-Requires-Dist: google-auth>=2.30
-Requires-Dist: requests>=2.31

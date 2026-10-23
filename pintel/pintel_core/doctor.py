@@ -70,7 +70,7 @@ def fmt_report(rep):
          f"{p['номер_модели'] or '—'} ({p['регион'] or 'регион ?'})",
          f"  серийный {p['серийник'] or '—'}  IMEI {p['imei'] or '—'}  плата {p['серийник_платы'] or '—'}",
          f"  цвет {p.get('цвет') or 'по кабелю не читается'}  ·  выпуск {p.get('выпуск') or 'в серийнике не закодирован'}"
-         f"  ·  {p.get('sim') or 'SIM ?'}{' + eSIM' if p.get('esim') else ''}",
+         f"  ·  {p.get('sim') or 'SIM ?'}{' + eSIM-профиль' if p.get('esim') else ''}",
          f"  Wi-Fi {p.get('wifi_mac') or '—'}  BT {p.get('bluetooth_mac') or '—'}  сотовый {p.get('cellular_mac') or '—'}",
          "═" * 64,
          f"  ИТОГ: {rep['итог']['вердикт']} — {rep['итог']['почему']}", ""]

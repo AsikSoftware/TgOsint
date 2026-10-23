@@ -30,7 +30,7 @@ def test_part_dates_match_3utools():
 def test_report_matches_3utools():
     r = _rep()
     p, b, s, l = r["паспорт"], r["батарея"], r["память"], r["правовой"]
-    assert p["модель"] == "iPhone 12" and p["номер_модели"] == "MGJ53RM/A" and p["регион"] == "Россия/СНГ"
+    assert p["модель"] == "iPhone 12" and p["номер_модели"] == "MGJ53RM/A" and p["регион"] == "Россия/СНГ (RM)"
     assert p["серийник"] == "FFXH33T20F0N" and p["серийник_платы"] == "FG120270379PRVVAJ"
     assert p["bluetooth_mac"] == "34:fe:77:8b:e9:36" and p["cellular_mac"] == "34:fe:77:9b:f9:1c"
     assert p["wifi_mac"] == "34:fe:77:8d:0e:8e" and p["sim"] == "SIM не вставлена" and p["esim"]

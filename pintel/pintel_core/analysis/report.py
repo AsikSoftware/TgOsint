@@ -45,6 +45,10 @@ def build(snap):
         todo.append("«Найти iPhone» включён — клиент должен выйти из Apple ID")
     if leg["пароль"]:
         todo.append("на телефоне стоит пароль — попросить снять")
+    if pas.get("sim_в_лотке"):
+        todo.append("в лотке SIM-карта — вынуть и вернуть клиенту")
+    if pas.get("esim"):
+        todo.append("на телефоне eSIM-профиль — удалить при стирании (Настройки → Сотовая связь)")
     if sk:
         if sk.get("в_чёрном_списке") is True:
             stop.append(f"IMEI в чёрном списке (Sickw): {sk.get('чёрный_список')}")

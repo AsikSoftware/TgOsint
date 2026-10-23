@@ -3,6 +3,10 @@
 
 [sickw]
 key = "ВАШ-КЛЮЧ-SICKW"
+# Какие услуги дёргать по IMEI. Номер — в кабинете Sickw (Services → в адресе ...&service=N).
+# 61 = iPHONE CARRIER & FMI & BLACKLIST. Можно несколько: results складываются,
+# например services = [61, 54] (54 = WW BLACKLIST STATUS). Каждая услуга — отдельный кредит.
+services = [61]
 
 [price]
 sheet_url = "https://docs.google.com/spreadsheets/d/1TJWXvVC9eBFhKW38mfRBUvOftSUrWL_LmzsR-VlF-ZA/edit?gid=1917713663"

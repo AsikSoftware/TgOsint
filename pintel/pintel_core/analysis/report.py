@@ -36,6 +36,17 @@ def build(snap):
         todo.append("«Найти iPhone» включён — клиент должен выйти из Apple ID")
     if leg["пароль"]:
         todo.append("на телефоне стоит пароль — попросить снять")
+    if sk:
+        if sk.get("в_чёрном_списке") is True:
+            stop.append(f"IMEI в чёрном списке (Sickw): {sk.get('чёрный_список')}")
+        fmi_sk = sk.get("fmi_включён")
+        if fmi_sk is True and leg["найти_iphone"] == "выключен":
+            warn.append("Sickw: «Найти iPhone» включён, телефон говорит выключен — "
+                        "переподключить и перечитать (или Sickw отдал старое из кэша)")
+        elif fmi_sk is True and leg["найти_iphone"] != "включён":
+            todo.append("«Найти iPhone» включён (по Sickw) — клиент должен выйти из Apple ID")
+        elif fmi_sk is False and leg["найти_iphone"] == "включён":
+            warn.append("Sickw: «Найти iPhone» выключен, телефон говорит включён — верим телефону")
     if sto["объём_сошёлся"] is False:
         stop.append(f"объём памяти не сходится: диск {sto['объём_гб']} ГБ, контроллер "
                     f"{sto['nvme_объём_гб']} / {sto['nvme_модель_гб']} ГБ — возможна перепайка")

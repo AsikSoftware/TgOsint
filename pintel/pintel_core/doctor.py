@@ -107,11 +107,15 @@ def fmt_report(rep):
     sk = rep.get("sickw")
     if sk:
         na = "услуга не отдаёт"
-        L.append(f"  Sickw: {sk.get('описание') or sk['модель_строка']}; цвет {sk.get('цвет') or '?'}; "
+        srv = ",".join(str(x) for x in (sk.get("службы") or [sk.get("служба")]) if x)
+        L.append(f"  Sickw (службы {srv or '?'}{', из кэша' if sk.get('из_кэша') else ''}): "
+                 f"{sk.get('описание') or sk.get('модель_строка') or '?'}; цвет {sk.get('цвет') or '?'}; "
                  f"оператор {sk.get('оператор') or na}; sim-lock {sk.get('sim_lock') or na}")
         L.append(f"         гарантия: {sk.get('гарантия') or na}; покупка {sk.get('дата_покупки') or '?'} "
                  f"({sk.get('страна_покупки') or '?'}); чёрный список: {sk.get('чёрный_список') or na}; "
-                 f"iCloud: {sk.get('icloud') or na}")
+                 f"«Найти iPhone»: {sk.get('icloud') or na}")
+        for s, e in (sk.get("ошибки_служб") or {}).items():
+            L.append(f"         служба {s} не ответила: {e}")
     pr = rep.get("цена")
     if pr:
         L.append(f"  ЦЕНА: {pr['цена'] if pr['цена'] else '—'} {pr['валюта']}  {pr['основание']}  "
@@ -191,8 +195,10 @@ async def _snapshot(args, cfg):
         if sickw.luhn_ok(imei):
             say("  Sickw…")
             try:
-                snap["sickw"] = sickw.lookup(imei, cfg["sickw"]["key"],
-                                             cache_dir=os.path.join(app_dir(), "out", "sickw_cache"))
+                snap["sickw"] = sickw.lookup_many(imei, cfg["sickw"]["key"], sickw_services(cfg, args),
+                                                  cache_dir=os.path.join(app_dir(), "out", "sickw_cache"))
+                for s, e in (snap["sickw"].get("ошибки_служб") or {}).items():
+                    say(f"  Sickw: служба {s} не ответила: {e}")
                 open(os.path.join(d, "snapshot.json"), "w", encoding="utf-8").write(snapshot.dumps(snap))
                 rep = report_mod.build(snap)
             except Exception as e:
@@ -244,15 +250,38 @@ def cmd_apple(args, cfg):
     return asyncio.run(_apple(args, cfg))
 
 
+def sickw_services(cfg, args=None):
+    """Какие услуги Sickw дёргать: --service N (можно несколько) > config.toml > 61."""
+    s = getattr(args, "service", None)
+    if not s:
+        sc = cfg.get("sickw") or {}
+        s = sc.get("services") or ([sc["service"]] if sc.get("service") else None)
+    try:
+        return [int(x) for x in (s or sickw.DEFAULT_SERVICES)]
+    except (TypeError, ValueError):
+        say(f"  [sickw] services в config.toml непонятны ({s!r}) — беру {list(sickw.DEFAULT_SERVICES)}")
+        return list(sickw.DEFAULT_SERVICES)
+
+
 def cmd_sickw(args, cfg):
     key = (cfg.get("sickw") or {}).get("key")
     if not key:
         say("нет ключа Sickw в config.toml"); return 2
     if args.imei == "balance":
         say(json.dumps(sickw.balance(key), ensure_ascii=False)); return 0
-    r = sickw.lookup(args.imei, key, cache_dir=os.path.join(app_dir(), "out", "sickw_cache"),
-                     use_cache=not args.fresh)
-    say(json.dumps({k: v for k, v in r.items() if k != "все_поля"}, ensure_ascii=False, indent=1))
+    services = sickw_services(cfg, args)
+    say(f"  службы Sickw: {services}{' (без кэша)' if args.fresh else ''}")
+    r = sickw.lookup_many(args.imei, key, services,
+                          cache_dir=os.path.join(app_dir(), "out", "sickw_cache"), use_cache=not args.fresh)
+    for s, raw in (r.get("сырые_ответы") or {}).items():
+        say(f"\n  ── сырой ответ службы {s} ──")
+        for line in sickw.raw_lines(raw):
+            say("   ", line)
+    for s, e in (r.get("ошибки_служб") or {}).items():
+        say(f"\n  служба {s} не ответила: {e}")
+    say("\n  ── разбор ──")
+    say(json.dumps({k: v for k, v in r.items() if k not in ("все_поля", "сырые_ответы")},
+                   ensure_ascii=False, indent=1))
     return 0
 
 
@@ -284,7 +313,7 @@ def cmd_fixtures(args, cfg):
 class _A:
     """Аргументы для команд, когда их задаёт меню, а не командная строка."""
     def __init__(self, **kw):
-        self.out = None; self.apple = 0; self.sickw = False; self.fresh = False
+        self.out = None; self.apple = 0; self.sickw = False; self.fresh = False; self.service = None
         self.file = None; self.seconds = 120; self.imei = None
         self.__dict__.update(kw)
 
@@ -299,7 +328,8 @@ def first_run_config(cfg):
     gs = os.path.join(app_dir(), "gservice.json")
     say(f"  gservice.json: {'найден' if os.path.isfile(gs) else 'положите рядом с программой, когда будет'}")
     with open(path, "w", encoding="utf-8") as f:
-        f.write('[sickw]\nkey = "%s"\n\n[price]\nsheet_url = "%s"\ngservice_json = "gservice.json"\n'
+        f.write('[sickw]\nkey = "%s"\n# номера услуг Sickw через запятую; 61 = iPhone CARRIER & FMI & BLACKLIST\n'
+                'services = [61]\n\n[price]\nsheet_url = "%s"\ngservice_json = "gservice.json"\n'
                 % (key, gsheet.DEFAULT_URL))
     say(f"  записан: {path}\n")
     return load_config(path)
@@ -383,6 +413,7 @@ def main(argv=None):
     s = sub.add_parser("report"); s.add_argument("file")
     s = sub.add_parser("apple"); s.add_argument("--seconds", type=int, default=120)
     s = sub.add_parser("sickw"); s.add_argument("imei"); s.add_argument("--fresh", action="store_true")
+    s.add_argument("--service", type=int, action="append", help="номер услуги Sickw (можно несколько раз)")
     sub.add_parser("price")
     sub.add_parser("fixtures")
     if argv is None:

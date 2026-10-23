@@ -36,6 +36,40 @@ NVME_FALLBACK = ["AppleANS3NVMeController", "AppleANS2NVMeController",
 CAMERA_RE = re.compile(r"^Apple(H\d+CamIn|Camera)$")
 NVME_RE = re.compile(r"^Apple(ANS\d\w*(NVMe)?Controller|EmbeddedNVMeController)$")
 
+# Узлы «по возможности»: имена взяты из того, что спрашивает у телефона 3uTools
+# (idm_info.dll). Нет узла — не ошибка, просто None.
+OPTIONAL_NODES = {
+    "wifi":      (re.compile(r"^AppleBCMWLAN(Core|BusInterface)?$"), ["AppleBCMWLANCore"]),
+    "touchid":   (re.compile(r"^AppleMesa"), ["AppleMesa"]),
+    "port":      (re.compile(r"^Apple(TriStar|SandDollar|HPM|ACE)\w*$"), ["AppleTriStarBuiltIn", "AppleSandDollar"]),
+    "accessory": (re.compile(r"^IOAccessoryManager$"), ["IOAccessoryManager"]),
+}
+
+# Ключи MobileGestalt (до iOS 17.4 телефон отдаёт их через diagnostics;
+# новее — нет, 3uTools ради них поднимает RemoteXPC-туннель). Запрашиваем
+# «по возможности»: цвета корпуса, серийники модулей, Wi-Fi.
+MG_KEYS_COLOUR = ["DeviceColor", "DeviceEnclosureColor", "DeviceCoverGlassColor",
+                  "DeviceHousingColor", "DeviceBackingColor", "MarketingProductName"]
+MG_KEYS = MG_KEYS_COLOUR + [
+    "WifiVendor", "WifiChipset", "WifiFirmwareVersion", "WifiAntennaSKUVersion",
+    "BatterySerialNumber", "MLBSerialNumber", "WirelessBoardSnum", "BasebandSerialNumber",
+    "ArcModuleSerialNumber", "LunaFlexSerialNumber", "LynxSerialNumber", "MesaSerialNumber",
+    "SavageSerialNumber", "RosalineSerialNumber", "JasperSNUM", "YonkersSerialNumber",
+    "PanelSerialNumber", "RawPanelSerialNumber", "CoverglassSerialNumber",
+    "AmbientLightSensorSerialNumber", "BackCameraModuleSerialNumString",
+    "FrontCameraModuleSerialNumString", "BackSuperWideCameraModuleSerialNumString",
+    "BackTeleCameraModuleSerialNumString", "FrontIRCameraModuleSerialNumString",
+    "FrontIRStructuredLightProjectorSerialNumString", "NFCUniqueChipID", "DieId",
+]
+
+# Код DeviceEnclosureColor → цвет корпуса (обобщённо; точное маркетинговое имя
+# зависит от модели и приходит из Sickw). Сводка по таблице моделей 3uTools.
+ENCLOSURE_COLOURS = {
+    1: "чёрный / графитовый", 2: "белый / серебристый", 3: "золотой", 4: "розовый / розовое золото",
+    5: "натуральный титан / jet black", 6: "красный", 7: "жёлтый", 8: "оранжевый / коралловый",
+    9: "синий", 17: "фиолетовый", 18: "зелёный",
+}
+
 # Lockdown-домены, которые снимаем целиком (значения — в слепок)
 DOMAINS = [
     "com.apple.disk_usage",          # TotalDiskCapacity, TotalDataAvailable, NANDInfo
@@ -120,20 +154,33 @@ def boolish(v):
     return None
 
 
+_NAME_KEYS = ("IORegistryEntryName", "IOObjectClass", "IOClass", "name", "class")
+_STRUCT_KEYS = {"children", "IORegistryEntryChildren", "properties"}
+
+
 def collect_entry_names(tree):
-    """Все имена узлов из карты плана IOService (вложенный словарь)."""
+    """Все имена узлов из дампа плана IORegistry.
+
+    Диагностический сервис отдаёт план как дерево {"children": [узел, …]},
+    где у узла имя лежит в поле (IORegistryEntryName / name / IOClass), а не
+    в ключе словаря. Собираем и такие поля, и ключи-словари (старый формат) —
+    лишние имена безвредны, пропущенные — ломают поиск камеры и NVMe."""
     names = set()
 
     def walk(o):
         if isinstance(o, dict):
             for k, v in o.items():
+                if k in _NAME_KEYS and isinstance(v, (str, bytes)):
+                    names.add(txt(v))
                 if isinstance(v, (dict, list)):
-                    names.add(str(k))
+                    if k not in _STRUCT_KEYS:
+                        names.add(str(k))
                     walk(v)
         elif isinstance(o, list):
             for v in o:
                 walk(v)
     walk(tree)
+    names.discard("")
     return names
 
 

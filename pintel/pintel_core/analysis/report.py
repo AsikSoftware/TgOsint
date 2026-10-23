@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Слепок → отчёт. Главный принцип: отсутствие данных НЕ превращается в вердикт."""
 from . import battery, legal, pairing, passport, serials, storage
-from ..devicelink import nand
+from ..devicelink import jailbreak, nand
+from ..devicelink.nodes import ENCLOSURE_COLOURS, num
 
 
 def build(snap):
@@ -20,8 +21,15 @@ def build(snap):
         nd = snap.get("nand_summary") or {}
     parts = serials.collect(snap, pas["код_модели"])
     sk = snap.get("sickw")
+    mg = snap.get("mobilegestalt") or {}
+    code = num(mg.get("DeviceEnclosureColor")) if "недоступен" not in mg else None
+    pas["код_цвета_корпуса"] = int(code) if code is not None else None
+    pas["цвет_по_коду"] = ENCLOSURE_COLOURS.get(pas["код_цвета_корпуса"]) if code is not None else None
     if sk and sk.get("цвет") and not pas["цвет"]:
         pas["цвет"] = sk["цвет"]
+    if not pas["цвет"] and pas["цвет_по_коду"]:
+        pas["цвет"] = pas["цвет_по_коду"]
+    jb = snap.get("jailbreak")
 
     stop, todo, warn, unknown = [], [], [], []
     if bat["подделка"]:
@@ -62,6 +70,8 @@ def build(snap):
     if bat["циклы"] and bat["циклы"] > 800:
         warn.append(f"{bat['циклы']} циклов — ресурс выработан")
     warn.extend(bat["сомнения"])
+    if jb and jb.get("проверено") and jb.get("признаки"):
+        warn.append("джейлбрейк: " + jailbreak.verdict(jb) + " — сбросить до заводских перед выкупом")
 
     if stop:
         verdict = ("ПРОБЛЕМНЫЙ", "; ".join(stop[:3]))
@@ -81,6 +91,8 @@ def build(snap):
         "nand": nd,
         "детали": parts,
         "sickw": sk,
+        "джейлбрейк": jailbreak.verdict(jb),
+        "mobilegestalt": ("недоступен" if "недоступен" in mg else ("есть" if mg else "не запрашивался")),
         "apple_история": snap.get("repair_history") or None,
         "стоп": stop, "сделать": todo, "внимание": warn, "не_прочиталось": unknown,
         "итог": {"вердикт": verdict[0], "почему": verdict[1]},

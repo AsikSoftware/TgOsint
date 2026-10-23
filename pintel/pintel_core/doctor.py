@@ -116,6 +116,9 @@ def fmt_report(rep):
                  f"«Найти iPhone»: {sk.get('icloud') or na}")
         for s, e in (sk.get("ошибки_служб") or {}).items():
             L.append(f"         служба {s} не ответила: {e}")
+    L.append(f"  Джейлбрейк: {rep.get('джейлбрейк')}; MobileGestalt: {rep.get('mobilegestalt')}"
+             + (f"; цвет корпуса по коду {rep['паспорт'].get('код_цвета_корпуса')}: {rep['паспорт'].get('цвет_по_коду')}"
+                if rep["паспорт"].get("код_цвета_корпуса") is not None else ""))
     pr = rep.get("цена")
     if pr:
         L.append(f"  ЦЕНА: {pr['цена'] if pr['цена'] else '—'} {pr['валюта']}  {pr['основание']}  "

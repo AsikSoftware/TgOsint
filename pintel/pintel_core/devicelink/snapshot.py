@@ -15,11 +15,11 @@
 import asyncio, base64, json, time
 from datetime import datetime
 
-from . import nand
-from .nodes import (CAMERA_FALLBACK, CAMERA_RE, DOMAINS, FIXED_NODES, NVME_FALLBACK,
-                    NVME_RE, collect_entry_names, deep, pick_names, txt)
+from . import jailbreak, nand
+from .nodes import (CAMERA_FALLBACK, CAMERA_RE, DOMAINS, FIXED_NODES, MG_KEYS, MG_KEYS_COLOUR,
+                    NVME_FALLBACK, NVME_RE, OPTIONAL_NODES, collect_entry_names, deep, pick_names, txt)
 
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3      # 3: планы IOService/IODeviceTree целиком, доп. узлы, MobileGestalt, джейлбрейк
 
 
 class _Enc(json.JSONEncoder):
@@ -115,6 +115,13 @@ async def collect(ld, diag, log=lambda *a: None):
     quality["время_с"]["карта"] = round(time.monotonic() - t, 2)
     quality["узлов_в_карте"] = len(names)
 
+    # Дерево устройств целиком: все *-serial-num, device-colors, wifi-module-sn
+    # любой модели попадают в слепок, даже если мы о них ещё не знаем.
+    log("дерево устройств…")
+    t = time.monotonic()
+    dtree = await _retry(lambda: diag.ioregistry(plane="IODeviceTree"), "ioreg:IODeviceTree", quality, tries=2)
+    quality["время_с"]["дерево"] = round(time.monotonic() - t, 2)
+
     cam_names = pick_names(names, CAMERA_RE, CAMERA_FALLBACK)
     nvme_names = pick_names(names, NVME_RE, NVME_FALLBACK)
 
@@ -131,7 +138,39 @@ async def collect(ld, diag, log=lambda *a: None):
                 nodes[key] = v
                 quality[f"{key}_узел"] = n
                 break
+    # узлы «по возможности» — одна попытка, отсутствие не считается ошибкой чтения
+    for key, (rx, fallback) in OPTIONAL_NODES.items():
+        nodes[key] = None
+        for n in pick_names(names, rx, fallback):
+            try:
+                v = await diag.ioregistry(name=n)
+            except Exception:
+                v = None
+            if v:
+                nodes[key] = v
+                quality[f"{key}_узел"] = n
+                break
     quality["время_с"]["узлы"] = round(time.monotonic() - t, 2)
+
+    # MobileGestalt: до iOS 17.4 отдаёт цвета корпуса и серийники модулей,
+    # новее — «deprecated». Падение одного ключа не должно губить всё: два захода.
+    log("MobileGestalt…")
+    t = time.monotonic()
+    mg = None
+    for keys in (MG_KEYS, MG_KEYS_COLOUR):
+        try:
+            mg = await diag.mobilegestalt(keys)
+            break
+        except Exception as e:                                    # noqa: BLE001
+            mg = {"недоступен": f"{type(e).__name__}: {str(e)[:160]}"}
+            if "Deprecat" in type(e).__name__ or "Deprecated" in str(e):
+                break
+    quality["время_с"]["mobilegestalt"] = round(time.monotonic() - t, 2)
+
+    log("джейлбрейк…")
+    t = time.monotonic()
+    jb = await jailbreak.probe(ld)
+    quality["время_с"]["джейлбрейк"] = round(time.monotonic() - t, 2)
 
     # NANDInfo: разбор и сверка прошивки с NVMe-контроллером
     disk = domains.get("com.apple.disk_usage") or {}
@@ -146,6 +185,9 @@ async def collect(ld, diag, log=lambda *a: None):
         "domains": domains,
         "node_names": sorted(names),
         "nodes": nodes,
+        "ioreg_planes": {"IOService": tree, "IODeviceTree": dtree},
+        "mobilegestalt": mg,
+        "jailbreak": jb,
         "nand_summary": nand_summary,
         "quality": quality,
     }

@@ -579,12 +579,16 @@ class ResultScreen(Screen):
             shown = 0
             for name, v in list(groups.items())[:5]:
                 verb = _changed_verb(name)
-                if v.get("меняли"):
+                if v.get("неизвестная"):
+                    self.l_apple.addWidget(line(f"{name} — деталь неизвестного происхождения", C["bad"]))
+                elif v.get("меняли"):
                     self.l_apple.addWidget(line(f"{name} — {verb}, " + ("б/у деталь" if v.get("бу") else "деталь Apple, новая"), C["warn"] if not v.get("бу") else C["bad"]))
                 else:
                     self.l_apple.addWidget(line(f"{name} — не {verb}", C["okdot"]))
                 shown += 1
-            self.l_apple.addWidget(label("Из раздела «Запчасти и история обслуживания» вашего телефона", "muted"))
+            self.l_apple.addWidget(label("По сверке Apple с заводской печатью вашего телефона" if any(
+                v.get("источник", "").startswith("сверка") for v in hist.values())
+                else "Из раздела «Запчасти и история обслуживания» вашего телефона", "muted"))
         else:
             self.l_apple.addWidget(line("Раздел пока не открыт", C["warn"]))
             self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве → "

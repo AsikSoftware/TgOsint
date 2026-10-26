@@ -11,6 +11,16 @@ Preferences(CoreRepairCore), строка repairHistoryForUI:{…CRRepairHistory
 Слушатель (Listener) живёт всё время, пока телефон на кабеле: стартует сразу
 после «Доверять», переподключается при обрыве потока (на живом iPhone 12 поток
 обрывался через ~20 с) и собирает записи, когда бы клиент ни открыл раздел.
+
+ДВА ФОРМАТА (сверено по живым аппаратам):
+  iOS 26   — Preferences(CoreRepairCore): repairHistoryForUI:{ … CRRepairHistoryItem … }
+             — список деталей с isRepaired/isUsed, даже если ничего не меняли.
+  iOS 18.7 — таких строк НЕТ. corerepaird сверяет живые детали с заводской
+             печатью (FDR seal) и пишет:
+               fetched RCHL successfully: (null) length = 0   — список ремонтов Apple пуст
+               No delta components found / delta components: { }  — отличий от печати нет
+             Пустая дельта + пустой RCHL = Apple не нашёл ни замен, ни ремонтов.
+             Непустая дельта = детали, которых нет в печати («неизвестная деталь»).
 """
 import asyncio
 import re
@@ -28,6 +38,39 @@ ITEM = re.compile(r"componentName:(\w+): componentType:(\d+): isRepaired:(\d): "
                   r"isUsed:(\d): repairDate:(.*?):\"?")
 MARKER = "CRRepairHistoryItem"
 RELATED = ("repair", "CoreRepair", "mobilerepaird")
+# признаки, что раздел на телефоне открыт (iOS 18): UI Настроек и демон проснулись
+OPENED = ("updateSpecifiersWithCompletionHandler", "corerepair.preflightControl", "Getting local sealing manifest",
+          "fetched RCHL", "delta components", "No delta components found", "repairHistoryForUI")
+# детали, которые показывает раздел на iOS 18 у всех моделей с Face ID
+BASE_COMPONENTS = ("Battery", "Display", "Camera", "FaceID")
+DELTA_RE = re.compile(r"delta components:\s*\{(.*?)\}", re.S)
+RCHL_RE = re.compile(r"fetched RCHL successfully:.*?length = (\d+)")
+SEAL_RE = re.compile(r"_copyIdentifierListForSealingMapEntry: Using value (.+?) for key (\w+) from query cache")
+
+
+def parse_delta(line):
+    """'delta components: {\n    Display = …;\n}' → ['Display']; пустые скобки → []."""
+    m = DELTA_RE.search(line)
+    if not m:
+        return None
+    body = m.group(1)
+    return re.findall(r"^\s*\"?(\w+)\"?\s*=", body, re.M)
+
+
+def synthesize(meta):
+    """Итог iOS 18 из сверки: пустая дельта и пустой RCHL → все базовые детали «не меняли»;
+    непустая дельта → эти детали «меняли, деталь неизвестного происхождения»."""
+    delta = meta.get("дельта")
+    if delta is None:
+        return {}
+    items = {}
+    for comp in BASE_COMPONENTS:
+        items[comp] = {"деталь": RU.get(comp, comp), "код": 0, "меняли": False, "бу": False, "дата": "",
+                       "источник": "сверка с заводской печатью"}
+    for comp in delta:
+        items[comp] = {"деталь": RU.get(comp, comp), "код": 0, "меняли": True, "бу": False, "дата": "",
+                       "неизвестная": True, "источник": "сверка с заводской печатью"}
+    return items
 
 
 def parse(text):
@@ -56,6 +99,8 @@ class Listener:
         self.ld, self.log = ld, (log or (lambda *_: None))
         self.max_reconnects, self.reconnect_delay = max_reconnects, reconnect_delay
         self.items, self.buf, self.notes, self.related = {}, [], [], []
+        # метаданные формата iOS 18: раздел открыт?, дельта, размер RCHL, значения печати
+        self.meta = {"раздел_открыт": False, "дельта": None, "rchl_байт": None, "печать": {}, "формат": None}
         self.found_at = None
         self.connects = 0
         self.reconnects = 0
@@ -103,18 +148,48 @@ class Listener:
         self.lines += 1
         if MARKER in line:
             self.buf.append(line if line.endswith("\n") else line + "\n")
-            self.items = parse("".join(self.buf))
+            parsed = parse("".join(self.buf))
+            if parsed:
+                self.items = parsed
+                self.meta["формат"] = "записи обслуживания (iOS 26)"
+                self.meta["раздел_открыт"] = True
+                if not self.found_at:
+                    self.found_at = time.monotonic()
+                    self.log(f"история Apple: {len(self.items)} записей")
+            return
+        low = line.lower()
+        if not any(k.lower() in low for k in RELATED):
+            return
+        if len(self.related) < 200:
+            self.related.append(line[:300])
+        if any(k in line for k in OPENED) and not self.meta["раздел_открыт"]:
+            self.meta["раздел_открыт"] = True
+            self.log("раздел «Запчасти и история обслуживания» открыт на телефоне")
+        m = RCHL_RE.search(line)
+        if m:
+            self.meta["rchl_байт"] = int(m.group(1))
+        m = SEAL_RE.search(line)
+        if m and len(self.meta["печать"]) < 60:
+            self.meta["печать"][m.group(2)] = m.group(1)[:120]
+        if "No delta components found" in line and self.meta["дельта"] is None:
+            self.meta["дельта"] = []
+        delta = parse_delta(line)
+        if delta is not None:
+            self.meta["дельта"] = delta
+            self.buf.append(line if line.endswith("\n") else line + "\n")
+        if self.meta["дельта"] is not None and not self.items:
+            self.items = synthesize(self.meta)
+            self.meta["формат"] = "сверка с заводской печатью (iOS 18)"
             if self.items and not self.found_at:
                 self.found_at = time.monotonic()
-                self.log(f"история Apple: {len(self.items)} записей")
-        elif any(k.lower() in line.lower() for k in RELATED) and len(self.related) < 200:
-            self.related.append(line[:300])
+                self.log(f"история Apple (сверка с печатью): замен {len(self.meta['дельта'])}, "
+                         f"RCHL {self.meta['rchl_байт']}")
 
     @property
     def raw(self):
         out = "".join(self.buf) + "".join(self.notes)
-        if not self.buf and self.related:
-            out += "".join(f"# похожее: {l}\n" for l in self.related[:60])
+        if self.meta["раздел_открыт"] or not self.buf:
+            out += "".join(f"# похожее: {l}\n" for l in self.related[:80])
         return out
 
     async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0):

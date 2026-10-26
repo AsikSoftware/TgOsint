@@ -115,6 +115,7 @@ class Pipeline(QThread):
             on_tick=lambda s: self.step.emit("apple", "run", f"ждём один шаг на телефоне · {max(0, secs - s)} с"))
         self.apple_prompt.emit(False)
         snap["repair_history"], snap["repair_history_raw"] = items, raw
+        snap["repair_history_meta"] = getattr(listener, "meta", None)
         rep = report_mod.build(snap)
         self._step("apple", "done" if items else "warn",
                    "получена" if items else ("пропущена" if self.skip_apple.is_set() else "раздел пока не открыт"))
@@ -162,6 +163,7 @@ class Pipeline(QThread):
         if not items:
             return
         snap["repair_history"], snap["repair_history_raw"] = items, raw
+        snap["repair_history_meta"] = getattr(listener, "meta", None)
         rep = report_mod.build(snap)
         rep["цена"] = self._price(rep)
         self._save(out, snap, rep)
@@ -169,7 +171,8 @@ class Pipeline(QThread):
         if server and server.get("id") and self.client.enabled:
             try:
                 self.client.update_evaluation(server["id"], json.loads(snapshot.dumps(rep)),
-                                              {"repair_history": items, "repair_history_raw": raw})
+                                              {"repair_history": items, "repair_history_raw": raw,
+                                               "repair_history_meta": getattr(listener, "meta", None)})
             except ServerError as e:
                 log_line(f"обновление оценки не ушло: {e}")
         self._step("apple", "done", "получена")

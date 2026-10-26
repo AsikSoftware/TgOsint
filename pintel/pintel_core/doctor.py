@@ -100,7 +100,7 @@ def fmt_report(rep):
             L.append(f"    {d['деталь']:<22} {d['серийник']:<26} {extra}")
     ah = rep.get("apple_история")
     if ah:
-        L.append("  История обслуживания Apple:")
+        L.append(f"  История обслуживания Apple ({rep.get('apple_история_источник') or 'записи'}):")
         for v in sorted(ah.values(), key=lambda x: x.get("код", 0)):
             L.append(f"    {'✗' if v['меняли'] else '✓'} {v['деталь']}: " + (
                 ("МЕНЯЛИ — " + ("б/у" if v["бу"] else "новая") + (" · " + v["дата"] if v["дата"] else ""))
@@ -193,10 +193,17 @@ async def _snapshot(args, cfg):
     if args.apple:
         say(f"\n  На телефоне: Настройки → Основные → Об этом устройстве → ЗАЙДИТЕ в "
             f"«Запчасти и история обслуживания». Слушаю {args.apple} с…")
-        items, raw, waited = await repair_history.capture(ld, seconds=args.apple)
-        say(f"  история Apple: {'получена' if items else 'не появилась'} за {waited} с")
+        lst = repair_history.Listener(ld, log=lambda m: say("  " + m))
+        await lst.start()
+        try:
+            items, raw, waited = await lst.wait(args.apple)
+        finally:
+            await lst.stop()
+        say(f"  история Apple: {'получена' if items else 'не появилась'} за {waited} с "
+            f"({lst.meta.get('формат') or 'раздел не открыт'})")
         snap["repair_history"] = items
         snap["repair_history_raw"] = raw
+        snap["repair_history_meta"] = lst.meta
         open(os.path.join(d, "snapshot.json"), "w", encoding="utf-8").write(snapshot.dumps(snap))
         rep = report_mod.build(snap)
 

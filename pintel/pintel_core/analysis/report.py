@@ -94,10 +94,14 @@ def build(snap):
     for h in hist.values():
         if h.get("меняли"):
             when = f", {h['дата']}" if h.get("дата") else ""
-            if h.get("бу"):
+            if h.get("неизвестная"):
+                stop.append(f"по сверке Apple: {h['деталь']} — деталь неизвестного происхождения (не из печати)")
+            elif h.get("бу"):
                 stop.append(f"по истории Apple: {h['деталь']} меняли, установлена б/у деталь{when}")
             else:
                 warn.append(f"по истории Apple: {h['деталь']} меняли (новая деталь{when})")
+    hist_meta = snap.get("repair_history_meta") or {}
+    hist_source = hist_meta.get("формат") or ("записи обслуживания" if hist else None)
     if sk:
         if sk.get("подменный") is True:
             stop.append("Sickw: подменный аппарат Apple (Loaner) — собственность Apple")
@@ -131,6 +135,8 @@ def build(snap):
         "джейлбрейк": jailbreak.verdict(jb),
         "mobilegestalt": ("недоступен" if "недоступен" in mg else ("есть" if mg else "не запрашивался")),
         "apple_история": snap.get("repair_history") or None,
+        "apple_история_источник": hist_source,
+        "apple_раздел_открыт": bool(hist_meta.get("раздел_открыт")) or bool(hist),
         "стоп": stop, "сделать": todo, "внимание": warn, "не_прочиталось": unknown,
         "итог": {"вердикт": verdict[0], "почему": verdict[1]},
         "качество_чтения": snap.get("quality") or {},

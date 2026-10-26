@@ -84,10 +84,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "create-admin упал" }
           $p = Start-Process -FilePath $exe -ArgumentList 'run','--no-browser' -PassThru -WorkingDirectory 'dist\pintel-server'
           Start-Sleep -Seconds 8
-          try { $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/healthz; Write-Host $r.Content }
-          finally { Stop-Process -Id $p.Id -Force }
+          try {
+            $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/healthz; Write-Host $r.Content
+            $login = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/login
+            $css = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/static/app.css
+          } finally { Stop-Process -Id $p.Id -Force }
           if (-not $r -or $r.StatusCode -ne 200) { throw "касса не ответила на /healthz" }
-          $login = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/login -ErrorAction SilentlyContinue
+          if ($login.StatusCode -ne 200 -or $css.StatusCode -ne 200) { throw "страница входа или стили не отдаются" }
           Remove-Item dist\pintel-server\pintel.db -ErrorAction SilentlyContinue
           Compress-Archive -Path dist\pintel-server -DestinationPath pintel-server_Windows_x64.zip
 

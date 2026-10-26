@@ -86,6 +86,7 @@ def create_from_kiosk(db, kiosk, payload: dict) -> tuple[Evaluation, bool]:
         price_column=price.get("основание"), apple_summary=apple_summary(rep)[:120],
         locks_summary=locks_summary(rep)[:120], status=ST_NEW, report=rep,
         snapshot=payload.get("snapshot"), public_token=secrets.token_urlsafe(12),
+        upload_token=secrets.token_urlsafe(12)[:32],
     )
     db.add(ev)
     db.flush()

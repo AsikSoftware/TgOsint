@@ -95,6 +95,7 @@ def create_evaluation(body: EvaluationIn, kiosk: Kiosk = Depends(current_kiosk),
     ev, created = ev_service.create_from_kiosk(db, kiosk, body.model_dump())
     return {"id": ev.id, "номер": ev.number, "день": ev.day, "создана": created,
             "статус": ev.status, "ссылка_отчёта": f"{settings.public_url}/r/{ev.public_token}",
+            "ссылка_данных": ev_service.upload_url(ev),
             "уже_приносили": bool(ev.device and ev.device.evaluations_count > 1)}
 
 

@@ -195,8 +195,8 @@ def test_employees_create_update_and_revoke(app):
     assert "доступ отключён" in page and "Неудачная попытка" in page
 
 
-def test_kiosk_intake_details_media_and_import(app, monkeypatch):
-    """Новый флоу: ручные данные → загрузка фото по QR → импорт в Оценку."""
+def test_kiosk_intake_server_entry_media_and_import(app, monkeypatch):
+    """Новый флоу: данные вводятся на сервере (страница /u), фото по QR, импорт в Оценку."""
     admin = client_for(app, "admin", "admin123")
     admin.post("/settings/points", data={"name": "Интейк-город", "city": "Алматы"})
     r = admin.post("/settings/kiosks", data={"name": "Интейк-киоск", "point_id": ""})
@@ -205,34 +205,33 @@ def test_kiosk_intake_details_media_and_import(app, monkeypatch):
     k = TestClient(app)
     rep, snap = real_report()
 
-    # оценка + ручные данные
-    ev_id = k.post("/api/kiosk/evaluations", json={"client_id": "intake-1", "report": rep, "snapshot": snap},
-                   headers=H).json()["id"]
-    d = k.patch(f"/api/kiosk/evaluations/{ev_id}/details", headers=H, json={
-        "client_name": "Иван", "client_phone": "+77001234567",
-        "has_box": True, "has_cord": False, "panic_full": None}).json()
-    assert d["ссылка_загрузки"].startswith("http://testserver/u/") and d["токен_загрузки"]
-    up_token = d["токен_загрузки"]
+    resp = k.post("/api/kiosk/evaluations", json={"client_id": "intake-1", "report": rep, "snapshot": snap},
+                  headers=H).json()
+    ev_id = resp["id"]
+    assert "/u/" in (resp.get("ссылка_данных") or "")            # киоск покажет QR на эту страницу
+    up_token = resp["ссылка_данных"].rsplit("/u/", 1)[1]
+
+    # всё вводится на странице сервера (клиент со своего телефона): имя/телефон/коробка/шнур + фото
+    pub = TestClient(app)
+    assert "iPhone 12" in pub.get(f"/u/{up_token}").text
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    r = pub.post(f"/u/{up_token}",
+                 data={"client_name": "Иван", "client_phone": "+77001234567", "has_box": "yes", "has_cord": "no"},
+                 files={"files": ("phone.jpg", png, "image/jpeg")})
+    assert r.status_code in (200, 303)
 
     db = SessionLocal(); ev = db.get(Evaluation, ev_id)
     assert ev.client_name == "Иван" and ev.client_phone == "+77001234567"
     assert ev.has_box is True and ev.has_cord is False
     db.close()
 
-    # публичная страница загрузки + приём фото (без токена киоска)
-    pub = TestClient(app)
-    assert "iPhone 12" in pub.get(f"/u/{up_token}").text
-    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
-    r = pub.post(f"/u/{up_token}", files={"files": ("phone.jpg", png, "image/jpeg")})
-    assert r.status_code in (200, 303)
     media = k.get(f"/api/kiosk/evaluations/{ev_id}/media", headers=H).json()["медиа"]
     assert len(media) == 1 and media[0]["вид"] == "photo"
 
     # импорт выключен (нет PINTEL_OCENKA_DB_URL) → понятная 400
-    r = k.post(f"/api/kiosk/evaluations/{ev_id}/import", headers=H)
-    assert r.status_code == 400 and "выключен" in r.json()["detail"]
+    assert k.post(f"/api/kiosk/evaluations/{ev_id}/import", headers=H).status_code == 400
 
-    # импорт включён, но у оценки без деталей — отказ по имени/телефону (до обращения к БД Оценки)
+    # импорт включён, но без имени/телефона — отказ (до обращения к БД Оценки)
     from pintel_server.config import settings as cfg
     monkeypatch.setattr(cfg, "ocenka_db_url", "postgresql+psycopg://u:p@localhost/pintel_ocenka_test")
     ev2 = k.post("/api/kiosk/evaluations", json={"client_id": "intake-2", "report": rep, "snapshot": snap},

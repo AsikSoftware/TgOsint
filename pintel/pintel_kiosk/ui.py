@@ -481,26 +481,29 @@ class ResultScreen(Screen):
         self.root.addLayout(header(self.chip, left))
         body = QHBoxLayout()
         body.setSpacing(28)
-        # цена
-        self.price_card, pl = card("ЦЕНА ВЫКУПА СЕГОДНЯ")
-        self.price_card.setFixedWidth(640)
-        pl.setContentsMargins(48, 44, 48, 44)
-        self.price = label("—", "price")
-        self.price_note = label("", "pricenote", wrap=True)
-        pl.addWidget(self.price)
-        pl.addWidget(self.price_note)
+        # что дальше: номер + QR на страницу ввода данных (цену называет сотрудник, на киоске её нет)
+        self.next_card, pl = card("ВАШ НОМЕР")
+        self.next_card.setFixedWidth(640)
+        pl.setContentsMargins(48, 40, 48, 40)
+        self.ticket_num = label("—", "price")
+        pl.addWidget(self.ticket_num)
+        qrow = QHBoxLayout()
+        qrow.setSpacing(24)
+        self.qr = QLabel()
+        self.qr.setFixedSize(190, 190)
+        self.qr.setStyleSheet("background:white; border:1px solid %s; border-radius:16px;" % C["border"])
+        self.qr.setAlignment(Qt.AlignCenter)
+        qrow.addWidget(self.qr, 0)
+        qrow.addWidget(label("Отсканируйте телефоном: заполните имя и телефон, приложите фото. "
+                             "Цену назовёт сотрудник после осмотра.", "pricenote", wrap=True), 1)
+        pl.addLayout(qrow)
         pl.addStretch(1)
-        self.btn_sell = QPushButton("Продать")
-        self.btn_sell.setObjectName("primary")
-        self.btn_sell.setCursor(Qt.PointingHandCursor)
-        self.btn_sell.clicked.connect(self.sell.emit)
-        self.btn_look = QPushButton("Спасибо, просто смотрел")
-        self.btn_look.setObjectName("secondary")
-        self.btn_look.setCursor(Qt.PointingHandCursor)
-        self.btn_look.clicked.connect(self.just_looking.emit)
-        pl.addWidget(self.btn_sell)
-        pl.addWidget(self.btn_look)
-        body.addWidget(self.price_card)
+        self.btn_done = QPushButton("Готово")
+        self.btn_done.setObjectName("primary")
+        self.btn_done.setCursor(Qt.PointingHandCursor)
+        self.btn_done.clicked.connect(self.just_looking.emit)
+        pl.addWidget(self.btn_done)
+        body.addWidget(self.next_card)
         grid = QGridLayout()
         grid.setSpacing(24)
         self.c_bat, self.l_bat = card("БАТАРЕЯ")
@@ -520,33 +523,31 @@ class ResultScreen(Screen):
     def fill(self, rep, server=None):
         pas, bat, leg = rep.get("паспорт") or {}, rep.get("батарея") or {}, rep.get("правовой") or {}
         sk, sto, hist = rep.get("sickw") or {}, rep.get("память") or {}, rep.get("apple_история") or {}
-        price, itog = rep.get("цена") or {}, rep.get("итог") or {}
+        itog = rep.get("итог") or {}
         self.title.setText(pas.get("модель") or "iPhone")
         self.sub.setText(" · ".join(x for x in (f"{sto.get('объём_гб')} ГБ" if sto.get("объём_гб") else None,
                                                  pas.get("цвет"), f"iOS {pas.get('ios')}" if pas.get("ios") else None) if x))
-        problem = itog.get("вердикт") == "ПРОБЛЕМНЫЙ"
-        cur = price.get("валюта") or self.currency
-        if problem:
+        # цену на киоске НЕ показываем — её называет сотрудник. Чип отражает только состояние.
+        verdict = itog.get("вердикт")
+        if verdict == "ПРОБЛЕМНЫЙ":
             self.chip.setObjectName("chip_bad")
-            self.chip.setText("Не сможем выкупить")
-            self.price.setText("—")
-            self.price_note.setText("Причина: " + (itog.get("почему") or "см. сотрудника") + ". Подойдите к сотруднику, он объяснит подробнее.")
-            self.btn_sell.setVisible(False)
-        elif price.get("цена"):
-            self.chip.setObjectName("chip_ok" if itog.get("вердикт") in ("ИДЕАЛ", "ХОРОШИЙ") else "chip_warn")
-            self.chip.setText("Готовы выкупить" if itog.get("вердикт") in ("ИДЕАЛ", "ХОРОШИЙ") else "Нужен осмотр сотрудника")
-            self.price.setText(f"{int(price['цена']):,} {cur}".replace(",", " "))
-            self.price_note.setText(price.get("основание") or "")
-            self.btn_sell.setVisible(True)
-            self.btn_sell.setText(f"Продать за {int(price['цена']):,} {cur}".replace(",", " "))
+            self.chip.setText("Есть вопросы — к сотруднику")
+        elif verdict in ("ИДЕАЛ", "ХОРОШИЙ"):
+            self.chip.setObjectName("chip_ok")
+            self.chip.setText("Хорошее состояние")
         else:
             self.chip.setObjectName("chip_warn")
-            self.chip.setText("Цену назовёт сотрудник")
-            self.price.setText("—")
-            self.price_note.setText(price.get("основание") or "Для этой модели цена уточняется у сотрудника.")
-            self.btn_sell.setVisible(True)
-            self.btn_sell.setText("Узнать цену у сотрудника")
+            self.chip.setText("Нужен осмотр сотрудника")
         self.chip.setStyleSheet(self.chip.styleSheet())
+        srv = server or {}
+        self.ticket_num.setText(str(srv.get("номер") or "—"))
+        url = srv.get("ссылка_данных") or srv.get("ссылка_отчёта")
+        pm = qr_pixmap(url, 190) if url else None
+        if pm:
+            self.qr.setPixmap(pm.scaled(190, 190, Qt.KeepAspectRatio, Qt.FastTransformation))
+            self.qr.setVisible(True)
+        else:
+            self.qr.setVisible(False)
         # батарея
         clear_layout(self.l_bat)
         self.l_bat.addWidget(label("БАТАРЕЯ", "kicker"))

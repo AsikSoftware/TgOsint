@@ -191,14 +191,31 @@ def upload_page(request: Request, token: str, db: DbSession = Depends(get_db)):
                   max_mb=settings.media_max_mb)
 
 
+def _tri(v):
+    return True if v == "yes" else (False if v == "no" else None)
+
+
 @router.post("/u/{token}")
 async def upload_receive(request: Request, token: str, db: DbSession = Depends(get_db),
+                         client_name: Optional[str] = Form(None), client_phone: Optional[str] = Form(None),
+                         has_box: Optional[str] = Form(None), has_cord: Optional[str] = Form(None),
                          files: list[UploadFile] = File(default=[])):
     ev = db.scalar(select(Evaluation).where(Evaluation.upload_token == token))
     if not ev:
         raise HTTPException(404, "ссылка недействительна")
     if ev.ocenka_device_id:                                    # сделка уже ушла в Оценку — не принимаем
         return RedirectResponse(f"/u/{token}?m=imported", 303)
+
+    # имя/телефон/коробка/шнур — вводятся здесь, на сервере (не в киоске)
+    if client_name is not None and client_name.strip():
+        ev.client_name = client_name.strip()[:120]
+    if client_phone is not None and client_phone.strip():
+        ev.client_phone = client_phone.strip()[:20]
+    if _tri(has_box) is not None:
+        ev.has_box = _tri(has_box)
+    if _tri(has_cord) is not None:
+        ev.has_cord = _tri(has_cord)
+    db.commit()
 
     os.makedirs(settings.media_dir, exist_ok=True)
     limit = settings.media_max_mb * 1024 * 1024

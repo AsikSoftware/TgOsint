@@ -165,8 +165,7 @@ class KioskWindow(QMainWindow):
         for s in (self.s_main, self.s_scan, self.s_result, self.s_ticket):
             self.stack.addWidget(s)
         self.s_scan.skip_requested.connect(self.on_skip_apple)
-        self.s_result.sell.connect(self.on_sell)
-        self.s_result.just_looking.connect(self.on_just_looking)
+        self.s_result.just_looking.connect(self.go_home)   # «Готово» — вернуться к началу
         self.return_timer = QTimer(self)
         self.return_timer.setSingleShot(True)
         self.return_timer.timeout.connect(self.go_home)
@@ -313,24 +312,6 @@ class KioskWindow(QMainWindow):
         self.s_scan.set_step("connect", "fail", "не удалось")
         self.s_scan.set_trouble("Не получилось прочитать телефон: " + text + ". Подключите заново или подойдите к сотруднику.")
         QTimer.singleShot(8000, self.go_home)
-
-    def on_sell(self):
-        if not self.last:
-            return
-        server = self.last.get("server")
-        if server and server.get("id"):
-            self._run(lambda: self.client.decision(server["id"], "sell"))
-        self.s_ticket.fill(self.last["report"], server, int(self.cfg.get("return_seconds", 60)))
-        self.show_screen(self.s_ticket)
-        self.state = "ticket"
-        self.return_timer.start(int(self.cfg.get("return_seconds", 60)) * 1000)
-
-    def on_just_looking(self):
-        if self.last:
-            server = self.last.get("server")
-            if server and server.get("id"):
-                self._run(lambda: self.client.decision(server["id"], "viewed"))
-        self.go_home()
 
     def go_home(self):
         self.return_timer.stop()

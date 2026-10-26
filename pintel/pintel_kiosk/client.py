@@ -8,7 +8,7 @@ import time
 import httpx
 
 from . import __version__
-from .config import data_dir
+from .config import app_dir, data_dir
 
 
 class ServerError(RuntimeError):
@@ -24,6 +24,23 @@ class Client:
         self.last_error = ""
         self.qdir = os.path.join(data_dir(), "queue")
         self.cache = os.path.join(data_dir(), "cache", "price_grid.json")
+        # автономный режим: ключи на самом киоске
+        self.sickw_key = str(cfg.get("sickw_key") or "")
+        self.sickw_services = cfg.get("sickw_services") or [61]
+        gs = str(cfg.get("gservice_json") or "gservice.json")
+        gs = gs if os.path.isabs(gs) else os.path.join(app_dir(), gs)
+        self.gservice = gs if os.path.isfile(gs) else None
+        self.sheet_url = cfg.get("price_sheet_url") or None
+        self._local_price_at = 0.0
+
+    @property
+    def local_sickw(self):
+        return bool(self.sickw_key)
+
+    @property
+    def standalone_ready(self):
+        """Без сервера киоск всё равно полноценный, если на нём есть ключи."""
+        return bool(self.gservice or os.path.isfile(self.cache)) and self.local_sickw
 
     # ---------- низкий уровень ----------
     def _req(self, method, path, timeout=15, **kw):
@@ -54,7 +71,8 @@ class Client:
         return self._req("GET", "/api/kiosk/config")
 
     def price(self, force=False):
-        """Сетка прайса с сервера; при обрыве — последняя сохранённая."""
+        """Сетка прайса: с сервера; без сервера — прямо из Google Таблицы (gservice.json
+        рядом с exe), не чаще раза в 15 минут; при обрыве — последняя сохранённая."""
         if self.enabled:
             try:
                 p = self._req("GET", "/api/kiosk/price", timeout=30)
@@ -65,12 +83,51 @@ class Client:
             except ServerError:
                 if force:
                     raise
+        stale = time.time() - self._local_price_at > 900 or not os.path.isfile(self.cache)
+        if self.gservice and (force or stale):
+            try:
+                from pintel_core.external import gsheet
+                gsheet.set_service_account(self.gservice)
+                grid = json.loads(json.dumps(gsheet.fetch_grid(self.sheet_url), ensure_ascii=False, default=str))
+                json.dump(grid, open(self.cache, "w", encoding="utf-8"), ensure_ascii=False)
+                self._local_price_at = time.time()
+                return grid
+            except Exception as e:                               # noqa: BLE001
+                self.last_error = f"прайс из Google Таблицы: {e}"
+                if force:
+                    raise ServerError(self.last_error)
         if os.path.isfile(self.cache):
             return json.load(open(self.cache, encoding="utf-8"))
         return None
 
     def sickw(self, imei):
-        return self._req("POST", "/api/kiosk/sickw", json={"imei": imei}, timeout=90)
+        """Через сервер (ключ там); без сервера или при его недоступности — ключом из kiosk.toml."""
+        if self.enabled:
+            try:
+                return self._req("POST", "/api/kiosk/sickw", json={"imei": imei}, timeout=90)
+            except ServerError:
+                if not self.local_sickw:
+                    raise
+        if self.local_sickw:
+            from pintel_core.external import sickw as sk
+            try:
+                return sk.lookup_many(imei, self.sickw_key, self.sickw_services,
+                                      cache_dir=os.path.join(data_dir(), "cache", "sickw"))
+            except Exception as e:                               # noqa: BLE001
+                raise ServerError(f"Sickw: {e}")
+        raise ServerError("Sickw: нет ни сервера, ни ключа sickw_key в kiosk.toml")
+
+    def local_number(self):
+        """Номер талона, когда кассы нет: свой счётчик на каждый день."""
+        path = os.path.join(data_dir(), "cache", "ticket_counter.json")
+        day = time.strftime("%Y-%m-%d")
+        try:
+            c = json.load(open(path, encoding="utf-8"))
+        except Exception:                                        # noqa: BLE001
+            c = {}
+        n = (c.get("n", 0) + 1) if c.get("day") == day else 1
+        json.dump({"day": day, "n": n}, open(path, "w", encoding="utf-8"))
+        return n
 
     def upload(self, payload):
         """→ ответ сервера или None, если оценка легла в очередь (нет связи)."""

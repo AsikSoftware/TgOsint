@@ -57,6 +57,14 @@ class NetThread(QThread):
     def run(self):
         last_price = 0
         while not self._stop:
+            if not self.client.enabled and time.time() - last_price > 900:
+                try:                                            # автономно: прайс прямо из таблицы
+                    g = self.client.price()
+                    if g:
+                        self.price.emit(g)
+                except Exception:                               # noqa: BLE001
+                    pass
+                last_price = time.time()
             if self.client.enabled:
                 try:
                     sent = self.client.flush_queue()
@@ -178,7 +186,10 @@ class KioskWindow(QMainWindow):
         except Exception:                                        # noqa: BLE001
             pass
         if not self.client.enabled:
-            self.s_main.set_status("Сервер не настроен: kiosk.toml", ok=False)
+            if self.client.standalone_ready:
+                self.s_main.set_status("Готов к работе (без сервера)", ok=True)
+            else:
+                self.s_main.set_status("Нет сервера и ключей: заполните kiosk.toml", ok=False)
         self._try_server_config()
 
     # ---------- служебное ----------

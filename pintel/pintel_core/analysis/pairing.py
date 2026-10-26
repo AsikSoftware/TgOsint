@@ -94,18 +94,29 @@ def touch(touch_node):
 
 
 def signals(snap):
-    """Сводка сигналов: {имя: {"ок": True/False/None, "почему": str}}."""
+    """Сводка сигналов: {имя: {"ок": True/False/None, "почему": str}}.
+    Сигнала нет вовсе, если у модели такой детали нет (Face ID у SE) или узла нет
+    в карте IORegistry этого телефона — это не «не прочиталось»."""
+    from .capabilities import has_face_id
     n = snap.get("nodes", {})
+    absent = set((snap.get("quality") or {}).get("нет_в_карте") or [])
+    pt = (snap.get("root") or {}).get("ProductType")
     out = {}
 
     def put(name, ok, why_ok, why_bad, why_none="данных нет"):
         out[name] = {"ок": ok, "почему": why_ok if ok else (why_bad if ok is False else why_none)}
 
-    f = faceid(n.get("camera"))
-    put("Face ID ↔ плата", f, "криптопривязка модуля к чипу сошлась",
-        "криптопривязка ИК-камеры к чипу нарушена — модуль с другого аппарата")
-    t = taptic(n.get("AppleHapticsSupportArcEEPROM"), n.get("haptics-support-interface"))
-    put("Taptic ↔ плата", t, "модуль сопряжён с платой", "модуль не тот, под который прошита плата")
+    if has_face_id(pt) is not False:
+        cam = n.get("camera") or {}
+        f = faceid(cam)
+        why_none = ("эта модель не отдаёт привязку Face ID по кабелю — смотрим вердикт Apple"
+                    if cam and deep(cam, "SavageSNUM") is not None and deep(cam, "FrontIRCameraSerialNumber") is None
+                    else "данных нет")
+        put("Face ID ↔ плата", f, "криптопривязка модуля к чипу сошлась",
+            "криптопривязка ИК-камеры к чипу нарушена — модуль с другого аппарата", why_none)
+    if "AppleHapticsSupportArcEEPROM" not in absent:
+        t = taptic(n.get("AppleHapticsSupportArcEEPROM"), n.get("haptics-support-interface"))
+        put("Taptic ↔ плата", t, "модуль сопряжён с платой", "модуль не тот, под который прошита плата")
     s = screen_calibration(n.get("AppleARMBacklight"))
     put("Экран: калибровка", s, "калибровка панели совпадает с ожидаемой",
         "калибровка панели не совпадает — вероятна замена")
@@ -115,8 +126,9 @@ def signals(snap):
     p = proximity(n.get("product"), n.get("prox") or n.get("AppleProxHIDEventDriver"))
     put("Датчик приближения", p, "серийник совпадает с записанным в плате",
         "серийник отличается от записанного в плате")
-    ok, errs = touch(n.get("AppleMultitouchDevice"))
-    put("Тачскрин", ok, "критических ошибок нет", f"критических ошибок: {errs}")
+    if "AppleMultitouchDevice" not in absent:
+        ok, errs = touch(n.get("AppleMultitouchDevice"))
+        put("Тачскрин", ok, "критических ошибок нет", f"критических ошибок: {errs}")
     for label, (why, ok2) in cameras(n.get("camera")).items():
         out[label] = {"ок": ok2, "почему": why}
     return out

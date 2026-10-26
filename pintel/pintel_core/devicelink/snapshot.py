@@ -15,7 +15,7 @@
 import asyncio, base64, json, time
 from datetime import datetime
 
-from . import jailbreak, nand
+from . import jailbreak, mdm, nand
 from .nodes import (CAMERA_FALLBACK, CAMERA_RE, DOMAINS, FIXED_NODES, MG_KEYS, MG_KEYS_COLOUR,
                     NVME_FALLBACK, NVME_RE, OPTIONAL_CLASSES, OPTIONAL_NODES, PROX_FALLBACK, PROX_RE,
                     collect_entry_names, deep, num, pick_names, txt)
@@ -200,6 +200,11 @@ async def collect(ld, diag, log=lambda *a: None):
     jb = await jailbreak.probe(ld)
     quality["время_с"]["джейлбрейк"] = round(time.monotonic() - t, 2)
 
+    log("профили и надзор…")
+    t = time.monotonic()
+    mdm_info = await mdm.probe(ld)
+    quality["время_с"]["mdm"] = round(time.monotonic() - t, 2)
+
     # NANDInfo: разбор и сверка прошивки с NVMe-контроллером
     disk = domains.get("com.apple.disk_usage") or {}
     nv_fw = txt(deep(nodes.get("nvme") or {}, "Firmware Revision"))
@@ -216,6 +221,7 @@ async def collect(ld, diag, log=lambda *a: None):
         "ioreg_planes": {"IOService": tree, "IODeviceTree": dtree},
         "mobilegestalt": mg,
         "jailbreak": jb,
+        "mdm": mdm_info,
         "nand_summary": nand_summary,
         "quality": quality,
     }

@@ -12,6 +12,11 @@ DEFAULTS = {
     "fullscreen": True,
     "currency": "₸",
     "sickw": True,
+    # Автономно (без сервера, одна точка): ключи прямо на киоске
+    "sickw_key": "",
+    "sickw_services": [61],
+    "gservice_json": "gservice.json",
+    "price_sheet_url": "",
 }
 
 

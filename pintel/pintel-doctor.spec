@@ -4,7 +4,7 @@
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 # Только то, что реально импортируем: lockdown, usbmux, diagnostics, syslog.
-hidden = ['google.auth.transport.requests', 'requests', 'rsa', 'pymobiledevice3.services.diagnostics',
+hidden = ['pymobiledevice3.services.mobile_config', 'google.auth.transport.requests', 'requests', 'rsa', 'pymobiledevice3.services.diagnostics',
           'pymobiledevice3.services.syslog', 'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown']
 datas = collect_data_files('pymobiledevice3') + [('pintel_core/analysis/models.json', 'pintel_core/analysis')]
 

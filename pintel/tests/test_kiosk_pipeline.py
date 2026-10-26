@@ -24,19 +24,24 @@ class FakeListener:
     """История появляется только во второй wait (после done)."""
     def __init__(self, ld, log=None, **kw):
         self.calls = 0; self.lines = 1; self.connects = 1; self.reconnects = 0; self.stopped = False
+        self.meta = {"раздел_открыт": False, "формат": None, "строк_по_теме": 0}
+        self.state = "waiting"
     async def start(self): return self
-    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0):
+    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0, unknown_quiet=8.0):
         self.calls += 1
         if self.calls == 1:
             await asyncio.sleep(0.05)
             return {}, "", 0.1
         items = {"Display": {"деталь": "Экран", "код": 1025, "меняли": True, "бу": False, "дата": "2026-03-01"}}
+        self.state, self.meta["формат"] = "found", "записи обслуживания (iOS 26)"
         return items, "raw", 0.2
     async def stop(self): self.stopped = True
 
 
 class FakeClient:
     enabled = True
+    local_sickw = False
+    def local_number(self): return 99
     def __init__(self): self.calls = []
     def sickw(self, imei): self.calls.append(("sickw", imei)); return {"в_чёрном_списке": False, "цвет": "чёрный", "все_поля": {"Blacklist Status": "Clean"}}
     def price(self): return None
@@ -88,3 +93,45 @@ def test_pipeline_done_then_late_history(fake_core):
     assert [c[0] for c in client.calls] == ["sickw", "upload", "update"]
     assert client.calls[-1][1] == 7 and "repair_history" in client.calls[-1][2]
     assert fake_core[0].stopped
+
+
+def test_pipeline_skips_history_wait_on_unsupported_model(fake_core, monkeypatch):
+    """iPhone X: истории Apple нет — шаг закрывается сразу, клиента не держим."""
+    app = QCoreApplication.instance() or QCoreApplication([])
+    snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"), encoding="utf-8").read())
+    snap.pop("repair_history", None)
+    snap["root"]["ProductType"] = "iPhone10,6"
+    async def collect(ld, diag, log=None): return dict(snap)
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    client = FakeClient()
+    p = worker.Pipeline({"apple_history_seconds": 30, "currency": "₸", "sickw": False}, client, None)
+    events, loop = [], QEventLoop()
+    p.step.connect(lambda k, s, t: events.append((k, s, t)))
+    p.done.connect(lambda r: (events.append(("DONE", r["report"]["apple_история_статус"], "")), loop.quit()))
+    p.failed.connect(lambda t: (events.append(("FAILED", t, "")), loop.quit()))
+    QTimer.singleShot(10000, loop.quit)
+    import time as _t
+    t0 = _t.monotonic()
+    p.start(); loop.exec(); p.wait(3000)
+    assert _t.monotonic() - t0 < 8, "ждали историю у модели без истории"
+    assert ("DONE", "не поддерживается", "") in events
+    assert any(k == "apple" and s == "done" and "iPhone X" in t for k, s, t in events)
+
+
+def test_client_standalone_sickw_price_and_numbers(monkeypatch, tmp_path):
+    from pintel_kiosk import client as kclient
+    from pintel_core.external import sickw as sk
+    monkeypatch.setattr(kclient, "data_dir", lambda: str(tmp_path))
+    for sub in ("queue", "cache"):
+        os.makedirs(tmp_path / sub, exist_ok=True)
+    monkeypatch.setattr(kclient, "app_dir", lambda: str(tmp_path))
+    json.dump({"база": {"iPhone13,2": {"64": 80000}}, "сетка_износа": {}}, open(tmp_path / "cache" / "price_grid.json", "w"))
+    c = kclient.Client({"server": "", "token": "", "sickw_key": "KEY", "sickw_services": [61]})
+    assert not c.enabled and c.local_sickw and c.standalone_ready
+    monkeypatch.setattr(sk, "_get", lambda params, timeout=60: {"status": "success",
+                        "result": 'Model: iPhone 12 64GB Black<br>Blacklist Status: <font color="green">Clean</font><br>iCloud Lock: <font color="red">ON</font><br>'})
+    r = c.sickw("490154203237518")
+    assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True
+    assert c.price()["база"]["iPhone13,2"]["64"] == 80000
+    assert [c.local_number(), c.local_number()] == [1, 2]
+    assert c.upload({"client_id": "x1", "report": {}}) is None and c.queued() == 1

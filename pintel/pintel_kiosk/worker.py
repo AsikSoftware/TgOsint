@@ -107,26 +107,41 @@ class Pipeline(QThread):
                                  ("надзор MDM", leg["mdm"] is not True), ("пароль", not leg["пароль"])) if not ok]
         self._step("locks", "done" if not locks else "warn", "чисто" if not locks else ", ".join(locks))
 
-        # история Apple: ждём шаг на телефоне (слушатель уже работает)
-        secs = int(self.cfg.get("apple_history_seconds") or 90)
-        self._step("apple", "run", f"ждём один шаг на телефоне · {secs} с")
-        items, raw, waited = await listener.wait(
-            secs, keep_going=lambda: not (self.skip_apple.is_set() or self.cancel.is_set()),
-            on_tick=lambda s: self.step.emit("apple", "run", f"ждём один шаг на телефоне · {max(0, secs - s)} с"))
-        self.apple_prompt.emit(False)
+        # история Apple: у модели вообще есть? (iPhone X и старше, iOS < 15.2 — нет, не держим клиента)
+        hist_ok, hist_why = repair_history.supported(pas["код_модели"], pas["ios"])
+        if not hist_ok:
+            self.apple_prompt.emit(False)
+            items, raw, waited = {}, "", 0
+            self._step("apple", "done", hist_why)
+        else:
+            secs = int(self.cfg.get("apple_history_seconds") or 90)
+            self._step("apple", "run", f"ждём один шаг на телефоне · {secs} с")
+            items, raw, waited = await listener.wait(
+                secs, keep_going=lambda: not (self.skip_apple.is_set() or self.cancel.is_set()),
+                on_tick=lambda s: self.step.emit(
+                    "apple", "run", ("раздел открыт, читаем…" if listener.meta.get("раздел_открыт")
+                                     else f"ждём один шаг на телефоне · {max(0, secs - s)} с")))
+            self.apple_prompt.emit(False)
+            if items:
+                self._step("apple", "done", "получена")
+            elif listener.state == "opened_unknown":
+                self._step("apple", "warn", "раздел открыт — проверит сотрудник")
+            else:
+                self._step("apple", "warn", "пропущена" if self.skip_apple.is_set() else "раздел пока не открыт")
         snap["repair_history"], snap["repair_history_raw"] = items, raw
-        snap["repair_history_meta"] = getattr(listener, "meta", None)
+        meta = dict(getattr(listener, "meta", None) or {})
+        meta.update({"статус": listener.state if hist_ok else "не поддерживается", "почему": hist_why})
+        snap["repair_history_meta"] = meta
         rep = report_mod.build(snap)
-        self._step("apple", "done" if items else "warn",
-                   "получена" if items else ("пропущена" if self.skip_apple.is_set() else "раздел пока не открыт"))
-        log_line(f"история Apple: {'есть' if items else 'нет'} за {waited} с, строк журнала {listener.lines}, "
+        log_line(f"история Apple: {listener.state if hist_ok else hist_why} за {waited} с; формат "
+                 f"{meta.get('формат')}; строк журнала {listener.lines}, по теме {meta.get('строк_по_теме')}, "
                  f"подключений {listener.connects}, обрывов {listener.reconnects}")
         if self.cancel.is_set():
             return
 
         # Sickw через сервер (ключ только там)
         imei = pas.get("imei") or ""
-        if self.cfg.get("sickw", True) and self.client.enabled and sickw.luhn_ok(imei):
+        if self.cfg.get("sickw", True) and (self.client.enabled or self.client.local_sickw) and sickw.luhn_ok(imei):
             self._step("sickw", "run")
             try:
                 snap["sickw"] = self.client.sickw(imei)
@@ -137,8 +152,10 @@ class Pipeline(QThread):
             except ServerError as e:
                 self._step("sickw", "warn", "база недоступна")
                 log_line(f"sickw: {e}")
+        elif not sickw.luhn_ok(imei):
+            self._step("sickw", "warn", "у телефона нет IMEI")
         else:
-            self._step("sickw", "warn", "пропущена")
+            self._step("sickw", "warn", "не настроена (kiosk.toml)")
 
         rep["цена"] = self._price(rep)
 
@@ -150,25 +167,31 @@ class Pipeline(QThread):
         payload = {"client_id": cid, "report": json.loads(snapshot.dumps(rep)),
                    "snapshot": json.loads(snapshot.dumps(snap))}
         self._step("upload", "run")
-        server = self.client.upload(payload) if self.client.enabled else None
-        self._step("upload", "done" if server else "warn", "отправлено" if server else "отправим позже")
+        server = self.client.upload(payload)          # без связи кладёт в очередь сама
+        if not server:
+            server = {"номер": self.client.local_number(), "локально": True}
+            self._step("upload", "done" if not self.client.enabled else "warn",
+                       "сохранено на киоске" if not self.client.enabled else "отправим позже")
+        else:
+            self._step("upload", "done", "отправлено")
         result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial, "out": out}
         self.done.emit(result)
-        if items or self.cancel.is_set():
+        if items or self.cancel.is_set() or not hist_ok:
             return
 
-        # Раздел так и не открыли — слушаем дальше, пока телефон на кабеле
+        # Вердикта ещё нет — слушаем дальше, пока телефон на кабеле
         self._step("apple", "run", "ждём историю Apple")
-        items, raw, waited = await listener.wait(6 * 3600, keep_going=lambda: not self.cancel.is_set(), grace=2.0)
+        items, raw, waited = await listener.wait(6 * 3600, keep_going=lambda: not self.cancel.is_set(),
+                                                 grace=2.0, unknown_quiet=None)
         if not items:
             return
         snap["repair_history"], snap["repair_history_raw"] = items, raw
-        snap["repair_history_meta"] = getattr(listener, "meta", None)
+        snap["repair_history_meta"] = {**(getattr(listener, "meta", None) or {}), "статус": "found", "почему": ""}
         rep = report_mod.build(snap)
         rep["цена"] = self._price(rep)
         self._save(out, snap, rep)
         log_line(f"история Apple пришла позже, через {waited} с")
-        if server and server.get("id") and self.client.enabled:
+        if server and server.get("id") and not server.get("локально") and self.client.enabled:
             try:
                 self.client.update_evaluation(server["id"], json.loads(snapshot.dumps(rep)),
                                               {"repair_history": items, "repair_history_raw": raw,

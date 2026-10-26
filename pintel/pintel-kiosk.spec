@@ -3,6 +3,8 @@
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 hidden = ['pymobiledevice3.services.diagnostics', 'pymobiledevice3.services.syslog', 'pymobiledevice3.services.afc',
+          'pymobiledevice3.services.mobile_config', 'google.auth.transport.requests', 'requests', 'rsa',
+          'pintel_core.external.gsheet',
           'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown', 'httpx', 'qrcode', 'pintel_kiosk.app']
 datas = collect_data_files('pymobiledevice3') + [
     ('pintel_core/analysis/models.json', 'pintel_core/analysis'),

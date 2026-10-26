@@ -371,11 +371,12 @@ class ScanScreen(Screen):
         pl.setContentsMargins(48, 44, 48, 44)
         pl.setSpacing(22)
         pl.addWidget(label("ОДИН ШАГ НА ТЕЛЕФОНЕ", "bluekicker"))
-        pl.addWidget(label("Откройте историю обслуживания — и Apple сама скажет, что менялось", "bluetitle", wrap=True))
-        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве", "Нажмите «Запчасти и история обслуживания»"), 1):
+        pl.addWidget(label("Откройте сведения о телефоне — и Apple сама скажет, что менялось", "bluetitle", wrap=True))
+        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
+                               "Если там есть «Запчасти и история обслуживания» — зайдите в неё"), 1):
             pl.addWidget(label(f"{i}   {t}", "bluestep", wrap=True))
         pl.addStretch(1)
-        pl.addWidget(label("Если раздел уже открыт — выйдите назад и зайдите снова. Мы ждём, пока вы это сделаете.", "bluenote", wrap=True))
+        pl.addWidget(label("Если экран уже открыт — выйдите назад и зайдите снова. Мы сами увидим, когда вы это сделаете.", "bluenote", wrap=True))
         self.skip = QPushButton("Пропустить этот шаг")
         self.skip.setObjectName("skip")
         self.skip.setCursor(Qt.PointingHandCursor)
@@ -579,7 +580,9 @@ class ResultScreen(Screen):
             shown = 0
             for name, v in list(groups.items())[:5]:
                 verb = _changed_verb(name)
-                if v.get("неизвестная"):
+                if v.get("записи_без_деталей"):
+                    self.l_apple.addWidget(line("У Apple есть записи о ремонте — подробности на экране телефона", C["warn"]))
+                elif v.get("неизвестная"):
                     self.l_apple.addWidget(line(f"{name} — деталь неизвестного происхождения", C["bad"]))
                 elif v.get("меняли"):
                     self.l_apple.addWidget(line(f"{name} — {verb}, " + ("б/у деталь" if v.get("бу") else "деталь Apple, новая"), C["warn"] if not v.get("бу") else C["bad"]))
@@ -590,10 +593,16 @@ class ResultScreen(Screen):
                 v.get("источник", "").startswith("сверка") for v in hist.values())
                 else "Из раздела «Запчасти и история обслуживания» вашего телефона", "muted"))
         else:
-            self.l_apple.addWidget(line("Раздел пока не открыт", C["warn"]))
-            self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве → "
-                                         "«Запчасти и история обслуживания» — данные появятся здесь сами.",
-                                         "pricenote", wrap=True))
+            st = rep.get("apple_история_статус")
+            if st == "не поддерживается":
+                self.l_apple.addWidget(line("У этой модели Apple не ведёт историю обслуживания", C["muted"]))
+                self.l_apple.addWidget(label("Детали проверены по кабелю — см. сотрудника.", "pricenote", wrap=True))
+            elif st == "формат не распознан":
+                self.l_apple.addWidget(line("Раздел открыт — сотрудник сверит его на экране телефона", C["warn"]))
+            else:
+                self.l_apple.addWidget(line("Раздел пока не открыт", C["warn"]))
+                self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве — "
+                                             "данные появятся здесь сами.", "pricenote", wrap=True))
         # блокировки
         clear_layout(self.l_locks)
         self.l_locks.addWidget(label("БЛОКИРОВКИ И БАЗЫ", "kicker"))
@@ -709,7 +718,10 @@ class TicketScreen(Screen):
         pas, leg, price = rep.get("паспорт") or {}, rep.get("правовой") or {}, rep.get("цена") or {}
         cur = price.get("валюта") or "₸"
         self.sub.setText(f"{pas.get('модель') or 'iPhone'}" + (f" · {int(price['цена']):,} {cur}".replace(",", " ") if price.get("цена") else ""))
-        if server and server.get("номер"):
+        if server and server.get("номер") and server.get("локально"):
+            self.num.setText(str(server["номер"]))
+            self.note.setText("Подойдите к сотруднику и назовите этот номер")
+        elif server and server.get("номер"):
             self.num.setText(str(server["номер"]))
             self.note.setText("Подойдите к сотруднику — он уже видит вашу оценку на своём экране")
         else:

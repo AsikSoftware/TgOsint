@@ -29,7 +29,14 @@
       </div>
       <div class="note">{{ rep.get('apple_история_источник') or 'Записи обслуживания' }} — снято с телефона клиента при открытии «Запчасти и история обслуживания». Не из наших догадок, а из данных Apple.</div>
       {% else %}
-      <div class="tile gray"><b>История не получена</b><small>Клиент не открыл раздел на телефоне за отведённое время. Можно повторить на киоске.</small></div>
+      {% set hst = rep.get('apple_история_статус') %}
+      {% if hst == 'не поддерживается' %}
+      <div class="tile gray"><b>У этой модели Apple не ведёт историю</b><small>{{ rep.get('apple_история_почему') or '' }}. Опирайтесь на сигналы с кабеля ниже.</small></div>
+      {% elif hst == 'формат не распознан' %}
+      <div class="tile warn"><b>Раздел на телефоне открывали, но эта версия iOS пишет вердикт по-новому</b><small>Посмотрите «Запчасти и история обслуживания» на экране телефона. Сырые строки сохранены в оценке — их разберём и добавим.</small></div>
+      {% else %}
+      <div class="tile gray"><b>История не получена</b><small>Клиент не открыл «Об этом устройстве» за отведённое время. Попросите открыть — киоск дошлёт данные сам, пока телефон на кабеле.</small></div>
+      {% endif %}
       {% endif %}
     </section>
     <section class="sec">
@@ -46,7 +53,7 @@
       <div class="kv"><span>Найти iPhone (телефон)</span><span class="{{ 'warn' if leg.get('найти_iphone') == 'включён' else 'ok' }}">{{ leg.get('найти_iphone') or '?' }}</span></div>
       <div class="kv"><span>Найти iPhone (Sickw)</span><span class="{{ 'warn' if sk.get('fmi_включён') else 'muted' }}">{{ sk.get('icloud') or 'нет данных' }}</span></div>
       <div class="kv"><span>Активация</span><span>{{ leg.get('активация') or '?' }}</span></div>
-      <div class="kv"><span>MDM-надзор</span><span class="{{ 'bad' if leg.get('mdm') is true else ('ok' if leg.get('mdm') is false else 'warn') }}">{{ 'ЕСТЬ' if leg.get('mdm') is true else ('нет' if leg.get('mdm') is false else 'не определился — проверить на телефоне') }}</span></div>
+      <div class="kv"><span>MDM-надзор</span><span class="{{ 'bad' if leg.get('mdm') is true else ('ok' if leg.get('mdm') is false else 'warn') }}">{{ 'ЕСТЬ' if leg.get('mdm') is true else ('нет' if leg.get('mdm') is false else 'не определился — проверить на телефоне') }}{% if leg.get('mdm_почему') %} · <small class="muted">{{ leg.get('mdm_почему') }}</small>{% endif %}</span></div>
       <div class="kv"><span>Пароль</span><span>{{ 'стоит' if leg.get('пароль') else 'нет' }}</span></div>
       <div class="kv"><span>SIM</span><span>{{ pas.get('sim') or '?' }}{% if pas.get('esim') %} + eSIM-профиль{% endif %}</span></div>
       <div class="kv"><span>Модель с завода</span><span>{{ sk.get('описание') or sk.get('модель_строка') or '—' }}</span></div>

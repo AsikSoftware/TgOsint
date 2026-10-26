@@ -193,14 +193,16 @@ async def _snapshot(args, cfg):
     if args.apple:
         say(f"\n  На телефоне: Настройки → Основные → Об этом устройстве → ЗАЙДИТЕ в "
             f"«Запчасти и история обслуживания». Слушаю {args.apple} с…")
+        ok_h, why_h = repair_history.supported(rep["паспорт"]["код_модели"], rep["паспорт"]["ios"])
         lst = repair_history.Listener(ld, log=lambda m: say("  " + m))
         await lst.start()
         try:
-            items, raw, waited = await lst.wait(args.apple)
+            items, raw, waited = await lst.wait(args.apple if ok_h else 0)
         finally:
             await lst.stop()
-        say(f"  история Apple: {'получена' if items else 'не появилась'} за {waited} с "
-            f"({lst.meta.get('формат') or 'раздел не открыт'})")
+        state = {"found": "получена", "opened_unknown": "раздел открыт, формат не распознан (строки сохранены)",
+                 "waiting": "раздел не открыт"}[lst.state]
+        say(f"  история Apple: {state} за {waited} с ({lst.meta.get('формат') or why_h or '—'})")
         snap["repair_history"] = items
         snap["repair_history_raw"] = raw
         snap["repair_history_meta"] = lst.meta
@@ -256,10 +258,19 @@ def cmd_report(args, cfg):
 
 async def _apple(args, cfg):
     st = await connect.wait_ready(on_status=lambda s: say(s.human))
-    say(f"Слушаю {args.seconds} с. На телефоне: Настройки → Основные → Об этом устройстве → "
-        f"зайдите в «Запчасти и история обслуживания» (если открыто — выйдите и зайдите снова).")
-    items, raw, waited = await repair_history.capture(st.lockdown, seconds=args.seconds)
-    say(json.dumps(items, ensure_ascii=False, indent=1) if items else f"ничего не пришло за {waited} с")
+    say(f"Слушаю {args.seconds} с. На телефоне: Настройки → Основные → Об этом устройстве; если там есть "
+        f"«Запчасти и история обслуживания» — зайдите в неё (если открыто — выйдите и зайдите снова).")
+    lst = repair_history.Listener(st.lockdown, log=lambda m: say("  " + m))
+    await lst.start()
+    try:
+        items, raw, waited = await lst.wait(args.seconds, unknown_quiet=None)
+    finally:
+        await lst.stop()
+    say(json.dumps(items, ensure_ascii=False, indent=1) if items else f"вердикта нет за {waited} с ({lst.state})")
+    say(json.dumps({k: v for k, v in lst.meta.items() if k != "печать"}, ensure_ascii=False))
+    d = out_dir(None, st.serial)
+    open(os.path.join(d, "apple_history_raw.txt"), "w", encoding="utf-8").write(raw)
+    say(f"сырые строки: {os.path.join(d, 'apple_history_raw.txt')}")
     return 0 if items else 1
 
 

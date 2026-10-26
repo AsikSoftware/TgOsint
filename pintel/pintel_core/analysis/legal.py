@@ -31,7 +31,16 @@ def build(snap):
         if v is not None:
             trm = v
             break
-    mdm = boolish(trm) if trm is not None else None
+    from ..devicelink import mdm as mdm_mod
+    mdm_svc, mdm_why = mdm_mod.verdict(snap.get("mdm"))
+    mdm_node = boolish(trm) if trm is not None else None
+    if mdm_svc is not None:
+        mdm = True if (mdm_svc or mdm_node) else False
+        mdm_source = "служба профилей" + (" + узел порта" if mdm_node is not None else "")
+    else:
+        mdm = mdm_node
+        mdm_source = "узел порта" if mdm_node is not None else None
+        mdm_why = "по флагу TRM_TransportSupervised" if mdm_node is not None else mdm_why
     restr = doms.get("com.apple.mobile.restriction") or {}
     purple = doms.get("com.apple.purplebuddy") or {}
     return {
@@ -40,6 +49,8 @@ def build(snap):
         "активация": txt(root.get("ActivationState")),
         "пароль": boolish(root.get("PasswordProtected")) is True,
         "mdm": mdm,
+        "mdm_почему": mdm_why,
+        "mdm_источник": mdm_source,
         "первичная_настройка_пройдена": boolish(purple.get("SetupDone")) if purple else None,
         "ограничения": {k: v for k, v in restr.items() if boolish(v) is True} if restr else {},
     }

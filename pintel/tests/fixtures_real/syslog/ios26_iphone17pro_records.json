@@ -1,0 +1,10 @@
+{
+ "meta": {
+  "ios": "26.6",
+  "model": "iPhone18,1",
+  "строк": 1
+ },
+ "lines": [
+  "Oct 23 16:39:12 iPhone Preferences(CoreRepairCore)[800] <Notice>: repairHistoryForUI:{\n    BackGlass = \"[CRRepairHistoryItem: componentName:BackGlass: componentType:1030: isRepaired:0: isUsed:0: repairDate:(null):]\";\n    Battery = \"[CRRepairHistoryItem: componentName:Battery: componentType:1024: isRepaired:0: isUsed:0: repairDate:(null):]\";\n    Camera = \"[CRRepairHistoryItem: componentName:Camera: componentType:1026: isRepaired:0: isUsed:0: repairDate:(null):]\";\n    Display = \"[CRRepairHistoryItem: componentName:Display: componentType:1025: isRepaired:0: isUsed:0: repairDate:(null):]\";\n    Enclosure = \"[CRRepairHistoryItem: componentName:Enclosure: componentType:1032: isRepaired:0: isUsed:0: repairDate:(null):]\";\n    FaceID = \"[CRRepairHistoryItem: componentName:FaceID: componentType:1027: isRepaired:0: isUsed:0: repairDate:(null):]\";\n    MTUB = \"[CRRepairHistoryItem: componentName:MTUB: componentType:1029: isRepaired:0: isUsed:0: repairDate:(null):]\";\n}"
+ ]
+}

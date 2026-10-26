@@ -7,3 +7,12 @@ return_seconds = 60                        # через сколько секу�
 fullscreen = true                          # Esc — выйти из полного экрана, Ctrl+Q — закрыть
 currency = "₸"
 sickw = true                               # проверять по базе IMEI через сервер
+
+# --- Без сервера (одна точка, проверка на месте) ---
+# Если server/token пустые, киоск работает сам: прайс берёт прямо из Google
+# Таблицы (gservice.json рядом с exe), чёрный список — по своему ключу Sickw.
+# Оценки копятся в %LOCALAPPDATA%\PintelKiosk\queue и уйдут на сервер, когда он появится.
+sickw_key = ""
+sickw_services = [61]
+gservice_json = "gservice.json"
+price_sheet_url = "https://docs.google.com/spreadsheets/d/1TJWXvVC9eBFhKW38mfRBUvOftSUrWL_LmzsR-VlF-ZA/edit?gid=1917713663"

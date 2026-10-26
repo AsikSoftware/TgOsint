@@ -36,38 +36,81 @@ RU = {"Battery": "Аккумулятор", "Display": "Экран", "Camera": "�
 # Код 1029 встречался и как MTUB, и как LogicBoard — опираемся на ИМЯ.
 ITEM = re.compile(r"componentName:(\w+): componentType:(\d+): isRepaired:(\d): "
                   r"isUsed:(\d): repairDate:(.*?):\"?")
+# Модели, у которых Apple ведёт «Запчасти и история обслуживания»: iPhone XR/XS и новее
+# (ProductType iPhone11,x и выше), iOS 15.2+. У iPhone X и старше раздела нет вообще —
+# ждать клиента бессмысленно.
+def supported(product_type, ios_version):
+    """→ (True/False, причина)."""
+    import re as _re
+    m = _re.match(r"iPhone(\d+),", str(product_type or ""))
+    if not m:
+        return False, "не iPhone"
+    if int(m.group(1)) < 11:
+        return False, "у этой модели Apple не ведёт историю обслуживания (iPhone X и старше)"
+    parts = [int(x) for x in _re.findall(r"\d+", str(ios_version or ""))[:2]] + [0, 0]
+    if (parts[0], parts[1]) < (15, 2):
+        return False, "историю обслуживания Apple показывает с iOS 15.2"
+    return True, ""
+
+
 MARKER = "CRRepairHistoryItem"
 RELATED = ("repair", "CoreRepair", "mobilerepaird")
 # признаки, что раздел на телефоне открыт (iOS 18): UI Настроек и демон проснулись
 OPENED = ("updateSpecifiersWithCompletionHandler", "corerepair.preflightControl", "Getting local sealing manifest",
-          "fetched RCHL", "delta components", "No delta components found", "repairHistoryForUI")
+          "fetched RCHL", "delta components", "No delta components found", "repairHistoryForUI",
+          "Preferences(CoreRepair", "CoreRepairUI", "Unsealed:")
 # детали, которые показывает раздел на iOS 18 у всех моделей с Face ID
 BASE_COMPONENTS = ("Battery", "Display", "Camera", "FaceID")
-DELTA_RE = re.compile(r"delta components:\s*\{(.*?)\}", re.S)
+DELTA_RE = re.compile(r"delta components:\s*\{(.*?)\}\s*$", re.S)
+UNSEALED_RE = re.compile(r"Unsealed:\s*\{(.*?)\}\s*$", re.S)
 RCHL_RE = re.compile(r"fetched RCHL successfully:.*?length = (\d+)")
 SEAL_RE = re.compile(r"_copyIdentifierListForSealingMapEntry: Using value (.+?) for key (\w+) from query cache")
 
 
+def _dict_keys(body):
+    """Ключи верхнего уровня из печати словаря Apple: '    Display =     {…};' → Display."""
+    keys, depth = [], 0
+    for ln in body.split("\n"):
+        if depth == 0:
+            m = re.match(r"^\s*\"?([A-Za-z]\w*)\"?\s*=", ln)
+            if m:
+                keys.append(m.group(1))
+        depth += ln.count("{") + ln.count("(") - ln.count("}") - ln.count(")")
+        depth = max(depth, 0)
+    return keys
+
+
 def parse_delta(line):
-    """'delta components: {\n    Display = …;\n}' → ['Display']; пустые скобки → []."""
+    """'delta components: {\n    Display = …;\n}' → ['Display']; пустые скобки → []; не та строка → None."""
     m = DELTA_RE.search(line)
-    if not m:
-        return None
-    body = m.group(1)
-    return re.findall(r"^\s*\"?(\w+)\"?\s*=", body, re.M)
+    return _dict_keys(m.group(1)) if m else None
+
+
+def parse_unsealed(line):
+    m = UNSEALED_RE.search(line)
+    return _dict_keys(m.group(1)) if m else None
 
 
 def synthesize(meta):
-    """Итог iOS 18 из сверки: пустая дельта и пустой RCHL → все базовые детали «не меняли»;
-    непустая дельта → эти детали «меняли, деталь неизвестного происхождения»."""
+    """Итог по сверке с заводской печатью (iOS 18):
+      дельта пуста и RCHL пуст      → базовые детали «не меняли»
+      дельта пуста, RCHL не пуст    → у Apple есть записи о ремонте, но в журнал они не вышли:
+                                      вердикт «есть записи» (не «всё родное»!)
+      дельта/Unsealed не пусты       → эти детали «неизвестного происхождения»."""
     delta = meta.get("дельта")
     if delta is None:
         return {}
+    unknown = list(dict.fromkeys(list(delta) + list(meta.get("unsealed") or [])))
+    rchl = meta.get("rchl_байт")
     items = {}
-    for comp in BASE_COMPONENTS:
-        items[comp] = {"деталь": RU.get(comp, comp), "код": 0, "меняли": False, "бу": False, "дата": "",
-                       "источник": "сверка с заводской печатью"}
-    for comp in delta:
+    if rchl:
+        items["RepairRecords"] = {"деталь": "Записи о ремонте Apple", "код": 0, "меняли": True, "бу": False,
+                                  "дата": "", "записи_без_деталей": True, "источник": "сверка с заводской печатью"}
+    elif rchl == 0 or rchl is None:
+        for comp in BASE_COMPONENTS:
+            items[comp] = {"деталь": RU.get(comp, comp), "код": 0, "меняли": False, "бу": False, "дата": "",
+                           "источник": "сверка с заводской печатью"}
+    for comp in unknown:
         items[comp] = {"деталь": RU.get(comp, comp), "код": 0, "меняли": True, "бу": False, "дата": "",
                        "неизвестная": True, "источник": "сверка с заводской печатью"}
     return items
@@ -100,7 +143,9 @@ class Listener:
         self.max_reconnects, self.reconnect_delay = max_reconnects, reconnect_delay
         self.items, self.buf, self.notes, self.related = {}, [], [], []
         # метаданные формата iOS 18: раздел открыт?, дельта, размер RCHL, значения печати
-        self.meta = {"раздел_открыт": False, "дельта": None, "rchl_байт": None, "печать": {}, "формат": None}
+        self.meta = {"раздел_открыт": False, "дельта": None, "unsealed": None, "rchl_байт": None, "печать": {},
+                     "формат": None, "строк_по_теме": 0}
+        self.last_related_at = None
         self.found_at = None
         self.connects = 0
         self.reconnects = 0
@@ -160,11 +205,13 @@ class Listener:
         low = line.lower()
         if not any(k.lower() in low for k in RELATED):
             return
-        if len(self.related) < 200:
-            self.related.append(line[:300])
+        self.meta["строк_по_теме"] += 1
+        self.last_related_at = time.monotonic()
+        if len(self.related) < 400:
+            self.related.append(line[:600])
         if any(k in line for k in OPENED) and not self.meta["раздел_открыт"]:
             self.meta["раздел_открыт"] = True
-            self.log("раздел «Запчасти и история обслуживания» открыт на телефоне")
+            self.log("на телефоне открыт раздел «Об этом устройстве» / история обслуживания")
         m = RCHL_RE.search(line)
         if m:
             self.meta["rchl_байт"] = int(m.group(1))
@@ -177,6 +224,11 @@ class Listener:
         if delta is not None:
             self.meta["дельта"] = delta
             self.buf.append(line if line.endswith("\n") else line + "\n")
+        unsealed = parse_unsealed(line)
+        if unsealed is not None:
+            self.meta["unsealed"] = unsealed
+            if unsealed:
+                self.buf.append(line if line.endswith("\n") else line + "\n")
         if self.meta["дельта"] is not None and not self.items:
             self.items = synthesize(self.meta)
             self.meta["формат"] = "сверка с заводской печатью (iOS 18)"
@@ -192,14 +244,33 @@ class Listener:
             out += "".join(f"# похожее: {l}\n" for l in self.related[:80])
         return out
 
-    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0):
-        """Ждать записи не дольше seconds (или пока keep_going() истинно);
-        после первой записи добрать ещё grace секунд — они идут пачкой.
+    @property
+    def state(self):
+        """found | opened_unknown | waiting — для экрана и отчёта."""
+        if self.items:
+            return "found"
+        if self.meta["раздел_открыт"]:
+            return "opened_unknown"
+        return "waiting"
+
+    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0, unknown_quiet=8.0):
+        """Ждать вердикт не дольше seconds (или пока keep_going() истинно).
+        После первой записи — добрать grace секунд (записи идут пачкой; если у Apple
+        есть записи о ремонте, а деталей ещё нет — ждём их дольше).
+        Если раздел открыт, но ни один известный формат не встретился, а журнал по
+        теме затих на unknown_quiet секунд — выходим: формат этой iOS не распознан,
+        сырьё сохранено, клиента дальше не держим.
         → (items, raw, секунд_ждали)."""
         start = time.monotonic()
         while True:
             now = time.monotonic()
-            if self.found_at and now - self.found_at >= grace:
+            if self.found_at:
+                g = grace * 3 if "RepairRecords" in self.items else grace
+                if now - self.found_at >= g:
+                    break
+            elif (unknown_quiet and self.meta["раздел_открыт"] and self.last_related_at
+                  and now - self.last_related_at >= unknown_quiet):
+                self.meta["формат"] = self.meta["формат"] or "не распознан"
                 break
             if not self.found_at and (now - start >= seconds or (keep_going and not keep_going())):
                 break

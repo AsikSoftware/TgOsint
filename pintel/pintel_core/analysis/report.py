@@ -16,7 +16,12 @@ def build(snap):
     sig = pairing.signals(snap)
     # История обслуживания Apple закрывает дыры там, где криптопривязка по кабелю
     # не читается (iPhone 17 Pro: нет FrontIRCameraSerialNumber), и даёт факты о заменах.
-    hist = snap.get("repair_history") or {}
+    from .capabilities import has_face_id
+    from ..devicelink import repair_history as rh_mod
+    hist = dict(snap.get("repair_history") or {})
+    if has_face_id(pas["код_модели"]) is False:            # у SE нет Face ID — сверка его не показывает
+        hist.pop("FaceID", None)
+    hist_ok, hist_why = rh_mod.supported(pas["код_модели"], pas["ios"])
     for sig_name, hist_key in (("Face ID ↔ плата", "FaceID"), ("Тачскрин", "Display")):
         h = hist.get(hist_key)
         if sig_name in sig and sig[sig_name]["ок"] is None and h and h.get("меняли") is False:
@@ -94,7 +99,10 @@ def build(snap):
     for h in hist.values():
         if h.get("меняли"):
             when = f", {h['дата']}" if h.get("дата") else ""
-            if h.get("неизвестная"):
+            if h.get("записи_без_деталей"):
+                warn.append("у Apple есть записи о ремонте этого телефона — подробности на экране телефона "
+                            "(Настройки → Основные → Об этом устройстве)")
+            elif h.get("неизвестная"):
                 stop.append(f"по сверке Apple: {h['деталь']} — деталь неизвестного происхождения (не из печати)")
             elif h.get("бу"):
                 stop.append(f"по истории Apple: {h['деталь']} меняли, установлена б/у деталь{when}")
@@ -102,6 +110,16 @@ def build(snap):
                 warn.append(f"по истории Apple: {h['деталь']} меняли (новая деталь{when})")
     hist_meta = snap.get("repair_history_meta") or {}
     hist_source = hist_meta.get("формат") or ("записи обслуживания" if hist else None)
+    if hist:
+        hist_status = "получена"
+    elif not hist_ok:
+        hist_status = "не поддерживается"
+    elif hist_meta.get("раздел_открыт"):
+        hist_status = "формат не распознан"
+        todo.append("раздел Apple открыт, но этот формат iOS ещё не разобран — посмотрите «Запчасти и история "
+                    "обслуживания» на экране телефона; сырые строки сохранены в оценке")
+    else:
+        hist_status = "не открыт"
     if sk:
         if sk.get("подменный") is True:
             stop.append("Sickw: подменный аппарат Apple (Loaner) — собственность Apple")
@@ -134,8 +152,10 @@ def build(snap):
         "sickw": sk,
         "джейлбрейк": jailbreak.verdict(jb),
         "mobilegestalt": ("недоступен" if "недоступен" in mg else ("есть" if mg else "не запрашивался")),
-        "apple_история": snap.get("repair_history") or None,
+        "apple_история": hist or None,
         "apple_история_источник": hist_source,
+        "apple_история_статус": hist_status,
+        "apple_история_почему": hist_why or None,
         "apple_раздел_открыт": bool(hist_meta.get("раздел_открыт")) or bool(hist),
         "стоп": stop, "сделать": todo, "внимание": warn, "не_прочиталось": unknown,
         "итог": {"вердикт": verdict[0], "почему": verdict[1]},

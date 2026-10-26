@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Слепок → отчёт. Главный принцип: отсутствие данных НЕ превращается в вердикт."""
-from . import battery, legal, pairing, passport, serials, storage
+from . import battery, legal, pairing, parts as parts_mod, passport, serials, storage
 from ..devicelink import jailbreak, nand
 from ..devicelink.nodes import ENCLOSURE_COLOURS, num
 from ..external import sickw as sickw_mod
@@ -40,6 +40,8 @@ def build(snap):
         # применяются и к старым слепкам
         sk = {**sk, **sickw_mod.normalize(sk["все_поля"])}
     mg = snap.get("mobilegestalt") or {}
+    from ..devicelink import mobilegestalt as mg_mod
+    seal = mg_mod.seal_summary(mg)
     raw_code = mg.get("DeviceEnclosureColor") if "недоступен" not in mg else None
     code = num(raw_code) if raw_code is not None else None
     pas["код_цвета_корпуса"] = int(code) if code is not None else None
@@ -49,6 +51,8 @@ def build(snap):
     if not pas["цвет"] and pas["цвет_по_коду"]:
         pas["цвет"] = pas["цвет_по_коду"]
     jb = snap.get("jailbreak")
+    # Единый вердикт по деталям: кабель (привязка + печать Apple) — основа, журнал — обогащение.
+    parts_v = parts_mod.verdict(snap, sig, hist, bat, seal)
 
     stop, todo, warn, unknown = [], [], [], []
     if bat["подделка"]:
@@ -89,7 +93,9 @@ def build(snap):
     for name, s in sig.items():
         if s["ок"] is False:
             stop.append(f"{name}: {s['почему']}")
-        elif s["ок"] is None and name in ("Face ID ↔ плата", "Taptic ↔ плата", "Тачскрин"):
+        elif (s["ок"] is None and name in ("Face ID ↔ плата", "Taptic ↔ плата", "Тачскрин")
+              and parts_v["итог"] == "неполно"):
+            # «нет данных» портит вердикт, только если деталь не подтверждена НИ одним каналом
             unknown.append(f"{name}: {s['почему']}")
     if bat["здоровье_%"] is not None and bat["здоровье_%"] < 80:
         warn.append(f"износ батареи: здоровье {bat['здоровье_%']}%")
@@ -116,8 +122,8 @@ def build(snap):
         hist_status = "не поддерживается"
     elif hist_meta.get("раздел_открыт"):
         hist_status = "формат не распознан"
-        todo.append("раздел Apple открыт, но этот формат iOS ещё не разобран — посмотрите «Запчасти и история "
-                    "обслуживания» на экране телефона; сырые строки сохранены в оценке")
+        if parts_v["итог"] == "неполно":                      # только если и кабель молчит
+            warn.append("раздел Apple открыт, но этот формат iOS ещё не разобран — сырые строки в оценке")
     else:
         hist_status = "не открыт"
     if sk:
@@ -149,9 +155,12 @@ def build(snap):
         "сигналы": sig,
         "nand": nd,
         "детали": parts,
+        "детали_вердикт": parts_v,
         "sickw": sk,
         "джейлбрейк": jailbreak.verdict(jb),
         "mobilegestalt": ("недоступен" if "недоступен" in mg else ("есть" if mg else "не запрашивался")),
+        "mobilegestalt_канал": mg.get("_канал"),
+        "печать_деталей": seal,
         "apple_история": hist or None,
         "apple_история_источник": hist_source,
         "apple_история_статус": hist_status,

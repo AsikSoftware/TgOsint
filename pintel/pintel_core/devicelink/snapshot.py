@@ -15,7 +15,7 @@
 import asyncio, base64, json, time
 from datetime import datetime
 
-from . import jailbreak, mdm, nand
+from . import jailbreak, mdm, mobilegestalt as mg_mod, nand
 from .nodes import (CAMERA_FALLBACK, CAMERA_RE, DOMAINS, FIXED_NODES, MG_KEYS, MG_KEYS_COLOUR,
                     NVME_FALLBACK, NVME_RE, OPTIONAL_CLASSES, OPTIONAL_NODES, PROX_FALLBACK, PROX_RE,
                     collect_entry_names, deep, num, pick_names, txt)
@@ -180,19 +180,23 @@ async def collect(ld, diag, log=lambda *a: None):
             nodes[key] = None
     quality["время_с"]["узлы"] = round(time.monotonic() - t, 2)
 
-    # MobileGestalt: до iOS 17.4 отдаёт цвета корпуса и серийники модулей,
-    # новее — «deprecated». Падение одного ключа не должно губить всё: два захода.
+    # MobileGestalt — лучшим доступным каналом: diagnostics до iOS 17.4, а на 17.4+
+    # через userspace-туннель CoreDevice (без прав администратора; тот же канал, что у
+    # 3uTools). Печать деталей, серийники модулей, цвета корпуса — без действий клиента.
     log("MobileGestalt…")
     t = time.monotonic()
-    mg = None
-    for keys in (MG_KEYS, MG_KEYS_COLOUR):
-        try:
-            mg = await diag.mobilegestalt(keys)
-            break
-        except Exception as e:                                    # noqa: BLE001
-            mg = {"недоступен": f"{type(e).__name__}: {str(e)[:160]}"}
-            if "Deprecat" in type(e).__name__ or "Deprecated" in str(e):
-                break
+    serial = txt((root or {}).get("UniqueDeviceID")) or None
+    try:
+        mg_res = await mg_mod.read(diag, serial=serial)
+    except Exception as e:                                        # noqa: BLE001
+        mg_res = {"значения": {}, "канал": "нет", "ошибка": f"{type(e).__name__}: {str(e)[:160]}"}
+    mg = dict(mg_res.get("значения") or {})
+    if not mg:
+        mg = {"недоступен": mg_res.get("ошибка") or "пусто"}
+    mg["_канал"] = mg_res.get("канал")
+    if mg_res.get("device_info"):
+        mg["_device_info"] = mg_res["device_info"]
+    quality["mobilegestalt_канал"] = mg_res.get("канал")
     quality["время_с"]["mobilegestalt"] = round(time.monotonic() - t, 2)
 
     log("джейлбрейк…")

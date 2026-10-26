@@ -87,7 +87,8 @@ def test_pipeline_done_then_late_history(fake_core):
     assert ("done", 3, False) in events
     assert ("history", ["Display"]) in events and kinds.index("history") > kinds.index("done")
     steps = [(k, s) for e, k, s in [x for x in events if x[0] == "step"]]
-    assert ("connect", "done") in steps and ("passport", "done") in steps and ("apple", "warn") in steps
+    assert ("connect", "done") in steps and ("passport", "done") in steps
+    assert ("apple", "done") in steps              # журнал — бонус: шаг закрывается с кабеля
     assert steps[-1] == ("apple", "done")
     assert ("sickw", "done") in steps and ("upload", "done") in steps
     assert [c[0] for c in client.calls] == ["sickw", "upload", "update"]

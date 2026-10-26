@@ -370,13 +370,14 @@ class ScanScreen(Screen):
         pl = QVBoxLayout(self.panel)
         pl.setContentsMargins(48, 44, 48, 44)
         pl.setSpacing(22)
-        pl.addWidget(label("ОДИН ШАГ НА ТЕЛЕФОНЕ", "bluekicker"))
+        pl.addWidget(label("НЕОБЯЗАТЕЛЬНО · ДЛЯ ДАТ РЕМОНТА", "bluekicker"))
         pl.addWidget(label("Откройте сведения о телефоне — и Apple сама скажет, что менялось", "bluetitle", wrap=True))
         for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
                                "Если там есть «Запчасти и история обслуживания» — зайдите в неё"), 1):
             pl.addWidget(label(f"{i}   {t}", "bluestep", wrap=True))
         pl.addStretch(1)
-        pl.addWidget(label("Если экран уже открыт — выйдите назад и зайдите снова. Мы сами увидим, когда вы это сделаете.", "bluenote", wrap=True))
+        pl.addWidget(label("Подлинность деталей мы уже проверили по кабелю. Этот шаг нужен только чтобы показать "
+                           "ДАТЫ ремонтов — его можно пропустить.", "bluenote", wrap=True))
         self.skip = QPushButton("Пропустить этот шаг")
         self.skip.setObjectName("skip")
         self.skip.setCursor(Qt.PointingHandCursor)
@@ -572,7 +573,19 @@ class ResultScreen(Screen):
                                    "pricenote", wrap=True))
         # Apple
         clear_layout(self.l_apple)
-        self.l_apple.addWidget(label("ЧТО ГОВОРИТ APPLE", "kicker"))
+        pv = rep.get("детали_вердикт") or {}
+        self.l_apple.addWidget(label("ПОДЛИННОСТЬ ДЕТАЛЕЙ", "kicker"))
+        if pv.get("итог") == "родные":
+            self.l_apple.addWidget(line("Все проверенные детали родные", C["okdot"]))
+        elif pv.get("итог") == "ремонт":
+            for d in pv.get("детали", []):
+                if d["статус"] in ("used", "repaired"):
+                    self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["warn"]))
+        elif pv.get("итог") == "замена":
+            for d in pv.get("детали", []):
+                if d["статус"] == "bad":
+                    self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["bad"]))
+        cable_done = pv.get("итог") in ("родные", "ремонт", "замена")
         if hist:
             groups = {}
             for v in hist.values():
@@ -599,6 +612,10 @@ class ResultScreen(Screen):
                 self.l_apple.addWidget(label("Детали проверены по кабелю — см. сотрудника.", "pricenote", wrap=True))
             elif st == "формат не распознан":
                 self.l_apple.addWidget(line("Раздел открыт — сотрудник сверит его на экране телефона", C["warn"]))
+            elif cable_done:
+                self.l_apple.addWidget(label("Проверка деталей завершена по кабелю. Хотите увидеть ДАТЫ ремонтов — "
+                                             "откройте на телефоне «Об этом устройстве»; это не обязательно.",
+                                             "pricenote", wrap=True))
             else:
                 self.l_apple.addWidget(line("Раздел пока не открыт", C["warn"]))
                 self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве — "

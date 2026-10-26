@@ -2,7 +2,8 @@
 # Сборка киоска: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-hidden = ['pymobiledevice3.services.diagnostics', 'pymobiledevice3.services.syslog', 'pymobiledevice3.services.afc',
+hidden = ['pymobiledevice3.remote.userspace_tunnel', 'pymobiledevice3.remote.core_device.device_info', 'pmd_pytcp', 'pmd_pytcp.stack', 'pmd_pytcp.socket', 'pmd_pytcp.lib.interface_layer', 'pmd_pytcp.lib.io_backend', 
+          'pymobiledevice3.services.diagnostics', 'pymobiledevice3.services.syslog', 'pymobiledevice3.services.afc',
           'pymobiledevice3.services.mobile_config', 'google.auth.transport.requests', 'requests', 'rsa',
           'pintel_core.external.gsheet',
           'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown', 'httpx', 'qrcode', 'pintel_kiosk.app']

@@ -112,15 +112,19 @@ def test_node_absent_from_map_is_not_a_read_failure():
 
 
 def test_history_status_in_report():
+    # полный кабель: нераспознанный формат журнала — НЕ действие (вердикт деталей есть с кабеля)
     snap = _snap("iphone12_ios26_anon.snapshot.json")
     snap.pop("repair_history", None)
     snap["repair_history_meta"] = {"раздел_открыт": True, "формат": "не распознан"}
     rep = report_mod.build(snap)
-    assert rep["apple_история_статус"] == "формат не распознан" and any("этот формат iOS" in x for x in rep["сделать"])
+    assert rep["apple_история_статус"] == "формат не распознан"
+    assert rep["детали_вердикт"]["итог"] == "родные" and rep["итог"]["вердикт"] != "ПРОВЕРКА НЕПОЛНАЯ"
+    assert not any("этот формат iOS" in x for x in rep["сделать"])      # не дёргаем клиента зря
+    # модель без истории — честный статус, вердикт деталей всё равно с кабеля
     snap["root"]["ProductType"], snap["root"]["ProductVersion"] = "iPhone10,6", "16.7.10"
     snap["repair_history_meta"] = {}
     rep = report_mod.build(snap)
-    assert rep["apple_история_статус"] == "не поддерживается"
+    assert rep["apple_история_статус"] == "не поддерживается" and rep["детали_вердикт"]["итог"] == "родные"
 
 
 @pytest.mark.parametrize("probe,expect", [

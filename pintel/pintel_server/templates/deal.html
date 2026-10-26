@@ -20,7 +20,14 @@
 <div class="deal">
   <div class="main">
     <section class="sec span2">
-      <h2>Что говорит Apple — источник правды</h2>
+      {% set pv = rep.get('детали_вердикт') or {} %}
+      <h2>Подлинность деталей — проверено по кабелю</h2>
+      {% if pv.get('итог') == 'замена' %}<div class="tile bad"><b>Найдена замена детали</b><small>{% for d in pv.get('детали') if d['статус'] == 'bad' %}{{ d['деталь'] }}: {{ d['почему'] }}. {% endfor %}</small></div>
+      {% elif pv.get('итог') == 'ремонт' %}<div class="tile warn"><b>Деталь меняли</b><small>{% for d in pv.get('детали') if d['статус'] in ('used','repaired') %}{{ d['деталь'] }}: {{ d['почему'] }}. {% endfor %}</small></div>
+      {% elif pv.get('итог') == 'родные' %}<div class="tile ok"><b>Все проверенные детали родные</b><small>Привязка модулей к плате и заводская печать сошлись{% if not pv.get('каналы', {}).get('журнал') %} (вердикт с кабеля, журнал Apple не потребовался){% endif %}.</small></div>
+      {% else %}<div class="tile gray"><b>Деталей по кабелю подтвердить не удалось</b><small>См. сигналы ниже.</small></div>{% endif %}
+      {% if pv.get('детали') %}<div class="grid4" style="margin-top:6px">{% for d in pv.get('детали') if not d['деталь'].startswith('Записи') %}<div class="sig"><span>{{ d['деталь'] }}</span><span class="{{ 'bad' if d['статус']=='bad' else ('warn' if d['статус'] in ('used','repaired') else 'ok') }}">{{ {'ok':'родная','repaired':'меняли (ориг.)','used':'б/у','bad':'замена'}[d['статус']] }}</span></div>{% endfor %}</div>{% endif %}
+      <h2 style="margin-top:10px">История обслуживания Apple (даты)</h2>
       {% if hist %}
       <div class="grid3">
         {% for k, v in hist.items() %}

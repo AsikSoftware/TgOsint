@@ -114,8 +114,10 @@ class Pipeline(QThread):
             items, raw, waited = {}, "", 0
             self._step("apple", "done", hist_why)
         else:
-            secs = int(self.cfg.get("apple_history_seconds") or 90)
-            self._step("apple", "run", f"ждём один шаг на телефоне · {secs} с")
+            # Вердикт по деталям уже собран с кабеля (привязка + печать Apple). Журнал Apple —
+            # только обогащение датами, поэтому ждём коротко и не держим клиента.
+            secs = int(self.cfg.get("apple_history_seconds") or 45)
+            self._step("apple", "run", f"читаем историю Apple · {secs} с (не обязательно)")
             items, raw, waited = await listener.wait(
                 secs, keep_going=lambda: not (self.skip_apple.is_set() or self.cancel.is_set()),
                 on_tick=lambda s: self.step.emit(
@@ -127,7 +129,7 @@ class Pipeline(QThread):
             elif listener.state == "opened_unknown":
                 self._step("apple", "warn", "раздел открыт — проверит сотрудник")
             else:
-                self._step("apple", "warn", "пропущена" if self.skip_apple.is_set() else "раздел пока не открыт")
+                self._step("apple", "done", "вердикт по деталям готов с кабеля")
         snap["repair_history"], snap["repair_history_raw"] = items, raw
         meta = dict(getattr(listener, "meta", None) or {})
         meta.update({"статус": listener.state if hist_ok else "не поддерживается", "почему": hist_why})

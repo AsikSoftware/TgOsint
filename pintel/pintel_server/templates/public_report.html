@@ -7,9 +7,9 @@
   <img src="/static/logo.png" alt="Pintel" style="height:36px;width:auto;align-self:flex-start">
   <h1>{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}</h1>
   <div class="muted">Оценка №{{ ev.number }} от {{ ev.created_at|dt }}{% if ev.point %} · {{ ev.point.name }}{% endif %}</div>
-  <section class="sec"><h2>Цена выкупа на момент оценки</h2>
-    <div class="price" style="font-size:40px">{% if ev.verdict == 'ПРОБЛЕМНЫЙ' %}не принимаем{% elif ev.price_offer %}{{ ev.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</div>
-    <div class="note">{{ (rep.get('цена') or {}).get('основание') or '' }} Цена предварительная: сотрудник осматривает корпус и экран на месте.</div></section>
+  <section class="sec"><h2>Итог проверки</h2>
+    <div class="price" style="font-size:40px">{% if ev.verdict == 'ПРОБЛЕМНЫЙ' %}нужен сотрудник{% elif ev.verdict in ('ИДЕАЛ', 'ХОРОШИЙ') %}хорошее состояние{% else %}нужен осмотр{% endif %}</div>
+    <div class="note">Цену назовёт сотрудник после осмотра корпуса и экрана.{% if ev.verdict == 'ПРОБЛЕМНЫЙ' and (rep.get('итог') or {}).get('почему') %} {{ (rep.get('итог') or {}).get('почему') }}{% endif %}</div></section>
   <section class="sec"><h2>Батарея</h2>
     <div class="row" style="align-items:baseline"><span class="price" style="font-size:34px">{{ bat.get('здоровье_%') if bat.get('здоровье_%') is not none else '?' }} %</span><span class="muted">{{ bat.get('циклы') or '?' }} циклов</span></div></section>
   <section class="sec"><h2>Что говорит Apple</h2>

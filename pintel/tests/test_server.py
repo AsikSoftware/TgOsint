@@ -155,7 +155,8 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
     assert "Решение записано" in loc(r)
     assert "ВЫКУПЛЕНО" in asel.get("/queue").text.upper()
     pub = TestClient(app).get(f"/r/{public}")
-    assert pub.status_code == 200 and "iPhone 12" in pub.text and "75 000" in pub.text
+    assert pub.status_code == 200 and "iPhone 12" in pub.text
+    assert "Цену назовёт сотрудник" in pub.text and "75 000" not in pub.text   # цену клиенту не показываем
 
 
 def test_sickw_via_server_uses_db_cache(app, monkeypatch):

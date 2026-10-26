@@ -1,18 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Сборка киоска: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
 hidden = ['pymobiledevice3.remote.userspace_tunnel', 'pymobiledevice3.remote.core_device.device_info', 'pmd_pytcp', 'pmd_pytcp.stack', 'pmd_pytcp.socket', 'pmd_pytcp.lib.interface_layer', 'pmd_pytcp.lib.io_backend', 
           'pymobiledevice3.services.diagnostics', 'pymobiledevice3.services.syslog', 'pymobiledevice3.services.afc',
           'pymobiledevice3.services.mobile_config', 'google.auth.transport.requests', 'requests', 'rsa',
           'pintel_core.external.gsheet',
           'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown', 'httpx', 'qrcode', 'pintel_kiosk.app']
-datas = collect_data_files('pymobiledevice3') + [
+_pmd_datas, _pmd_bins, _pmd_hidden = collect_all('pmd_pytcp')
+_cd_datas, _cd_bins, _cd_hidden = collect_all('pymobiledevice3.remote')
+datas = collect_data_files('pymobiledevice3') + _pmd_datas + _cd_datas + [
     ('pintel_core/analysis/models.json', 'pintel_core/analysis'),
     ('pintel_kiosk/assets', 'pintel_kiosk/assets'),
 ]
 excludes = ['tkinter', 'matplotlib', 'av', 'jedi', 'IPython', 'parso', 'numpy', 'PIL', 'pillow', 'pandas', 'scipy',
-            'qh3', 'aiohttp', 'fastapi', 'uvicorn', 'starlette', 'sqlalchemy', 'alembic', 'pintel_server',
+            'aiohttp', 'fastapi', 'uvicorn', 'starlette', 'sqlalchemy', 'alembic', 'pintel_server',
             'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineQuick', 'PySide6.QtQml',
             'PySide6.QtQuick', 'PySide6.QtQuickWidgets', 'PySide6.QtQuickControls2', 'PySide6.Qt3DCore',
             'PySide6.Qt3DRender', 'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets', 'PySide6.QtPdf',
@@ -24,7 +26,7 @@ excludes = ['tkinter', 'matplotlib', 'av', 'jedi', 'IPython', 'parso', 'numpy', 
             'PySide6.QtUiTools', 'PySide6.QtXml', 'PySide6.QtNetworkAuth', 'PySide6.QtHttpServer', 'PySide6.QtSpatialAudio',
             'PySide6.QtStateMachine', 'PySide6.QtGraphs', 'PySide6.QtAsyncio', 'PySide6.QtConcurrent']
 
-a = Analysis(['kiosk_main.py'], pathex=['.'], binaries=[], datas=datas, hiddenimports=hidden, hookspath=[],
+a = Analysis(['kiosk_main.py'], pathex=['.'], binaries=_pmd_bins + _cd_bins, datas=datas, hiddenimports=hidden + _pmd_hidden + _cd_hidden, hookspath=[],
              runtime_hooks=[], excludes=excludes, noarchive=False)
 # хук PySide6 тащит весь Qt — выкидываем тяжёлые модули по имени файла
 heavy = ('WebEngine', 'Qml', 'Quick', 'Multimedia', 'Pdf', 'Charts', 'DataVisualization', '3D', 'Designer', 'Help',

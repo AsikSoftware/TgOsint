@@ -30,8 +30,13 @@ services:
     environment:
       PINTEL_DATABASE_URL: postgresql+psycopg://pintel:${POSTGRES_PASSWORD}@db:5432/pintel
       PINTEL_GSERVICE_JSON: /secrets/gservice.json
+      PINTEL_MEDIA_DIR: /media
     volumes:
       - ./secrets:/secrets:ro
+      - media:/media
+    # чтобы PINTEL_OCENKA_DB_URL мог смотреть на Postgres хоста (host.docker.internal)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8000:8000"
 
@@ -70,5 +75,6 @@ services:
 
 volumes:
   pgdata:
+  media:
   caddy_data:
   caddy_config:

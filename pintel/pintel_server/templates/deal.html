@@ -124,7 +124,10 @@
     {% if ev.ocenka_device_id %}
       <div class="tile ok"><b>Отправлено · сделка №{{ ev.ocenka_device_id }}</b><small>{{ ev.ocenka_imported_at|dt }}</small></div>
     {% else %}
-      <form method="post" action="/deal/{{ ev.id }}/import_ocenka"><button class="btn primary" type="submit" style="width:100%">Отправить в Оценку</button></form>
+      <form method="post" action="/deal/{{ ev.id }}/import_ocenka" style="display:flex;flex-direction:column;gap:8px">
+        <label class="chk"><input type="checkbox" name="panic_full" {{ 'checked' if ev.panic_full }}>Ошибка Panic full</label>
+        <button class="btn primary" type="submit" style="width:100%">Отправить в Оценку</button>
+      </form>
       <div class="note">Создаст сделку в Оценке (имя, телефон, фото/видео, статус «Ожидает оценку»). Нужны имя и телефон клиента.</div>
     {% endif %}
     <div style="height:1px;background:var(--border)"></div>

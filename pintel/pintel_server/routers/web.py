@@ -153,9 +153,12 @@ def media_file(media_id: int, user: User = Depends(require_staff), db: DbSession
 
 
 @router.post("/deal/{ev_id}/import_ocenka")
-def deal_import_ocenka(ev_id: int, user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
-    """Сотрудник отправляет готовую сделку в Pintel Оценку."""
+def deal_import_ocenka(ev_id: int, panic_full: Optional[str] = Form(None),
+                       user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """Сотрудник отправляет готовую сделку в Pintel Оценку. panic full ставит он же здесь."""
     ev = _get_eval(db, ev_id)
+    ev.panic_full = bool(panic_full)
+    db.commit()
     try:
         res = ocenka_import.import_evaluation(db, ev)
     except ocenka_import.ImportError_ as e:

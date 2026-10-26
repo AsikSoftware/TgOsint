@@ -20,6 +20,20 @@
 <div class="deal">
   <div class="main">
     <section class="sec span2">
+      <h2>Данные клиента и медиа</h2>
+      <div class="grid4">
+        <div class="kv"><span>Имя</span><span>{{ ev.client_name or '—' }}</span></div>
+        <div class="kv"><span>Телефон</span><span>{{ ev.client_phone or '—' }}</span></div>
+        <div class="kv"><span>Коробка</span><span>{{ 'да' if ev.has_box else ('нет' if ev.has_box is false else '—') }}</span></div>
+        <div class="kv"><span>Шнур</span><span>{{ 'да' if ev.has_cord else ('нет' if ev.has_cord is false else '—') }}</span></div>
+      </div>
+      {% if ev.media %}
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
+        {% for m in ev.media %}{% if m.kind == 'photo' %}<a href="/media/{{ m.id }}" target="_blank"><img src="/media/{{ m.id }}" alt="фото" style="height:120px;border-radius:10px;border:1px solid var(--border)"></a>{% else %}<a class="btn sm" href="/media/{{ m.id }}" target="_blank">🎬 видео</a>{% endif %}{% endfor %}
+      </div>
+      {% else %}<div class="note">Клиент ещё не прислал фото/видео и данные. Ссылка для клиента: <a href="/u/{{ ev.upload_token }}" target="_blank">страница данных</a> (та же, что по QR на киоске).</div>{% endif %}
+    </section>
+    <section class="sec span2">
       {% set pv = rep.get('детали_вердикт') or {} %}
       <h2>Подлинность деталей — проверено по кабелю</h2>
       {% if pv.get('итог') == 'замена' %}<div class="tile bad"><b>Найдена замена детали</b><small>{% for d in pv.get('детали') if d['статус'] == 'bad' %}{{ d['деталь'] }}: {{ d['почему'] }}. {% endfor %}</small></div>
@@ -104,6 +118,15 @@
     <h2>Выкуп</h2>
     <div class="kv"><span>{{ price.get('основание') or 'цены в прайсе нет' }}</span><span style="white-space:nowrap">{% if ev.price_offer %}{{ ev.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</span></div>
     {% if price.get('нехватка') %}<div class="note">{{ ' '.join(price.get('нехватка')) }}</div>{% endif %}
+    <div class="note">Цену называет сотрудник — на киоске она не показывается.</div>
+    <div style="height:1px;background:var(--border)"></div>
+    <h2>Pintel Оценка</h2>
+    {% if ev.ocenka_device_id %}
+      <div class="tile ok"><b>Отправлено · сделка №{{ ev.ocenka_device_id }}</b><small>{{ ev.ocenka_imported_at|dt }}</small></div>
+    {% else %}
+      <form method="post" action="/deal/{{ ev.id }}/import_ocenka"><button class="btn primary" type="submit" style="width:100%">Отправить в Оценку</button></form>
+      <div class="note">Создаст сделку в Оценке (имя, телефон, фото/видео, статус «Ожидает оценку»). Нужны имя и телефон клиента.</div>
+    {% endif %}
     <div style="height:1px;background:var(--border)"></div>
     {% if ev.status in ('bought', 'declined') %}
       <div class="tile {{ 'ok' if ev.status == 'bought' else 'bad' }}"><b>{{ ev.status_label }}{% if ev.final_price %} · {{ ev.final_price|money }} {{ settings.currency }}{% endif %}</b><small>{{ ev.decided_at|dt }} · {{ ev.decided_by.name if ev.decided_by else '' }}{% if ev.decision_note %}<br>{{ ev.decision_note }}{% endif %}</small></div>

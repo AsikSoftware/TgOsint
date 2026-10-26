@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session as DbSession
@@ -18,9 +18,10 @@ from ..auth import (authenticate, clear_cookie, create_session, current_user, ha
 from ..config import settings
 from ..db import get_db, now
 from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_ADMIN, ROLE_CASHIER, ROLES, ST_AT_COUNTER, ST_BOUGHT,
-                      ST_DECLINED, ST_IN_WORK, ST_NEW, STATUSES, AuditLog, Device, Evaluation, Kiosk, LoginEvent,
-                      Point, PriceGrid, User)
+                      ST_DECLINED, ST_IN_WORK, ST_NEW, STATUSES, AuditLog, Device, Evaluation, EvaluationMedia,
+                      Kiosk, LoginEvent, Point, PriceGrid, User)
 from ..services import evaluations as ev_service
+from ..services import ocenka_import
 from ..services import price as price_service
 from ..services import sickw_service
 
@@ -137,6 +138,34 @@ def deal(request: Request, ev_id: int, user: User = Depends(require_staff), db: 
 def deal_take(ev_id: int, user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
     ev_service.take(db, user, _get_eval(db, ev_id))
     return RedirectResponse(f"/deal/{ev_id}", 303)
+
+
+@router.get("/media/{media_id}")
+def media_file(media_id: int, user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """Отдать загруженное клиентом фото/видео сотруднику в кассе."""
+    m = db.get(EvaluationMedia, media_id)
+    if not m:
+        raise HTTPException(404, "файл не найден")
+    path = os.path.join(settings.media_dir, m.filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "файл отсутствует на диске")
+    return FileResponse(path, media_type=m.content_type or "application/octet-stream")
+
+
+@router.post("/deal/{ev_id}/import_ocenka")
+def deal_import_ocenka(ev_id: int, user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """Сотрудник отправляет готовую сделку в Pintel Оценку."""
+    ev = _get_eval(db, ev_id)
+    try:
+        res = ocenka_import.import_evaluation(db, ev)
+    except ocenka_import.ImportError_ as e:
+        return RedirectResponse(f"/deal/{ev_id}?e={e}", 303)
+    except Exception as e:                                       # noqa: BLE001
+        return RedirectResponse(f"/deal/{ev_id}?e=Оценка: {e}", 303)
+    audit.log(db, user, "evaluation.ocenka_import",
+              f"Оценка №{ev.number} → сделка Оценки №{res.get('device_id')}",
+              entity="evaluation", entity_id=ev.id, details=res)
+    return RedirectResponse(f"/deal/{ev_id}?m=Отправлено в Оценку №{res.get('device_id')}", 303)
 
 
 @router.post("/deal/{ev_id}/decide")

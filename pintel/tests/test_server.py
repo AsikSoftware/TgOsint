@@ -240,6 +240,30 @@ def test_kiosk_intake_server_entry_media_and_import(app, monkeypatch):
     assert r.status_code == 400 and "имя и телефон" in r.json()["detail"]
 
 
+def test_cashier_sees_client_data_media_and_import_button(app):
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/kiosks", data={"name": "Касса-киоск", "point_id": ""})
+    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
+    H = {"X-Kiosk-Token": token}
+    k = TestClient(app)
+    rep, snap = real_report()
+    resp = k.post("/api/kiosk/evaluations", json={"client_id": "cash-1", "report": rep, "snapshot": snap}, headers=H).json()
+    ev_id = resp["id"]
+    up_token = resp["ссылка_данных"].rsplit("/u/", 1)[1]
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    TestClient(app).post(f"/u/{up_token}", data={"client_name": "Пётр", "client_phone": "+77009998877"},
+                         files={"files": ("p.jpg", png, "image/jpeg")})
+
+    page = admin.get(f"/deal/{ev_id}").text
+    assert "Пётр" in page and "Отправить в Оценку" in page and f'src="/media/' in page
+    media_id = k.get(f"/api/kiosk/evaluations/{ev_id}/media", headers=H).json()["медиа"][0]["id"]
+    img = admin.get(f"/media/{media_id}")
+    assert img.status_code == 200 and img.content.startswith(b"\x89PNG")
+    # импорт выключен → редирект с понятной ошибкой
+    r = admin.post(f"/deal/{ev_id}/import_ocenka")
+    assert r.status_code == 303 and "выключен" in loc(r)
+
+
 def test_ocenka_import_field_mapping():
     """Маппинг полей оценки → поля сделки Оценки (без обращения к БД)."""
     from pintel_server.services import ocenka_import as oi

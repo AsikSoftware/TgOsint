@@ -62,13 +62,23 @@ python -m pytest tests -q -s
 python -m pintel_core.doctor fixtures
 ```
 
-## Сервер и касса
+## Как открыть кассу
 
-```
-pip install -e ".[server,test]"
-python -m pintel_server.cli create-admin --login admin --name "Руслан"
-python -m pintel_server.cli run            # http://localhost:8000, база pintel.db
-```
+Касса — это сайт, который отдаёт сервер Pintel. Два способа запустить сервер:
+
+1. **Одним файлом на обычном компьютере** (попробовать, одна точка):
+   распаковать `pintel-server` из Releases, рядом положить `gservice.json` и
+   `server.toml` (по образцу `server.example.toml`), двойной щелчок по
+   `pintel-server.exe` → пункт 2 «Создать администратора» → пункт 1
+   «Запустить кассу». Откроется браузер с `http://127.0.0.1:8000`; с других
+   компьютеров и телефонов сети — `http://<IP этого компьютера>:8000`
+   (Windows при первом запуске спросит разрешение брандмауэра — разрешить).
+   Окно сервера не закрывать. База — файл `pintel.db` рядом.
+2. **На VPS для всех точек** — `deploy/README.md` (docker compose,
+   PostgreSQL, ночные копии, HTTPS).
+
+Разработка: `pip install -e ".[server,test]"`, `python -m pintel_server.cli
+create-admin --login admin --name "Руслан"`, `python -m pintel_server.launcher run`.
 На VPS — `deploy/README.md` (docker compose: PostgreSQL, приложение, ночные
 копии, HTTPS). Роли: кассир (очередь, оформление по прайсу и ниже), старший
 (любая цена, настройки), администратор (сотрудники, киоски, точки).

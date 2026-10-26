@@ -71,6 +71,26 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist\pintel-doctor -DestinationPath pintel-doctor_Windows_x64.zip
 
+      - name: Сборка кассы (сервер одним файлом)
+        run: python -m PyInstaller --clean --noconfirm pintel-server.spec
+
+      - name: Дымовой тест кассы
+        shell: pwsh
+        run: |
+          Copy-Item server.example.toml dist\pintel-server\server.example.toml
+          Copy-Item deploy\README.md dist\pintel-server\README-VPS.md
+          $exe = 'dist\pintel-server\pintel-server.exe'
+          & $exe create-admin --login admin --name Admin --password admin123
+          if ($LASTEXITCODE -ne 0) { throw "create-admin упал" }
+          $p = Start-Process -FilePath $exe -ArgumentList 'run','--no-browser' -PassThru -WorkingDirectory 'dist\pintel-server'
+          Start-Sleep -Seconds 8
+          try { $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/healthz; Write-Host $r.Content }
+          finally { Stop-Process -Id $p.Id -Force }
+          if (-not $r -or $r.StatusCode -ne 200) { throw "касса не ответила на /healthz" }
+          $login = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/login -ErrorAction SilentlyContinue
+          Remove-Item dist\pintel-server\pintel.db -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist\pintel-server -DestinationPath pintel-server_Windows_x64.zip
+
       - name: Сборка киоска
         run: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
 
@@ -91,12 +111,16 @@ jobs:
         with:
           name: pintel-kiosk_Windows_x64
           path: pintel/pintel-kiosk_Windows_x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pintel-server_Windows_x64
+          path: pintel/pintel-server_Windows_x64.zip
 
       - name: Релиз
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip pintel-kiosk_Windows_x64.zip `
+          gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip pintel-kiosk_Windows_x64.zip pintel-server_Windows_x64.zip `
             --target $env:GITHUB_SHA --title "Pintel — сборка #${{ github.run_number }}" `
-            --notes "pintel-kiosk: киоск для клиента (kiosk.toml рядом: server, token). pintel-doctor: консольный врач (config.toml, gservice.json). Сервер разворачивается из pintel/deploy (docker compose)."
+            --notes "pintel-server: касса сотрудника одним файлом (server.toml, gservice.json рядом; пункт 2 — администратор, пункт 1 — запуск). pintel-kiosk: киоск для клиента (kiosk.toml: server, token). pintel-doctor: консольный врач. Для всех точек — VPS, pintel/deploy."

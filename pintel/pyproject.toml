@@ -33,7 +33,7 @@ test = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]
 pintel-doctor = "pintel_core.doctor:main"
-pintel-server = "pintel_server.cli:main"
+pintel-server = "pintel_server.launcher:main"
 pintel-kiosk = "pintel_kiosk.app:main"
 
 [tool.setuptools.packages.find]

@@ -1,0 +1,9 @@
+# Скопируйте в server.toml рядом с pintel-server.exe. Все поля необязательны.
+port = 8000                       # касса будет на http://<этот компьютер>:8000
+sickw_key = "ВАШ-КЛЮЧ-SICKW"      # чёрный список, Локатор, гарантия
+sickw_services = [61]
+gservice_json = "gservice.json"   # ключ сервис-аккаунта Google (лежит рядом)
+price_sheet_url = "https://docs.google.com/spreadsheets/d/1TJWXvVC9eBFhKW38mfRBUvOftSUrWL_LmzsR-VlF-ZA/edit?gid=1917713663"
+# public_url = "http://192.168.1.10:8000"   # адрес для QR на талоне; по умолчанию — IP этого компьютера
+tz = "Asia/Almaty"
+currency = "₸"

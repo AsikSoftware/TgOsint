@@ -8,6 +8,7 @@ os.environ["PINTEL_DATABASE_URL"] = f"sqlite:///{_TMP}/test.db"
 os.environ["PINTEL_SECRET_KEY"] = "test"
 os.environ["PINTEL_SICKW_KEY"] = "test-key"
 os.environ["PINTEL_PUBLIC_URL"] = "http://testserver"
+os.environ["PINTEL_MEDIA_DIR"] = f"{_TMP}/media"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -192,3 +193,65 @@ def test_employees_create_update_and_revoke(app):
     assert "самого себя" in loc(r)
     page = admin.get("/employees?show=logins").text
     assert "доступ отключён" in page and "Неудачная попытка" in page
+
+
+def test_kiosk_intake_details_media_and_import(app, monkeypatch):
+    """Новый флоу: ручные данные → загрузка фото по QR → импорт в Оценку."""
+    admin = client_for(app, "admin", "admin123")
+    admin.post("/settings/points", data={"name": "Интейк-город", "city": "Алматы"})
+    r = admin.post("/settings/kiosks", data={"name": "Интейк-киоск", "point_id": ""})
+    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
+    H = {"X-Kiosk-Token": token}
+    k = TestClient(app)
+    rep, snap = real_report()
+
+    # оценка + ручные данные
+    ev_id = k.post("/api/kiosk/evaluations", json={"client_id": "intake-1", "report": rep, "snapshot": snap},
+                   headers=H).json()["id"]
+    d = k.patch(f"/api/kiosk/evaluations/{ev_id}/details", headers=H, json={
+        "client_name": "Иван", "client_phone": "+77001234567",
+        "has_box": True, "has_cord": False, "panic_full": None}).json()
+    assert d["ссылка_загрузки"].startswith("http://testserver/u/") and d["токен_загрузки"]
+    up_token = d["токен_загрузки"]
+
+    db = SessionLocal(); ev = db.get(Evaluation, ev_id)
+    assert ev.client_name == "Иван" and ev.client_phone == "+77001234567"
+    assert ev.has_box is True and ev.has_cord is False
+    db.close()
+
+    # публичная страница загрузки + приём фото (без токена киоска)
+    pub = TestClient(app)
+    assert "iPhone 12" in pub.get(f"/u/{up_token}").text
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    r = pub.post(f"/u/{up_token}", files={"files": ("phone.jpg", png, "image/jpeg")})
+    assert r.status_code in (200, 303)
+    media = k.get(f"/api/kiosk/evaluations/{ev_id}/media", headers=H).json()["медиа"]
+    assert len(media) == 1 and media[0]["вид"] == "photo"
+
+    # импорт выключен (нет PINTEL_OCENKA_DB_URL) → понятная 400
+    r = k.post(f"/api/kiosk/evaluations/{ev_id}/import", headers=H)
+    assert r.status_code == 400 and "выключен" in r.json()["detail"]
+
+    # импорт включён, но у оценки без деталей — отказ по имени/телефону (до обращения к БД Оценки)
+    from pintel_server.config import settings as cfg
+    monkeypatch.setattr(cfg, "ocenka_db_url", "postgresql+psycopg://u:p@localhost/pintel_ocenka_test")
+    ev2 = k.post("/api/kiosk/evaluations", json={"client_id": "intake-2", "report": rep, "snapshot": snap},
+                 headers=H).json()["id"]
+    r = k.post(f"/api/kiosk/evaluations/{ev2}/import", headers=H)
+    assert r.status_code == 400 and "имя и телефон" in r.json()["detail"]
+
+
+def test_ocenka_import_field_mapping():
+    """Маппинг полей оценки → поля сделки Оценки (без обращения к БД)."""
+    from pintel_server.services import ocenka_import as oi
+    ev = Evaluation(
+        number=7, day="2026-10-26", imei="353915105357912", model_name="iPhone 12", model_code="iPhone13,2",
+        capacity_gb=128, battery_health=83, colour="чёрный", verdict="ХОРОШИЙ",
+        apple_summary="всё родное", locks_summary="чисто",
+        report={"детали_вердикт": {"итог": "родные"}, "паспорт": {"imei2": "353915105357999"}})
+    assert oi._phone_status(ev) == "Не был в ремонте"
+    ev.report = {"детали_вердикт": {"итог": "замена"}}
+    assert oi._phone_status(ev) == "Ранее был в ремонте"
+    imeis = oi._imeis(ev)
+    assert imeis[0][0] == "353915105357912" and imeis[0][2] is True   # основной IMEI первым
+    assert "Киоск №7" in oi._comment_ocenka(ev)

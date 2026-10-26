@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """Касса сотрудника: вход, очередь, карточка оценки, настройки, сотрудники и журнал."""
 import json
+import os
+import secrets
 from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, or_, select
@@ -15,13 +17,13 @@ from ..auth import (authenticate, clear_cookie, create_session, current_user, ha
                     require_admin, require_senior, require_staff, revoke_session, set_cookie, COOKIE)
 from ..config import settings
 from ..db import get_db, now
-from ..models import (ROLE_ADMIN, ROLE_CASHIER, ROLES, ST_AT_COUNTER, ST_BOUGHT, ST_DECLINED, ST_IN_WORK, ST_NEW,
-                      STATUSES, AuditLog, Device, Evaluation, Kiosk, LoginEvent, Point, PriceGrid, User)
+from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_ADMIN, ROLE_CASHIER, ROLES, ST_AT_COUNTER, ST_BOUGHT,
+                      ST_DECLINED, ST_IN_WORK, ST_NEW, STATUSES, AuditLog, Device, Evaluation, Kiosk, LoginEvent,
+                      Point, PriceGrid, User)
 from ..services import evaluations as ev_service
 from ..services import price as price_service
 from ..services import sickw_service
 
-import os
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates"))
 router = APIRouter()
 
@@ -161,6 +163,62 @@ def public_report(request: Request, token: str, db: DbSession = Depends(get_db))
     if not ev:
         raise HTTPException(404, "отчёт не найден")
     return render(request, "public_report.html", None, ev=ev, rep=ev.report or {})
+
+
+# ---------- загрузка фото/видео клиентом (QR с киоска) ----------
+
+_PHOTO_EXT = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".gif")
+_VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".3gp")
+
+
+def _media_kind(content_type: str | None, filename: str) -> str | None:
+    ct = (content_type or "").lower()
+    name = (filename or "").lower()
+    if ct.startswith("video") or name.endswith(_VIDEO_EXT):
+        return MEDIA_VIDEO
+    if ct.startswith("image") or name.endswith(_PHOTO_EXT):
+        return MEDIA_PHOTO
+    return None
+
+
+@router.get("/u/{token}", response_class=HTMLResponse)
+def upload_page(request: Request, token: str, db: DbSession = Depends(get_db)):
+    ev = db.scalar(select(Evaluation).where(Evaluation.upload_token == token))
+    if not ev:
+        raise HTTPException(404, "ссылка недействительна")
+    return render(request, "upload.html", None, ev=ev, media=ev_service.media_list(ev),
+                  imported=bool(ev.ocenka_device_id), max_files=settings.media_max_files,
+                  max_mb=settings.media_max_mb)
+
+
+@router.post("/u/{token}")
+async def upload_receive(request: Request, token: str, db: DbSession = Depends(get_db),
+                         files: list[UploadFile] = File(default=[])):
+    ev = db.scalar(select(Evaluation).where(Evaluation.upload_token == token))
+    if not ev:
+        raise HTTPException(404, "ссылка недействительна")
+    if ev.ocenka_device_id:                                    # сделка уже ушла в Оценку — не принимаем
+        return RedirectResponse(f"/u/{token}?m=imported", 303)
+
+    os.makedirs(settings.media_dir, exist_ok=True)
+    limit = settings.media_max_mb * 1024 * 1024
+    have = len(ev.media)
+    for up in files:
+        if have >= settings.media_max_files:
+            break
+        kind = _media_kind(up.content_type, up.filename or "")
+        if not kind:
+            continue
+        data = await up.read()
+        if not data or len(data) > limit:
+            continue
+        ext = os.path.splitext(up.filename or "")[1].lower()[:8] or (".mp4" if kind == MEDIA_VIDEO else ".jpg")
+        fname = f"{ev.id}_{secrets.token_hex(8)}{ext}"
+        with open(os.path.join(settings.media_dir, fname), "wb") as fh:
+            fh.write(data)
+        ev_service.add_media(db, ev, kind, fname, up.content_type, len(data))
+        have += 1
+    return RedirectResponse(f"/u/{token}?m=ok", 303)
 
 
 # ---------- настройки ----------

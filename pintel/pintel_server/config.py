@@ -28,6 +28,23 @@ class Settings:
     kiosk_return_seconds: int = int(os.environ.get("PINTEL_KIOSK_RETURN_SECONDS", "60"))
     apple_history_seconds: int = int(os.environ.get("PINTEL_APPLE_HISTORY_SECONDS", "90"))
 
+    # где лежат загруженные клиентом фото/видео (в Docker — том)
+    media_dir: str = os.environ.get("PINTEL_MEDIA_DIR", "media")
+    media_max_files: int = int(os.environ.get("PINTEL_MEDIA_MAX_FILES", "12"))
+    media_max_mb: int = int(os.environ.get("PINTEL_MEDIA_MAX_MB", "64"))
+
+    # --- импорт сделки в Pintel Оценка (тестовый контур) ---
+    # пусто = импорт выключен; наш сервер пишет в БД Оценки напрямую (тот же VPS).
+    ocenka_db_url: str = os.environ.get("PINTEL_OCENKA_DB_URL", "")
+    ocenka_bot_token: str = os.environ.get("PINTEL_OCENKA_BOT_TOKEN", "")   # для фото/видео → file_id
+    ocenka_media_chat: str = os.environ.get("PINTEL_OCENKA_MEDIA_CHAT", "")  # чат/канал-хранилище
+    ocenka_shop_litera: str = os.environ.get("PINTEL_OCENKA_SHOP_LITERA", "")
+    ocenka_status_id: int = int(os.environ.get("PINTEL_OCENKA_STATUS_ID", "2"))  # «Ожидает оценку»
+
+    @property
+    def ocenka_enabled(self):
+        return bool(self.ocenka_db_url)
+
     @property
     def secure_cookies(self):
         return self.public_url.startswith("https://")

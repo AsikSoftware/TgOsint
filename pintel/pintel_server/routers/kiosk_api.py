@@ -11,6 +11,7 @@ from ..config import settings
 from ..db import get_db, now
 from ..models import Evaluation, Kiosk
 from ..services import evaluations as ev_service
+from ..services import ocenka_import
 from ..services import price as price_service
 from ..services import sickw_service
 
@@ -37,9 +38,24 @@ class UpdateIn(BaseModel):
     snapshot_patch: dict | None = None
 
 
+class DetailsIn(BaseModel):
+    client_name: str | None = None
+    client_phone: str | None = None
+    has_box: bool | None = None
+    has_cord: bool | None = None
+    panic_full: bool | None = None
+
+
 class HeartbeatIn(BaseModel):
     version: str | None = None
     status: dict | None = None
+
+
+def _own(db, kiosk, ev_id):
+    ev = db.get(Evaluation, ev_id)
+    if not ev or ev.kiosk_id != kiosk.id:
+        raise HTTPException(404, "оценка не найдена")
+    return ev
 
 
 @router.get("/config")
@@ -100,6 +116,40 @@ def client_decision(ev_id: int, body: DecisionIn, kiosk: Kiosk = Depends(current
         raise HTTPException(400, "decision: sell | viewed")
     ev_service.client_decision(db, kiosk, ev, body.decision)
     return {"статус": ev.status}
+
+
+@router.patch("/evaluations/{ev_id}/details")
+def set_details(ev_id: int, body: DetailsIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Ручные данные с киоска: имя/телефон клиента, коробка/шнур/panic. Плюс ссылка на загрузку фото."""
+    ev = _own(db, kiosk, ev_id)
+    ev_service.set_client_details(db, kiosk, ev, name=body.client_name, phone=body.client_phone,
+                                  box=body.has_box, cord=body.has_cord, panic=body.panic_full)
+    ev_service.ensure_upload_token(db, ev)
+    return {"id": ev.id, "ссылка_загрузки": ev_service.upload_url(ev),
+            "токен_загрузки": ev.upload_token, "медиа": ev_service.media_list(ev)}
+
+
+@router.get("/evaluations/{ev_id}/media")
+def list_media(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Список загруженного клиентом по QR — киоск опрашивает, чтобы показать в меню."""
+    ev = _own(db, kiosk, ev_id)
+    return {"id": ev.id, "ссылка_загрузки": ev_service.upload_url(ev), "медиа": ev_service.media_list(ev)}
+
+
+@router.post("/evaluations/{ev_id}/import")
+def import_to_ocenka(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Отправить готовую сделку в Pintel Оценку (создаётся номер, уходит админам «Новая оценка»)."""
+    ev = _own(db, kiosk, ev_id)
+    try:
+        res = ocenka_import.import_evaluation(db, ev)
+    except ocenka_import.ImportError_ as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:                                       # noqa: BLE001
+        raise HTTPException(502, f"импорт в Оценку не удался: {e}")
+    audit.log(db, None, "evaluation.ocenka_import",
+              f"Оценка №{ev.number} → сделка Оценки №{res.get('device_id')}",
+              entity="evaluation", entity_id=ev.id, kiosk=kiosk, details=res)
+    return {"id": ev.id, "номер_сделки": res.get("device_id"), **res}
 
 
 @router.post("/heartbeat")

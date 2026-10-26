@@ -157,15 +157,46 @@ class Evaluation(Base):
     decision_note: Mapped[Optional[str]] = mapped_column(Text)
     decided_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime)
     decided_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    # данные, собираемые киоском вручную перед импортом в Оценку
+    client_name: Mapped[Optional[str]] = mapped_column(String(120))
+    client_phone: Mapped[Optional[str]] = mapped_column(String(20))
+    has_box: Mapped[Optional[bool]] = mapped_column(Boolean)
+    has_cord: Mapped[Optional[bool]] = mapped_column(Boolean)
+    panic_full: Mapped[Optional[bool]] = mapped_column(Boolean)
+    # загрузка фото/видео клиентом по QR
+    upload_token: Mapped[Optional[str]] = mapped_column(String(32), unique=True)
+    # результат импорта в Pintel Оценка
+    ocenka_device_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    ocenka_imported_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime)
     kiosk: Mapped[Optional[Kiosk]] = relationship()
     point: Mapped[Optional[Point]] = relationship()
     device: Mapped[Optional[Device]] = relationship()
     assigned_user: Mapped[Optional[User]] = relationship(foreign_keys=[assigned_user_id])
     decided_by: Mapped[Optional[User]] = relationship(foreign_keys=[decided_by_id])
+    media: Mapped[list["EvaluationMedia"]] = relationship(
+        back_populates="evaluation", cascade="all, delete-orphan", order_by="EvaluationMedia.id")
 
     @property
     def status_label(self):
         return STATUSES.get(self.status, self.status)
+
+
+# виды медиа, которые грузит клиент
+MEDIA_PHOTO, MEDIA_VIDEO = "photo", "video"
+
+
+class EvaluationMedia(Base):
+    """Фото/видео телефона, загруженные клиентом по временной ссылке (QR)."""
+    __tablename__ = "evaluation_media"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    eval_id: Mapped[int] = mapped_column(ForeignKey("evaluations.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(8), default=MEDIA_PHOTO)   # photo | video
+    filename: Mapped[str] = mapped_column(String(160))                  # имя файла на диске сервера
+    content_type: Mapped[Optional[str]] = mapped_column(String(80))
+    size: Mapped[Optional[int]] = mapped_column(Integer)
+    uploaded_at: Mapped[datetime] = mapped_column(TZDateTime, default=now)
+    tg_file_id: Mapped[Optional[str]] = mapped_column(String(200))      # появляется после импорта в Оценку
+    evaluation: Mapped[Evaluation] = relationship(back_populates="media")
 
 
 class PriceGrid(Base):

@@ -9,8 +9,8 @@ from sqlalchemy import func, select
 from .. import audit
 from ..config import settings
 from ..db import now
-from ..models import (ROLE_CASHIER, ST_AT_COUNTER, ST_BOUGHT, ST_DECLINED, ST_IN_WORK, ST_NEW, ST_VIEWED,
-                      Device, Evaluation)
+from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_CASHIER, ST_AT_COUNTER, ST_BOUGHT, ST_DECLINED,
+                      ST_IN_WORK, ST_NEW, ST_VIEWED, Device, Evaluation, EvaluationMedia)
 
 
 def local_day(dt=None) -> str:
@@ -167,6 +167,50 @@ def decide(db, user, ev: Evaluation, kind: str, final_price, note: str = "", ins
     audit.log(db, user, "evaluation." + kind, what, entity="evaluation", entity_id=ev.id,
               details={"до": before, "после": {"статус": kind, "цена": ev.final_price}, "осмотр": inspection})
     db.commit()
+
+
+def set_client_details(db, kiosk, ev: Evaluation, *, name=None, phone=None,
+                       box=None, cord=None, panic=None) -> Evaluation:
+    """Киоск дослал ручные данные: имя/телефон клиента, коробка/шнур/panic."""
+    if ev.kiosk_id != kiosk.id:
+        raise PermissionError("оценка другого киоска")
+    if name is not None:
+        ev.client_name = (name.strip()[:120] or None)
+    if phone is not None:
+        ev.client_phone = (phone.strip()[:20] or None)
+    if box is not None:
+        ev.has_box = box
+    if cord is not None:
+        ev.has_cord = cord
+    if panic is not None:
+        ev.panic_full = panic
+    db.commit()
+    return ev
+
+
+def ensure_upload_token(db, ev: Evaluation) -> str:
+    """Токен для временной ссылки загрузки фото/видео (QR). Создаём лениво."""
+    if not ev.upload_token:
+        ev.upload_token = secrets.token_urlsafe(12)[:32]
+        db.commit()
+    return ev.upload_token
+
+
+def upload_url(ev: Evaluation) -> str | None:
+    return f"{settings.public_url}/u/{ev.upload_token}" if ev.upload_token else None
+
+
+def media_list(ev: Evaluation) -> list[dict]:
+    return [{"id": m.id, "вид": m.kind, "имя": m.filename, "тип": m.content_type,
+             "размер": m.size, "загружено": local_time(m.uploaded_at)} for m in ev.media]
+
+
+def add_media(db, ev: Evaluation, kind: str, filename: str, content_type=None, size=None) -> EvaluationMedia:
+    m = EvaluationMedia(eval_id=ev.id, kind=kind, filename=filename,
+                        content_type=(content_type or "")[:80], size=size)
+    db.add(m)
+    db.commit()
+    return m
 
 
 def day_stats(db, day, point_id=None):

@@ -45,8 +45,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Зависимости
-        run: python -m pip install --quiet -e ".[kiosk,test]" pyinstaller
+      - name: Зависимости (ядро + сервер + киоск)
+        run: python -m pip install --quiet -e ".[server,kiosk,test]" pyinstaller
 
       - name: Тесты ядра (архивные слепки — регрессия)
         run: python -m pytest tests -q -s --ignore=tests/test_server.py

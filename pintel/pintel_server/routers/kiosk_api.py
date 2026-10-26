@@ -32,6 +32,11 @@ class DecisionIn(BaseModel):
     decision: str          # sell | viewed
 
 
+class UpdateIn(BaseModel):
+    report: dict
+    snapshot_patch: dict | None = None
+
+
 class HeartbeatIn(BaseModel):
     version: str | None = None
     status: dict | None = None
@@ -75,6 +80,15 @@ def create_evaluation(body: EvaluationIn, kiosk: Kiosk = Depends(current_kiosk),
     return {"id": ev.id, "номер": ev.number, "день": ev.day, "создана": created,
             "статус": ev.status, "ссылка_отчёта": f"{settings.public_url}/r/{ev.public_token}",
             "уже_приносили": bool(ev.device and ev.device.evaluations_count > 1)}
+
+
+@router.patch("/evaluations/{ev_id}")
+def update_evaluation(ev_id: int, body: UpdateIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    ev = db.get(Evaluation, ev_id)
+    if not ev or ev.kiosk_id != kiosk.id:
+        raise HTTPException(404, "оценка не найдена")
+    ev_service.update_from_kiosk(db, kiosk, ev, body.report, body.snapshot_patch)
+    return {"id": ev.id, "статус": ev.status, "apple": ev.apple_summary}
 
 
 @router.post("/evaluations/{ev_id}/decision")

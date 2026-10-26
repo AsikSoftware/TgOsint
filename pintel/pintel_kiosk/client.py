@@ -82,6 +82,10 @@ class Client:
             return None
         return res
 
+    def update_evaluation(self, ev_id, report, snapshot_patch=None):
+        return self._req("PATCH", f"/api/kiosk/evaluations/{ev_id}",
+                         json={"report": report, "snapshot_patch": snapshot_patch}, timeout=60)
+
     def decision(self, ev_id, kind):
         return self._req("POST", f"/api/kiosk/evaluations/{ev_id}/decision", json={"decision": kind})
 

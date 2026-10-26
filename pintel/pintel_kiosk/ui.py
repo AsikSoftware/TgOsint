@@ -2,8 +2,8 @@
 """Экраны киоска по утверждённому макету (1920×1080, масштабируется)."""
 import os
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPixmap
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout,
                                QWidget)
 
@@ -22,8 +22,10 @@ QLabel#lead { font-size: 30px; font-weight: 500; color: %(body)s; }
 QLabel#muted { font-size: 20px; font-weight: 600; color: %(muted)s; }
 QLabel#step { font-size: 26px; font-weight: 600; }
 QLabel#num { background: %(primary)s; color: white; border-radius: 28px; min-width: 56px; max-width: 56px; min-height: 56px; max-height: 56px; font-family: "Montserrat"; font-size: 26px; font-weight: 800; }
-QFrame#phonebox { background: %(bg)s; border-radius: 48px; }
-QLabel#phonecap { font-size: 22px; font-weight: 700; color: %(primary)s; }
+QLabel#cardkicker { font-size: 20px; font-weight: 700; color: %(pale)s; letter-spacing: 3px; background: transparent; }
+QLabel#cardtitle { font-family: "Montserrat"; font-size: 44px; font-weight: 800; color: white; background: transparent; }
+QLabel#cardtext { font-size: 24px; font-weight: 600; color: #DCE8F5; background: transparent; }
+QLabel#cardstatus { font-size: 22px; font-weight: 700; color: white; background: transparent; }
 QFrame#row { background: %(bg)s; border-radius: 20px; }
 QFrame#row_active { background: %(light)s; border: 2px solid %(primary)s; border-radius: 20px; }
 QLabel#rowtitle { font-size: 24px; font-weight: 700; }
@@ -148,19 +150,8 @@ class MainScreen(Screen):
             left.addLayout(r)
         left.addStretch(1)
         body.addLayout(left, 1)
-        box = QFrame()
-        box.setObjectName("phonebox")
-        box.setFixedSize(640, 640)
-        bl = QVBoxLayout(box)
-        bl.setContentsMargins(40, 40, 40, 36)
-        art = QLabel()
-        art.setPixmap(phone_pixmap())
-        art.setAlignment(Qt.AlignCenter)
-        bl.addWidget(art, 1)
-        cap = label("Кабель Lightning и USB‑C — здесь", "phonecap")
-        cap.setAlignment(Qt.AlignCenter)
-        bl.addWidget(cap)
-        body.addWidget(box, 0, Qt.AlignVCenter)
+        self.card = ConnectCard()
+        body.addWidget(self.card, 0, Qt.AlignVCenter)
         self.root.addLayout(body, 1)
         foot = QHBoxLayout()
         foot.addWidget(label("Телефон остаётся у вас. Ничего не устанавливаем, данные читаем только с вашего согласия.", "footer"))
@@ -172,6 +163,108 @@ class MainScreen(Screen):
     def set_status(self, text, ok=True):
         self.status.setText(("● " if ok else "○ ") + text)
         self.status.setStyleSheet(f"color: {C['okdot'] if ok else C['bad']}; font-size: 20px; font-weight: 600;")
+
+    def set_device(self, state):
+        """wait | found | nodriver — состояние правой карточки."""
+        self.card.set_state(state)
+
+
+class ConnectCard(QFrame):
+    """Правая часть экрана ожидания: тёмно-синяя карточка с кабелем и живым статусом."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(640, 640)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(52, 48, 52, 44)
+        lay.setSpacing(16)
+        self.kicker = label("ШАГ 1 ИЗ 3", "cardkicker")
+        self.title = label("Подключите телефон кабелем", "cardtitle", wrap=True)
+        lay.addWidget(self.kicker)
+        lay.addWidget(self.title)
+        self.art = QLabel()
+        self.art.setPixmap(cable_pixmap())
+        self.art.setAlignment(Qt.AlignCenter)
+        self.art.setStyleSheet("background: transparent;")
+        lay.addWidget(self.art, 1)
+        self.text = label("Кабели Lightning и USB‑C — справа от экрана. Телефон остаётся у вас в руках.", "cardtext", wrap=True)
+        lay.addWidget(self.text)
+        self.status = label("●  ждём подключения", "cardstatus")
+        lay.addWidget(self.status)
+        self._blink = QTimer(self)
+        self._blink.setInterval(700)
+        self._blink.timeout.connect(self._tick)
+        self._blink.start()
+        self._on = True
+        self.state = "wait"
+
+    def _tick(self):
+        if self.state != "wait":
+            return
+        self._on = not self._on
+        self.status.setText(("●" if self._on else "○") + "  ждём подключения")
+
+    def set_state(self, state):
+        """wait | found | nodriver"""
+        self.state = state
+        if state == "found":
+            self.kicker.setText("ШАГ 2 ИЗ 3")
+            self.title.setText("Телефон найден")
+            self.text.setText("Разблокируйте его и нажмите «Доверять» на экране телефона.")
+            self.status.setText("●  подключён")
+        elif state == "nodriver":
+            self.kicker.setText("ТЕХНИЧЕСКАЯ ПАУЗА")
+            self.title.setText("Киоск временно не принимает")
+            self.text.setText("Подойдите к сотруднику — он проверит телефон на кассе.")
+            self.status.setText("○  нет связи с кабелем")
+        else:
+            self.kicker.setText("ШАГ 1 ИЗ 3")
+            self.title.setText("Подключите телефон кабелем")
+            self.text.setText("Кабели Lightning и USB‑C — справа от экрана. Телефон остаётся у вас в руках.")
+            self.status.setText("●  ждём подключения")
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        g = QLinearGradient(0, 0, 0, self.height())
+        g.setColorAt(0, QColor("#1F5FB0"))
+        g.setColorAt(1, QColor("#123C74"))
+        p.setPen(Qt.NoPen)
+        p.setBrush(g)
+        p.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 48, 48)
+        p.end()
+        super().paintEvent(e)
+
+
+def cable_pixmap(size=300):
+    """Разъём и кабель — тонкими белыми линиями, без мультяшности."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    white = QColor(255, 255, 255)
+    pen = QPen(white, 9, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(QColor(255, 255, 255, 28))
+    cx = size / 2
+    # штекер
+    p.drawRoundedRect(QRectF(cx - 46, 36, 92, 44), 22, 22)
+    # корпус разъёма
+    p.drawRoundedRect(QRectF(cx - 62, 80, 124, 96), 26, 26)
+    # хвост кабеля — плавная кривая вниз
+    path = QPainterPath()
+    path.moveTo(cx, 176)
+    path.cubicTo(cx, 240, cx - 110, 230, cx - 110, size - 20)
+    p.setBrush(Qt.NoBrush)
+    p.drawPath(path)
+    # контакты штекера
+    pen2 = QPen(QColor(255, 255, 255, 170), 5, Qt.SolidLine, Qt.RoundCap)
+    p.setPen(pen2)
+    for dx in (-18, 0, 18):
+        p.drawLine(int(cx + dx), 48, int(cx + dx), 68)
+    p.end()
+    return pm
 
 
 def phone_pixmap():
@@ -493,7 +586,10 @@ class ResultScreen(Screen):
                 shown += 1
             self.l_apple.addWidget(label("Из раздела «Запчасти и история обслуживания» вашего телефона", "muted"))
         else:
-            self.l_apple.addWidget(line("Раздел не был открыт — сотрудник может проверить на кассе", C["warn"]))
+            self.l_apple.addWidget(line("Раздел пока не открыт", C["warn"]))
+            self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве → "
+                                         "«Запчасти и история обслуживания» — данные появятся здесь сами.",
+                                         "pricenote", wrap=True))
         # блокировки
         clear_layout(self.l_locks)
         self.l_locks.addWidget(label("БЛОКИРОВКИ И БАЗЫ", "kicker"))

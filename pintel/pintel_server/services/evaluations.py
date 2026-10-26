@@ -98,6 +98,30 @@ def create_from_kiosk(db, kiosk, payload: dict) -> tuple[Evaluation, bool]:
     return ev, True
 
 
+def update_from_kiosk(db, kiosk, ev: Evaluation, report: dict, snapshot_patch: dict | None = None) -> Evaluation:
+    """Киоск дослал уточнённый отчёт (обычно — историю Apple, открытую позже).
+    Решение кассы не трогаем: обновляются только данные телефона."""
+    if ev.kiosk_id != kiosk.id:
+        raise PermissionError("оценка другого киоска")
+    rep = report or {}
+    ev.report = rep
+    if snapshot_patch and isinstance(ev.snapshot, dict):
+        ev.snapshot = {**ev.snapshot, **snapshot_patch}
+    elif snapshot_patch:
+        ev.snapshot = snapshot_patch
+    ev.apple_summary = apple_summary(rep)[:120]
+    ev.locks_summary = locks_summary(rep)[:120]
+    ev.verdict = (rep.get("итог") or {}).get("вердикт") or ev.verdict
+    price = rep.get("цена") or {}
+    if price.get("цена") and ev.status not in (ST_BOUGHT, ST_DECLINED):
+        ev.price_offer = price.get("цена")
+        ev.price_column = price.get("основание")
+    audit.log(db, None, "evaluation.update", f"Оценка №{ev.number}: данные обновлены с киоска ({ev.apple_summary})",
+              entity="evaluation", entity_id=ev.id, kiosk=kiosk)
+    db.commit()
+    return ev
+
+
 def client_decision(db, kiosk, ev: Evaluation, decision: str):
     ev.status = ST_AT_COUNTER if decision == "sell" else ST_VIEWED
     audit.log(db, None, "evaluation.client",

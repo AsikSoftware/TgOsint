@@ -116,10 +116,16 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
     assert r3["номер"] == 2 and r3["уже_приносили"] is True
     assert k.post(f"/api/kiosk/evaluations/{r1['id']}/decision", json={"decision": "sell"}, headers=H).json()["статус"] == "at_counter"
     assert k.post("/api/kiosk/heartbeat", json={"version": "1.0", "status": {"драйвер": True}}, headers=H).json()["ok"]
+    # история Apple пришла позже — киоск досылает отчёт
+    rep2 = dict(rep); rep2["apple_история"] = {"Display": {"деталь": "Экран", "код": 1025, "меняли": True, "бу": False, "дата": ""}}
+    r = k.patch(f"/api/kiosk/evaluations/{r1['id']}", json={"report": rep2, "snapshot_patch": {"repair_history": rep2["apple_история"]}}, headers=H)
+    assert r.status_code == 200 and r.json()["apple"] == "менялось: Экран"
+    assert k.patch("/api/kiosk/evaluations/999", json={"report": rep2}, headers=H).status_code == 404
 
     db = SessionLocal()
     ev = db.get(Evaluation, r1["id"])
-    assert ev.model_name == "iPhone 12" and ev.battery_health == 78 and ev.price_offer == 75000 and ev.apple_summary == "всё родное"
+    assert ev.model_name == "iPhone 12" and ev.battery_health == 78 and ev.price_offer == 75000 and ev.apple_summary == "менялось: Экран"
+    assert ev.snapshot["repair_history"]["Display"]["меняли"] is True
     assert ev.locks_summary == "Найти iPhone вкл." and ev.point_id == 1 and ev.snapshot["root"]["ProductType"] == "iPhone13,2"
     dev = db.scalar(select(Device).where(Device.serial == ev.serial))
     assert dev.evaluations_count == 2

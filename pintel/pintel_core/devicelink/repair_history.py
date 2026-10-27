@@ -69,8 +69,10 @@ def supported(product_type, ios_version):
 #   mobilerepaird: Display failed preflight    явный отказ по детали
 #   component: X isComponentRepairedUsingRCHL|FDR|CAA: 1   ремонт Apple по этой детали
 #   Battery Health State{ IOPSBatteryHealthServiceState = 1 }  аккумулятор требует обслуживания (износ, не замена)
-# AuthCP Components (isTrusted) тоже коррелирует, но на одном аппарате его смысл
-# подтвердить нельзя — пишем в метаданные для разбора, вердикт по нему не строим.
+#   AuthCP Components { ComponentName = TouchController; isTrusted = 0 }  модуль не доверенный
+#      Второй источник того же вердикта, сверен на тех же двух аппаратах: у 15 Pro дисплей
+#      пришёл с isTrusted = 0, у чистого 14 Pro — с 1, при AuthPassed = 1 у обоих. Держим как
+#      страховку: если на другой iOS не окажется строк systemhealth, вердикт даст это.
 SYSHEALTH_RE = re.compile(r"systemhealth \{(.*?)\n\}", re.S)
 REPAIRED_RE = re.compile(r"component: (\w+) isComponentRepairedUsing(\w+): (\d)")
 PREFLIGHT_RE = re.compile(r"\b(\w+) failed preflight")

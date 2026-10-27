@@ -426,3 +426,23 @@ def test_unknown_dictionary_needs_two_known_parts():
             '    hits = 12;\n    misses = "-1";\n}\n')
     lst = _прогнать([мимо])
     assert not lst.items and not (lst.meta.get("формат") or "")
+
+
+def test_trust_failure_is_caught_whatever_the_word_order():
+    """Живого аппарата на iOS 15–17 нет, порядок слов в строке мы не знаем. Отказ обязан
+    читаться и когда деталь стоит после маркера — иначе формат «почти угадали» молчит."""
+    for строка in ("Oct 27 10:00:01 iPhone mobilerepaird[1] <Notice>: Display isTrustedForUI: 0",
+                   "Oct 27 10:00:01 iPhone mobilerepaird[1] <Notice>: isTrustedForUI = 0 for Display",
+                   "Oct 27 10:00:01 iPhone mobilerepaird[1] <Notice>: component Display: isTrustedForUI failed"):
+        comp = rh.parse_components(строка + "\n")
+        assert comp["детали"].get("Display", {}).get("неизвестная"), строка
+
+
+def test_trust_failure_without_a_clear_part_is_not_attributed():
+    """Если деталей в строке несколько или ни одной — вердикт не ставим: приписать отказ
+    не той детали хуже, чем не прочитать его вовсе. Строку сохраняем для разбора."""
+    двусмысленно = ("Oct 27 10:00:01 iPhone mobilerepaird[1] <Notice>: "
+                    "Battery and Display: isTrustedForUI failed\n")
+    comp = rh.parse_components(двусмысленно)
+    assert not comp.get("детали")
+    assert comp.get("доверие_без_детали")

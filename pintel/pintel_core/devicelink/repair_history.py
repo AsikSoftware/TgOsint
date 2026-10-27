@@ -105,6 +105,12 @@ BATTERY_STATE_RE = re.compile(r"Battery Health State\{(.*?)\n\}", re.S)
 # на этих версиях отказ по детали приходит именно так. «missing» вердиктом НЕ считаем:
 # это внутреннее «ключа нет», а не «деталь не наша».
 TRUST_LINE_RE = re.compile(r"\b(\w+)\s+isTrustedForUI(?::\s*(\w+)|\s+(failed))")
+# Живого аппарата на iOS 15–17 у нас нет, поэтому порядок слов в строке мы знаем только из
+# формата «isTrustedForUI: %@» — а что стоит ПЕРЕД ним, прошивка не говорит. Чтобы отказ не
+# прошёл мимо из-за порядка слов, ловим его отдельно и имя детали ищем в любом месте строки.
+# Если деталей в строке несколько или ни одной — вердикт не ставим: приписать отказ не к той
+# детали хуже, чем не прочитать его вовсе.
+TRUST_FAIL_RE = re.compile(r"isTrustedForUI(?:\s*[:=]\s*(?:0|false|no)\b|\s+failed)", re.I)
 # Страховка на будущие версии. Apple уже трижды меняла слова (iOS 16 — systemhealth,
 # 18 — delta components, 26 — isComponentRepairedUsing), и каждый раз мы узнавали об этом
 # по живому аппарату. Форма при этом не менялась: процесс CoreRepair печатает блок
@@ -310,6 +316,15 @@ def parse_components(text):
         if key in HEALTH_PARTS or name in HEALTH_PARTS:
             плохо = bool(fail) or str(val).strip().lower() in ("0", "false", "no")
             out["доверие"].setdefault(key, {})["isTrustedForUI"] = 0 if плохо else 1
+    for строка in text.splitlines():
+        if not TRUST_FAIL_RE.search(строка):
+            continue
+        названные = {part(k) for k in list(HEALTH_PARTS) + list(COMPONENT_ALIAS)
+                     if re.search(rf"\b{k}\b", строка)}
+        if len(названные) == 1:
+            out["доверие"].setdefault(названные.pop(), {})["isTrustedForUI"] = 0
+        else:
+            out.setdefault("доверие_без_детали", []).append(строка.strip()[-120:])
     # Доверие к модулю — второй источник того же вердикта. Смысл подтверждён на двух эталонах:
     # у 15 Pro с «Неизвестно» на экране TouchController (это дисплей) пришёл с isTrusted = 0,
     # у чистого 14 Pro — с 1, при AuthPassed = 1 у обоих (значит дело не в самой проверке подписи).
@@ -322,7 +337,10 @@ def parse_components(text):
     if m:
         out["аккумулятор"] = {k: int(v) for k, v in _KV_RE.findall(m.group(1))}
     return out if any(out.get(k) for k in ("детали", "здоровье", "ремонты", "преflight",
-                                           "аккумулятор", "здоровье_по_форме")) else {}
+                                           "аккумулятор", "здоровье_по_форме",
+                                           # строку, которую не смогли приписать детали, тоже
+                                           # возвращаем: она уедет в эталон и поможет разобрать
+                                           "доверие_без_детали")) else {}
 
 
 class Listener:

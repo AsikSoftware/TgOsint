@@ -97,15 +97,21 @@ def test_compare_wants_raw_log_when_section_was_opened():
 
 
 def test_bundle_roundtrip(tmp_path):
+    """Эталон хранит сырой журнал, и при загрузке он разбирается заново текущим кодом:
+    так регрессия разбора ломает тест, а не прячется за сохранённым выводом."""
     snap = _snap("iphone12_ios26_anon.snapshot.json")
     rep = report_mod.build(snap)
     truth = reference.truth_template(детали={"Display": "unknown"}, кто="Данияр")
+    raw = ("Oct 27 06:59:05 iPhone Preferences(CoreRepairKit)[1] <Notice>: systemhealth {\n"
+           "    Battery = 1;\n    Display = \"-1\";\n    FaceID = 1;\n}\n")
     path = reference.save_bundle(str(tmp_path / reference.bundle_name(rep)), snap, rep, truth,
-                                 raw="строки журнала", mismatches=["Дисплей: расхождение"], dumps=snapshot.dumps)
+                                 raw=raw, mismatches=["Дисплей: расхождение"], dumps=snapshot.dumps)
     assert os.path.basename(path).startswith("эталон_iPhone-12_iOS26.6.1_")
     snap2, truth2 = reference.load_bundle(path, loads=snapshot.loads)
     assert truth2["детали"] == {"Display": "unknown"} and truth2["кто"] == "Данияр"
-    assert report_mod.build(snap2)["итог"] == rep["итог"]
+    hist = snap2["repair_history"]                        # журнал разобран заново
+    assert hist["Display"]["неизвестная"] and not hist["Battery"]["меняли"]
+    assert reference.compare(report_mod.build(snap2), truth2) == []
 
 
 @pytest.mark.skipif(not ETALONS, reason="эталонов пока нет: соберите «pintel-doctor reference» на живых аппаратах")

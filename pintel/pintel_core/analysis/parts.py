@@ -28,7 +28,10 @@ PART_RU = {"FaceID": "Face ID", "Display": "Экран", "Camera": "Камера
 # Третий элемент — наш статус детали: bad (СТОП) > used > repaired > ok.
 APPLE_STATES = {
     "genuine":    ("Оригинальная запасная часть", "на экране: «Оригинальная запасная часть» / «Оригинал»", "ok"),
-    "serviced":   ("Сервисное обслуживание", "деталь меняли в сервисе Apple (iOS 26 пишет так)", "repaired"),
+    # На iPhone 15 Pro (эталон) «Сервисное обслуживание» у аккумулятора означало износ,
+    # а не замену: телефон писал IOPSBatteryHealthServiceState = 1, а саму деталь считал
+    # оригинальной. Автоматика эти случаи различает; при ручной отметке держим строже.
+    "serviced":   ("Сервисное обслуживание", "у аккумулятора это обычно износ, у других деталей — ремонт", "repaired"),
     "used":       ("Запасная часть использовалась", "деталь уже стояла в другом iPhone", "used"),
     "unverified": ("Непроверенная запасная часть", "плату уже ставили в другой iPhone; Apple Pay может не работать", "bad"),
     "unknown":    ("Неизвестная запасная часть", "на экране: «Неизвестная запасная часть» / «Неизвестно»", "bad"),
@@ -59,7 +62,8 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
         rank = {"bad": 3, "used": 2, "repaired": 1, "ok": 0}
         cur = parts.get(key)
         if cur is None or rank[status] > rank[cur["статус"]]:
-            parts[key] = {"деталь": PART_RU.get(key, key), "статус": status, "почему": why, "источник": source}
+            parts[key] = {"ключ": key, "деталь": PART_RU.get(key, key), "статус": status,
+                          "почему": why, "источник": source}
 
     had_cable = False
     # Канал 1: привязка модулей
@@ -94,7 +98,8 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
     for comp, h in (hist or {}).items():
         if comp == "RepairRecords":
             had_log = True
-            parts.setdefault("_records", {"деталь": "Записи о ремонте Apple", "статус": "repaired",
+            parts.setdefault("_records", {"ключ": "_records", "деталь": "Записи о ремонте Apple",
+                                          "статус": "repaired",
                                           "почему": "у Apple есть записи — подробности на экране телефона",
                                           "источник": "журнал Apple"})
             continue
@@ -115,8 +120,11 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
     # не считаются: на демо они были нулевыми при «неизвестной» детали на экране телефона.
     meta = hist_meta or {}
     fmt = str(meta.get("формат") or "")
-    apple_ok = bool(hist) and (fmt.startswith("сверка") or meta.get("дельта") is not None
-                               or any(str(h.get("источник") or "").startswith("сверка") for h in hist.values()))
+    apple_ok = bool(hist) and (fmt.startswith("сверка") or fmt.startswith("проверка компонентов")
+                               or meta.get("дельта") is not None
+                               or bool((meta.get("компоненты") or {}).get("здоровье"))
+                               or any(str(h.get("источник") or "").startswith(("сверка", "проверка"))
+                                      for h in hist.values()))
 
     details = [v for k, v in parts.items()]
     statuses = {p["статус"] for p in details}

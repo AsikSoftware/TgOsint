@@ -168,14 +168,19 @@ def compare(rep, truth):
     """→ список расхождений между нашим отчётом и экраном телефона.
     Пусто — система на этом аппарате сработала верно."""
     parts_v = rep.get("детали_вердикт") or {}
-    status = {d["деталь"]: d["статус"] for d in parts_v.get("детали") or []}
+    # сверяем по ключу детали: русские названия в таблицах Apple и в нашем отчёте разные
+    # («Дисплей» против «Экран»), по ним сопоставлять нельзя
+    status = {d.get("ключ") or d["деталь"]: d["статус"] for d in parts_v.get("детали") or []}
     hist = rep.get("apple_история") or {}
     names = dict(PARTS)
+    износ_батареи = any("аккумулятор требует обслуживания" in str(w) for w in (rep.get("внимание") or []))
     bad = []
     marked = {k: v for k, v in (truth.get("детали") or {}).items() if v in STATES}
     for key, state in marked.items():
         name = names.get(key, key)
-        ours = status.get(name)
+        ours = status.get(key)
+        if state == "serviced" and key == "Battery" and износ_батареи:
+            continue            # «Сервисное обслуживание» у аккумулятора — износ, мы его уже назвали
         if state in NOT_ORIGINAL:
             if ours not in ("bad", "used", "repaired"):
                 bad.append(f"{name}: телефон — «{STATES[state]}», мы — "
@@ -217,9 +222,32 @@ def save_bundle(path, snap, rep, truth, raw="", mismatches=(), dumps=json.dumps)
     return path
 
 
+# Запись журнала = строка, начинающаяся с метки времени; внутри записи бывают переводы строк
+_ENTRY_RE = re.compile(r"\n(?=(?:#\s*похожее:\s*)?[A-Z][a-z]{2}\s+\d+\s+\d\d:\d\d:\d\d\s)")
+
+
+def replay(raw):
+    """Прогнать сырой журнал через слушатель заново — так же, как он шёл с телефона.
+    → (записи, метаданные). Нужно, чтобы эталон проверял СЕГОДНЯШНИЙ разбор, а не тот,
+    что был в момент сбора."""
+    from .devicelink.repair_history import Listener
+    lst = Listener(None)
+    for entry in _ENTRY_RE.split(raw or ""):
+        entry = re.sub(r"^#\s*похожее:\s*", "", entry)
+        if entry.strip():
+            lst._feed(entry)
+    return lst.items, lst.meta
+
+
 def load_bundle(path, loads=json.loads):
-    """→ (слепок, правда). Используется тестами и разбором новых форматов iOS."""
+    """→ (слепок, правда). Журнал Apple разбирается заново текущим кодом: эталон обязан
+    ловить регрессию разбора, а не хранить вчерашний вывод."""
     with zipfile.ZipFile(path) as z:
         snap = loads(z.read("snapshot.json").decode("utf-8"))
         truth = json.loads(z.read("правда.json").decode("utf-8"))
+        raw = z.read("apple_raw.txt").decode("utf-8") if "apple_raw.txt" in z.namelist() else ""
+    if raw:
+        items, meta = replay(raw)
+        snap["repair_history"], snap["repair_history_raw"] = items, raw
+        snap["repair_history_meta"] = {**(snap.get("repair_history_meta") or {}), **meta}
     return snap, truth

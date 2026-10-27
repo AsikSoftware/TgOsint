@@ -118,6 +118,9 @@ def build(snap):
             else:
                 warn.append(f"по истории Apple: {h['деталь']} меняли (новая деталь{when})")
     hist_meta = snap.get("repair_history_meta") or {}
+    комп = hist_meta.get("компоненты") or {}
+    if (комп.get("аккумулятор") or {}).get("IOPSBatteryHealthServiceState"):
+        warn.append("Apple: аккумулятор требует обслуживания (износ, деталь при этом оригинальная)")
     hist_source = hist_meta.get("формат") or ("записи обслуживания" if hist else None)
     if hist:
         hist_status = "получена"

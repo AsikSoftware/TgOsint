@@ -56,12 +56,37 @@ def supported(product_type, ios_version):
     return True, ""
 
 
+# ---------------------------------------------------------------- iOS 26: проверка компонентов
+# На iPhone 15 Pro (iOS 26.6.1) экран показывал «Дисплей — Неизвестно», а записи
+# CRRepairHistoryItem пришли со всеми нулями: это НЕ вердикт, а список ремонтов Apple
+# (их на аппарате не было). Сам вердикт телефон пишет отдельными строками, и они
+# совпали с экраном слово в слово:
+#   systemhealth { … Display = "-1"; … }      -1 = деталь не подтверждена, 1 = в порядке, 0 = не оценивалась
+#   mobilerepaird: Display failed preflight    явный отказ по детали
+#   component: X isComponentRepairedUsingRCHL|FDR|CAA: 1   ремонт Apple по этой детали
+#   Battery Health State{ IOPSBatteryHealthServiceState = 1 }  аккумулятор требует обслуживания (износ, не замена)
+# AuthCP Components (isTrusted) тоже коррелирует, но на одном аппарате его смысл
+# подтвердить нельзя — пишем в метаданные для разбора, вердикт по нему не строим.
+SYSHEALTH_RE = re.compile(r"systemhealth \{(.*?)\n\}", re.S)
+REPAIRED_RE = re.compile(r"component: (\w+) isComponentRepairedUsing(\w+): (\d)")
+PREFLIGHT_RE = re.compile(r"\b(\w+) failed preflight")
+AUTHCP_RE = re.compile(r"AuthCP Components: \((.*?)\n\)", re.S)
+BATTERY_STATE_RE = re.compile(r"Battery Health State\{(.*?)\n\}", re.S)
+_KV_RE = re.compile(r'^\s*"?([A-Za-z]\w*)"?\s*=\s*"?(-?\d+)"?\s*;', re.M)
+# Имена компонентов телефона → наши детали
+COMPONENT_ALIAS = {"CoverGlass": "Display", "TouchController": "Display", "RCamera": "Camera",
+                   "FrontCamera": "FrontCamera", "LogicBoard": "LogicBoard"}
+# Что из systemhealth вообще считаем деталью (остальное — узлы связи и звук)
+HEALTH_PARTS = {"Battery", "Display", "Camera", "FaceID", "BackGlass", "MTUB", "Enclosure",
+                "CoverGlass", "TouchID", "FrontCamera", "LogicBoard"}
+
 MARKER = "CRRepairHistoryItem"
 RELATED = ("repair", "CoreRepair", "mobilerepaird")
 # признаки, что раздел на телефоне открыт (iOS 18): UI Настроек и демон проснулись
 OPENED = ("updateSpecifiersWithCompletionHandler", "corerepair.preflightControl", "Getting local sealing manifest",
           "fetched RCHL", "delta components", "No delta components found", "repairHistoryForUI",
-          "Preferences(CoreRepair", "CoreRepairUI", "Unsealed:")
+          "Preferences(CoreRepair", "CoreRepairUI", "Unsealed:", "systemhealth", "isComponentRepairedUsing",
+          "failed preflight", "AuthCP Components")
 # детали, которые показывает раздел на iOS 18 у всех моделей с Face ID
 BASE_COMPONENTS = ("Battery", "Display", "Camera", "FaceID")
 DELTA_RE = re.compile(r"delta components:\s*\{(.*?)\}\s*$", re.S)
@@ -162,6 +187,60 @@ def signature(items):
     return json.dumps(items or {}, sort_keys=True, ensure_ascii=False)
 
 
+def parse_components(text):
+    """Строки проверки компонентов (iOS 26) → что телефон думает о каждой детали.
+    → {детали: {ключ: {...}}, здоровье: {...}, ремонты: {...}, доверие: {...},
+       преflight: [...], аккумулятор: {...}}. Пусто — таких строк не было."""
+    out = {"детали": {}, "здоровье": {}, "ремонты": {}, "доверие": {}, "преflight": [], "аккумулятор": {}}
+
+    def part(name):
+        return COMPONENT_ALIAS.get(name, name)
+
+    def item(key):
+        return out["детали"].setdefault(key, {"деталь": RU.get(key, key), "код": 0, "меняли": False,
+                                              "бу": False, "дата": "", "источник": "проверка компонентов"})
+
+    m = SYSHEALTH_RE.search(text)
+    if m:
+        for name, val in _KV_RE.findall(m.group(1)):
+            out["здоровье"][name] = int(val)
+            key = part(name)
+            if key not in HEALTH_PARTS and name not in HEALTH_PARTS:
+                continue
+            if int(val) < 0:                      # -1 = деталь не подтверждена, на экране «Неизвестно»
+                it = item(key)
+                it["меняли"], it["неизвестная"] = True, True
+            elif int(val) > 0:
+                item(key)                         # 1 = в порядке; 0 = не оценивалась, молчим
+    for name, канал, val in REPAIRED_RE.findall(text):
+        out["ремонты"].setdefault(part(name), {})[канал] = int(val)
+        if int(val):
+            it = item(part(name))
+            it["меняли"] = True
+    for name in PREFLIGHT_RE.findall(text):
+        key = part(name)
+        if key in HEALTH_PARTS or name in HEALTH_PARTS:
+            out["преflight"].append(key)
+            it = item(key)
+            it["меняли"], it["неизвестная"] = True, True
+    m = AUTHCP_RE.search(text)
+    if m:                                         # смысл isTrusted на одном аппарате не подтверждён:
+        cur = {}                                  # сохраняем для разбора, вердикт по нему не строим
+        for name, val in _KV_RE.findall(m.group(1)):
+            cur[name] = int(val)
+            if name == "isTrustedForUI" and "ComponentName" not in cur:
+                continue
+        for block in re.split(r"\}\s*,?", m.group(1)):
+            kv = dict(_KV_RE.findall(block))
+            nm = re.search(r"ComponentName\s*=\s*(\w+)", block)
+            if nm:
+                out["доверие"][part(nm.group(1))] = {k: int(v) for k, v in kv.items()}
+    m = BATTERY_STATE_RE.search(text)
+    if m:
+        out["аккумулятор"] = {k: int(v) for k, v in _KV_RE.findall(m.group(1))}
+    return out if any(out[k] for k in ("детали", "здоровье", "ремонты", "преflight", "аккумулятор")) else {}
+
+
 class Listener:
     """Непрерывное чтение журнала с переподключением.
 
@@ -176,7 +255,7 @@ class Listener:
         self.items, self.buf, self.notes, self.related = {}, [], [], []
         # метаданные формата iOS 18: раздел открыт?, дельта, размер RCHL, значения печати
         self.meta = {"раздел_открыт": False, "дельта": None, "unsealed": None, "rchl_байт": None, "печать": {},
-                     "формат": None, "строк_по_теме": 0}
+                     "формат": None, "строк_по_теме": 0, "компоненты": None}
         self.last_related_at = None
         self.found_at = None
         self.connects = 0
@@ -246,6 +325,10 @@ class Listener:
         if any(k in line for k in OPENED) and not self.meta["раздел_открыт"]:
             self.meta["раздел_открыт"] = True
             self.log("на телефоне открыт раздел «Об этом устройстве» / история обслуживания")
+        if any(k in line for k in ("systemhealth", "isComponentRepairedUsing", "failed preflight",
+                                   "AuthCP Components", "Battery Health State")):
+            self.buf.append(line if line.endswith("\n") else line + "\n")
+            self._apply_components()
         m = RCHL_RE.search(line)
         if m:
             self.meta["rchl_байт"] = int(m.group(1))
@@ -272,6 +355,33 @@ class Listener:
                          f"RCHL {self.meta['rchl_байт']}")
         elif self.items and (delta is not None or unsealed is not None):
             self._apply_seal()                     # записи уже есть — сверка их дополняет, а не теряется
+
+    def _apply_components(self):
+        """Вердикт iOS 26 из строк проверки компонентов. Он главнее записей о ремонтах:
+        записи говорят, что Apple чинила, а эти строки — что телефон думает о детали сейчас."""
+        comp = parse_components("".join(self.buf))
+        if not comp:
+            return
+        self.meta["компоненты"] = {k: v for k, v in comp.items() if k != "детали"}
+        if not comp["детали"]:
+            return               # попалось только состояние аккумулятора — это ещё не вердикт по деталям
+        for key, it in comp["детали"].items():
+            cur = self.items.get(key)
+            if cur is None:
+                self.items[key] = dict(it)
+            else:
+                cur["меняли"] = cur["меняли"] or it["меняли"]
+                if it.get("неизвестная"):
+                    cur["неизвестная"] = True
+                cur.setdefault("источник", it["источник"])
+        self.meta["формат"] = "проверка компонентов (iOS 26)"
+        self.meta["раздел_открыт"] = True
+        self.last_related_at = time.monotonic()
+        if not self.found_at:
+            self.found_at = time.monotonic()
+            плохие = [v["деталь"] for v in comp["детали"].values() if v.get("неизвестная")]
+            self.log("проверка компонентов Apple: " + (", ".join(плохие) + " — не подтверждены" if плохие
+                                                       else "замечаний нет"))
 
     def _apply_seal(self):
         """Детали, которых нет в заводской печати (delta/Unsealed), — «неизвестного происхождения»,

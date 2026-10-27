@@ -4,6 +4,7 @@
   pintel-doctor selfcheck                 окружение: драйвер, pymobiledevice3, конфиг
   pintel-doctor wait                      ждать телефон, показывать состояние кабеля
   pintel-doctor snapshot [--out DIR] [--apple SEC] [--sickw]
+  pintel-doctor reference [--seconds SEC]   эталон: сверка с экраном телефона
                                           полный слепок + отчёт (+ история Apple, + Sickw)
   pintel-doctor report FILE.snapshot.json пересчитать отчёт из слепка
   pintel-doctor apple [--seconds N]       только история обслуживания Apple
@@ -18,6 +19,7 @@ from datetime import datetime
 
 from . import __version__
 from .analysis import report as report_mod
+from . import reference
 from .devicelink import connect, repair_history, snapshot
 from .external import gsheet, pricing, sickw
 
@@ -274,6 +276,98 @@ async def _apple(args, cfg):
     return 0 if items else 1
 
 
+def _ask_truth(rep):
+    """Спросить сотрудника, что ПРЯМО СЕЙЧАС показывает экран телефона.
+    Это и есть правда, с которой сверяется наша проверка."""
+    say("\n  На телефоне: Настройки → Основные → Об этом устройстве → «Детали и обслуживание».")
+    say("  Что написано напротив каждой детали?")
+    say("    1 оригинальная деталь Apple   2 сервисное обслуживание   3 неизвестная деталь")
+    say("    4 б/у деталь                  5 в списке нет            Enter — пропустить")
+    codes = {"1": "orig", "2": "serviced", "3": "unknown", "4": "used", "5": "absent"}
+    parts = {}
+    for key, name in reference.PARTS:
+        try:
+            v = input(f"    {name}: ").strip()
+        except EOFError:
+            break
+        if v in codes:
+            parts[key] = codes[v]
+    try:
+        opened = input("  Раздел «Детали и обслуживание» на телефоне открывали? (да/нет): ").strip().lower()
+        note = input("  Что известно о телефоне (ремонты, откуда) — одной строкой: ").strip()
+        who = input("  Кто проверял: ").strip()
+    except EOFError:
+        opened, note, who = "", "", ""
+    return reference.truth_template(детали=parts, примечание=note[:300], кто=who[:60],
+                                    раздел_открывали=(opened.startswith("д") if opened else bool(parts)))
+
+
+async def _reference(args, cfg):
+    """Эталон: полный слепок + долгое чтение журнала Apple + правда с экрана телефона."""
+    st = await connect.wait_ready(on_status=lambda s: say(f"[{time.strftime('%H:%M:%S')}] {s.state}: {s.human}"))
+    ld = st.lockdown
+    say("открываю диагностику…")
+    diag, tries = await connect.open_diagnostics(ld)
+    lst = repair_history.Listener(ld, log=lambda m: say("  " + m))
+    await lst.start()                                   # слушаем с первой секунды — записи не пропадут
+    try:
+        snap = await snapshot.collect(ld, diag, log=lambda m: say("  " + m))
+        snap["quality"]["диагностика_попыток"] = tries
+        snap["quality"]["подключение"] = st.timings
+        try:
+            await diag.close()
+        except Exception:                                # noqa: BLE001
+            pass
+        secs = int(args.seconds or 180)
+        say(f"\n  Откройте на телефоне «Детали и обслуживание» (если открыто — выйдите и зайдите снова).")
+        say(f"  Слушаю журнал {secs} с…")
+        items, raw, waited = await lst.wait(secs, unknown_quiet=None)
+    finally:
+        await lst.stop()
+    snap["repair_history"], snap["repair_history_raw"], snap["repair_history_meta"] = items, raw, lst.meta
+    say(f"  журнал Apple: {lst.state} за {waited} с, формат {lst.meta.get('формат') or '—'}, "
+        f"строк по теме {lst.meta.get('строк_по_теме')}")
+    if (cfg.get("sickw") or {}).get("key"):
+        imei = (report_mod.build(snap)["паспорт"] or {}).get("imei")
+        if sickw.luhn_ok(imei or ""):
+            say("  Sickw…")
+            try:
+                snap["sickw"] = sickw.lookup_many(imei, cfg["sickw"]["key"], sickw_services(cfg, args),
+                                                  cache_dir=os.path.join(app_dir(), "out", "sickw_cache"))
+            except Exception as e:                       # noqa: BLE001
+                say("  Sickw не ответил:", e)
+    rep = report_mod.build(snap)
+    say("\n" + fmt_report(rep))
+
+    truth = _ask_truth(rep)
+    bad = reference.compare(rep, truth)
+    if bad:
+        say("\n  РАСХОЖДЕНИЯ с экраном телефона:")
+        for b in bad:
+            say("    • " + b)
+        say("  Эталон нужен разработчику: по нему допишем разбор и закроем это тестом.")
+    else:
+        say("\n  Расхождений нет: на этом аппарате проверка сработала верно.")
+
+    clean, done, why = reference.pseudonymize(snap, report_mod.build)
+    if not done:
+        say(f"  обезличивание отменено ({why}) — в файле реальные серийники")
+    out = os.path.join(args.out or os.path.join(app_dir(), "out"), reference.bundle_name(rep))
+    reference.save_bundle(out, clean, report_mod.build(clean) if done else rep, truth,
+                          raw=clean.get("repair_history_raw") or raw, mismatches=bad, dumps=snapshot.dumps)
+    say(f"\n  ЭТАЛОН СОБРАН: {out}")
+    say("  Отправьте этот файл разработчику — по нему система научится этому аппарату.")
+    try:
+        await ld.close()
+    except Exception:                                    # noqa: BLE001
+        pass
+    return 1 if bad else 0
+
+
+def cmd_reference(args, cfg):
+    return asyncio.run(_reference(args, cfg))
+
+
 def cmd_apple(args, cfg):
     return asyncio.run(_apple(args, cfg))
 
@@ -375,6 +469,7 @@ def interactive(cfg):
   │  4  Баланс ключа Sickw                               │
   │  5  Только история обслуживания Apple                │
   │  6  Слепок без Apple и Sickw (быстро)                │
+  │  7  ЭТАЛОН: проверить аппарат и сверить с экраном    │
   │  0  Выход                                            │
   └──────────────────────────────────────────────────────┘"""
     while True:
@@ -397,6 +492,9 @@ def interactive(cfg):
                 asyncio.run(_apple(_A(seconds=120), cfg))
             elif choice == "6":
                 asyncio.run(_snapshot(_A(), cfg))
+                _open_out()
+            elif choice == "7":
+                asyncio.run(_reference(_A(seconds=180), cfg))
                 _open_out()
             elif choice in ("0", "q", ""):
                 return 0
@@ -424,7 +522,7 @@ def _open_out():
 
 COMMANDS = {"selfcheck": cmd_selfcheck, "wait": cmd_wait, "snapshot": cmd_snapshot,
             "report": cmd_report, "apple": cmd_apple, "sickw": cmd_sickw,
-            "price": cmd_price, "fixtures": cmd_fixtures}
+            "price": cmd_price, "fixtures": cmd_fixtures, "reference": cmd_reference}
 
 
 def main(argv=None):
@@ -440,6 +538,8 @@ def main(argv=None):
     s.add_argument("--sickw", action="store_true")
     s = sub.add_parser("report"); s.add_argument("file")
     s = sub.add_parser("apple"); s.add_argument("--seconds", type=int, default=120)
+    s = sub.add_parser("reference", help="эталон: слепок + журнал Apple + правда с экрана телефона")
+    s.add_argument("--seconds", type=int, default=180); s.add_argument("--out")
     s = sub.add_parser("sickw"); s.add_argument("imei"); s.add_argument("--fresh", action="store_true")
     s.add_argument("--service", type=int, action="append", help="номер услуги Sickw (можно несколько раз)")
     sub.add_parser("price")

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Окно киоска: состояния «ожидание → проверка → результат → талон», опрос кабеля,
+"""Окно киоска: состояния «ожидание → проверка → результат», опрос кабеля,
 связь с сервером в фоне. Запуск: pintel-kiosk (kiosk.toml рядом с exe)."""
 import asyncio
 import os
@@ -186,10 +186,9 @@ class KioskWindow(QMainWindow):
         self.host = ScaledHost(self.stack)
         self.setCentralWidget(self.host)
         self.s_main = ui.MainScreen(cfg.get("point") or "")
-        self.s_scan = ui.ScanScreen()
-        self.s_result = ui.ResultScreen(cfg.get("currency", "₸"))
-        self.s_ticket = ui.TicketScreen()
-        for s in (self.s_main, self.s_scan, self.s_result, self.s_ticket):
+        self.s_scan = ui.ScanScreen(cfg.get("point") or "")
+        self.s_result = ui.ResultScreen()
+        for s in (self.s_main, self.s_scan, self.s_result):
             self.stack.addWidget(s)
         self.s_scan.skip_requested.connect(self.on_skip_apple)
         self.s_result.just_looking.connect(self.go_home)   # «Готово» — вернуться к началу
@@ -221,14 +220,15 @@ class KioskWindow(QMainWindow):
     # ---------- служебное ----------
     def show_screen(self, w):
         self.stack.setCurrentWidget(w)
-        self.host.set_bg("#F3F6FA" if w is self.s_result else "#FFFFFF")
+        self.host.set_bg(ui.C["ground"] if w is self.s_result else "#FFFFFF")
 
     def _try_server_config(self):
         def job():
             try:
                 c = self.client.config()
                 if c.get("точка"):
-                    self.s_main.point_label.setText(f"Выкуп iPhone · {c['точка']}")
+                    self.s_main.set_point(c["точка"])
+                    self.s_scan.set_point(c["точка"])
                 self.cfg["return_seconds"] = c.get("возврат_с") or self.cfg["return_seconds"]
                 self.cfg["apple_history_seconds"] = c.get("история_apple_с") or self.cfg["apple_history_seconds"]
             except Exception:                                    # noqa: BLE001
@@ -299,7 +299,7 @@ class KioskWindow(QMainWindow):
                 self.s_scan.set_trouble("Телефон отключили. Подключите снова, и проверка начнётся заново.")
                 self.state = "failed"
                 QTimer.singleShot(3000, self.go_home)
-        elif self.state in ("result", "ticket"):
+        elif self.state == "result":
             if state == NO_DEVICE:
                 QTimer.singleShot(1500, self.go_home)
 
@@ -324,7 +324,7 @@ class KioskWindow(QMainWindow):
         """История Apple пришла после результата — обновляем карточку."""
         if self.last and result.get("client_id") == self.last.get("client_id"):
             self.last = result
-            if self.state in ("result", "ticket"):
+            if self.state == "result":
                 self.s_result.fill(result["report"], result.get("server"))
                 if self.last_intake:                       # не сбрасывать уже выданный номер
                     self.s_result.set_intake(self.last_intake)
@@ -381,10 +381,10 @@ def light_palette():
     for role in (QPalette.Window, QPalette.Base, QPalette.AlternateBase, QPalette.Button, QPalette.ToolTipBase):
         pal.setColor(role, QColor("#FFFFFF"))
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText, QPalette.ToolTipText):
-        pal.setColor(role, QColor("#0B1B33"))
-    pal.setColor(QPalette.Highlight, QColor("#1A549D"))
+        pal.setColor(role, QColor(ui.C["ink"]))
+    pal.setColor(QPalette.Highlight, QColor(ui.C["action"]))
     pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
-    pal.setColor(QPalette.PlaceholderText, QColor("#5B7392"))
+    pal.setColor(QPalette.PlaceholderText, QColor(ui.C["muted"]))
     return pal
 
 
@@ -397,6 +397,7 @@ def main(argv=None):
     app.setStyle("Fusion")
     app.setPalette(light_palette())
     ui.load_fonts()
+    app.setFont(ui.app_font())
     app.setStyleSheet(ui.QSS)
     w = KioskWindow(cfg)
     w.resize(1920, 1080)

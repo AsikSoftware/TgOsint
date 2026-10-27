@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Оценка вашего iPhone · Pintel</title><link rel="stylesheet" href="/static/app.css"></head>
+<title>Оценка вашего iPhone · Pintel</title><link rel="icon" href="/static/logo.png"><link rel="stylesheet" href="/static/app.css"></head>
 <body>
 {% set pas = rep.get('паспорт') or {} %}{% set bat = rep.get('батарея') or {} %}{% set hist = rep.get('apple_история') or {} %}{% set leg = rep.get('правовой') or {} %}{% set sk = rep.get('sickw') or {} %}
-<main style="max-width:720px;margin:0 auto;padding:24px 16px;gap:16px">
-  <img src="/static/logo.png" alt="Pintel" style="height:36px;width:auto;align-self:flex-start">
-  <h1>{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}</h1>
-  <div class="muted">Оценка {{ '№' ~ ev.number if ev.number else 'без номера' }} от {{ ev.created_at|dt }}{% if ev.point %} · {{ ev.point.name }}{% endif %}</div>
+<main class="client" style="max-width:720px">
+  <div class="brand"><img src="/static/logo.png" alt="Pintel"></div>
+  <div><h1>{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}</h1>
+    <div class="sub">Оценка {{ '№' ~ ev.number if ev.number else 'без номера' }} от {{ ev.created_at|dt }}{% if ev.point %} · {{ ev.point.name }}{% endif %}</div></div>
   <section class="sec"><h2>Итог проверки</h2>
-    <div class="price" style="font-size:40px">{% if ev.verdict == 'ПРОБЛЕМНЫЙ' %}нужен сотрудник{% elif ev.verdict in ('ИДЕАЛ', 'ХОРОШИЙ') %}хорошее состояние{% else %}нужен осмотр{% endif %}</div>
+    <div class="verdict {{ 'bad' if ev.verdict == 'ПРОБЛЕМНЫЙ' else ('ok' if ev.verdict in ('ИДЕАЛ', 'ХОРОШИЙ') else 'warn') }}">{% if ev.verdict == 'ПРОБЛЕМНЫЙ' %}Нужен сотрудник{% elif ev.verdict in ('ИДЕАЛ', 'ХОРОШИЙ') %}Хорошее состояние{% else %}Нужен осмотр{% endif %}</div>
     <div class="note">Цену назовёт сотрудник после осмотра корпуса и экрана.{% if ev.verdict == 'ПРОБЛЕМНЫЙ' and (rep.get('итог') or {}).get('почему') %} {{ (rep.get('итог') or {}).get('почему') }}{% endif %}</div></section>
   <section class="sec"><h2>Батарея</h2>
     <div class="row" style="align-items:baseline"><span class="price" style="font-size:34px">{{ bat.get('здоровье_%') if bat.get('здоровье_%') is not none else '?' }} %</span><span class="muted">{{ bat.get('циклы') or '?' }} циклов</span></div></section>
@@ -19,5 +19,5 @@
     <div class="kv"><span>Чёрный список</span><span class="{{ 'bad' if sk.get('в_чёрном_списке') else 'ok' }}">{{ 'да' if sk.get('в_чёрном_списке') else ('нет' if sk.get('в_чёрном_списке') is false else 'не проверялось') }}</span></div>
     <div class="kv"><span>Найти iPhone</span><span class="{{ 'warn' if leg.get('найти_iphone') == 'включён' else 'ok' }}">{{ leg.get('найти_iphone') or '?' }}{% if leg.get('найти_iphone') == 'включён' %} — выключите перед продажей{% endif %}</span></div>
     <div class="kv"><span>Серийный номер</span><span>{{ ev.serial or '?' }}</span></div></section>
-  <div class="note">Данные прочитаны с вашего телефона по кабелю с вашего согласия. Pintel · выкуп iPhone.</div>
+  <div class="note foot">Данные прочитаны с вашего телефона по кабелю с вашего согласия. Pintel · выкуп iPhone.</div>
 </main></body></html>

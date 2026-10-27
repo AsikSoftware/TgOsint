@@ -6,7 +6,7 @@
 {% set sto = rep.get('память') or {} %}{% set price = rep.get('цена') or {} %}{% set itog = rep.get('итог') or {} %}
 {% block content %}
 <div class="head">
-  <div class="mont" style="font-size:44px;font-weight:800;color:var(--primary)">{{ '№' ~ ev.number if ev.number else '—' }}</div>
+  <div class="deal-num">{{ '№' ~ ev.number if ev.number else '—' }}</div>
   <div>
     <h1 style="font-size:24px">{{ ev.model_name or '?' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.colour %} · {{ ev.colour }}{% endif %}</h1>
     <div class="sub" style="font-size:14px;margin-top:4px">Оценён на киоске {{ ev.created_at|dt }}{% if ev.kiosk %} ({{ ev.kiosk.name }}){% endif %} · серийный {{ ev.serial or '?' }} · IMEI {{ ev.imei or '?' }} · iOS {{ ev.ios or '?' }}</div>
@@ -21,15 +21,15 @@
   <div class="main">
     <section class="sec span2">
       <h2>Данные клиента и медиа</h2>
-      <div class="grid4">
+      <div class="grid2" style="gap:10px 28px">
         <div class="kv"><span>Имя</span><span>{{ ev.client_name or '—' }}</span></div>
         <div class="kv"><span>Телефон</span><span>{{ ev.client_phone or '—' }}</span></div>
         <div class="kv"><span>Коробка</span><span>{{ 'да' if ev.has_box else ('нет' if ev.has_box is false else '—') }}</span></div>
         <div class="kv"><span>Шнур</span><span>{{ 'да' if ev.has_cord else ('нет' if ev.has_cord is false else '—') }}</span></div>
       </div>
       {% if ev.media %}
-      <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
-        {% for m in ev.media %}{% if m.kind == 'photo' %}<a href="/media/{{ m.id }}" target="_blank"><img src="/media/{{ m.id }}" alt="фото" style="height:120px;border-radius:10px;border:1px solid var(--border)"></a>{% else %}<a class="btn sm" href="/media/{{ m.id }}" target="_blank">🎬 видео</a>{% endif %}{% endfor %}
+      <div class="media">
+        {% for m in ev.media %}{% if m.kind == 'photo' %}<a href="/media/{{ m.id }}" target="_blank"><img src="/media/{{ m.id }}" alt="фото"></a>{% else %}<a class="video" href="/media/{{ m.id }}" target="_blank">▶ видео</a>{% endif %}{% endfor %}
       </div>
       {% else %}<div class="note">Клиент ещё не прислал фото/видео и данные. Ссылки для клиента: <a href="/u/{{ ev.upload_token }}" target="_blank">данные</a> · <a href="/m/{{ ev.media_token }}" target="_blank">фото/видео</a> (те же, что по QR на киоске). Номер заявки выдаётся после имени и телефона.</div>{% endif %}
     </section>
@@ -115,12 +115,9 @@
     {% endif %}
   </div>
   <aside class="aside sec">
-    <h2>Выкуп</h2>
-    <div class="kv"><span>{{ price.get('основание') or 'цены в прайсе нет' }}</span><span style="white-space:nowrap">{% if ev.price_offer %}{{ ev.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</span></div>
-    {% if price.get('нехватка') %}<div class="note">{{ ' '.join(price.get('нехватка')) }}</div>{% endif %}
-    <div class="note">Цену называет сотрудник — на киоске она не показывается.</div>
-    <div style="height:1px;background:var(--border)"></div>
-    <h2>Pintel Оценка</h2>
+    <h2>Оформление</h2>
+    <div class="hint">Цену называет сотрудник — на киоске и у клиента она не показывается. {% if ev.price_offer %}Авто-подсказка ({{ price.get('основание') or 'прайс' }}): ~<b>{{ ev.price_offer|money }} {{ settings.currency }}</b>.{% else %}В прайсе цены для этой модели нет.{% endif %}{% if price.get('нехватка') %} {{ ' '.join(price.get('нехватка')) }}{% endif %}</div>
+    <h2 style="margin-top:6px">Pintel Оценка</h2>
     {% if ev.ocenka_device_id %}
       <div class="tile ok"><b>Отправлено · сделка №{{ ev.ocenka_device_id }}</b><small>{{ ev.ocenka_imported_at|dt }}</small></div>
     {% else %}
@@ -141,6 +138,7 @@
       <div class="note">Создаст сделку в Оценке (оценщик, имя/телефон клиента, фото/видео, статус «Ожидает оценку»). Нужны имя и телефон клиента.</div>
     {% endif %}
     <div style="height:1px;background:var(--border)"></div>
+    <h2>Выкуп</h2>
     {% if ev.status in ('bought', 'declined') %}
       <div class="tile {{ 'ok' if ev.status == 'bought' else 'bad' }}"><b>{{ ev.status_label }}{% if ev.final_price %} · {{ ev.final_price|money }} {{ settings.currency }}{% endif %}</b><small>{{ ev.decided_at|dt }} · {{ ev.decided_by.name if ev.decided_by else '' }}{% if ev.decision_note %}<br>{{ ev.decision_note }}{% endif %}</small></div>
       {% if ev.inspection %}<div class="note">Осмотр: {% for k, v in ev.inspection.items() %}{% if v %}{{ k.replace('_', ' ') }}; {% endif %}{% endfor %}</div>{% endif %}
@@ -154,7 +152,7 @@
         <label class="chk"><input type="checkbox" name="back_glass">Трещина заднего стекла</label>
         <label class="chk"><input type="checkbox" name="fmi_off" {{ 'checked' if leg.get('найти_iphone') == 'выключен' }}>Найти iPhone выключен</label>
       </fieldset>
-      <label class="f">Итоговая цена, {{ settings.currency }}<input type="text" name="final_price" value="{{ ev.price_offer or '' }}" style="font-size:24px;font-weight:800" inputmode="numeric"></label>
+      <label class="f">Итоговая цена, {{ settings.currency }}<input type="text" name="final_price" value="{{ ev.price_offer or '' }}" class="price" style="font-size:26px" inputmode="numeric"></label>
       {% if user.role == 'cashier' %}<div class="note">Кассир может оформить только по прайсу или ниже. Выше — старший сотрудник.</div>{% endif %}
       <div class="row">
         <label class="chk"><input type="radio" name="deal_kind" value="buyout" checked>Выкуп</label>

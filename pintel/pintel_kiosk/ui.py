@@ -1,70 +1,71 @@
 # -*- coding: utf-8 -*-
-"""Экраны киоска по утверждённому макету (1920×1080, масштабируется)."""
-import os
+"""Экраны киоска по утверждённому концепту (1920×1080, масштабируется целиком).
 
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout,
-                               QWidget)
+Шрифты: Inter — текст, Inter Display — заголовки (в них есть кириллица),
+Space Grotesk — крупные цифры и латинские названия моделей (кириллицы в нём нет).
+Анимации лёгкие, на таймерах и только пока виджет виден: бесконечные — на экране
+ожидания (телефон, кольца, кабель, мигающая точка), одноразовые — на результате
+(заполнение батареи, появление номера и QR).
+"""
+import math
+import os
+import time
+
+from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-C = {"text": "#0B1B33", "body": "#3B4F6B", "muted": "#5B7392", "primary": "#1A549D", "pale": "#B8D0EC",
-     "light": "#E8F1FB", "bg": "#F3F6FA", "border": "#E3EAF2", "ok": "#15724C", "okdot": "#1E9E6A",
-     "okbg": "#E6F6EE", "warn": "#D98B1E", "warntext": "#9A5B07", "bad": "#B3261E"}
+C = {
+    "ink": "#0C1A2E", "body": "#3B4F6B", "muted": "#5B7392", "brand": "#16417A",
+    "action": "#2E6BE6", "action_dark": "#1D4ED8", "tint": "#EAF1FD", "tint_border": "#D7E4F6",
+    "ground": "#F5F8FC", "border": "#E3EAF3", "screen": "#13325B",
+    "ok": "#15724C", "okdot": "#1E9E6A", "okbg": "#E6F6EE",
+    "warn": "#D98B1E", "warntext": "#9A5B07", "warnbg": "#FFF3D6",
+    "bad": "#D64541", "badtext": "#B3261E", "badbg": "#FCE9E8",
+    "pale": "#AFCBEC", "ring": "#C9D5E3", "ghost": "#C3CEDB",
+}
+FONT_TEXT, FONT_HEAD, FONT_NUM = "Inter", "Inter Display", "Space Grotesk"
+W = QFont.Weight
 
+# Шрифты в QSS только размер/насыщенность: семейство приходит от шрифта приложения (Inter),
+# а заголовки и кикеры с межбуквенным интервалом задаются кодом (QSS его не умеет).
 QSS = """
-QWidget { color: %(text)s; font-family: "Manrope", "Segoe UI", sans-serif; }
+QWidget { color: %(ink)s; }
 QWidget#screen { background: #FFFFFF; }
-QWidget#screen_gray { background: %(bg)s; }
-QLabel#h1 { font-family: "Montserrat", "Segoe UI", sans-serif; font-size: 72px; font-weight: 800; }
-QLabel#h1s { font-family: "Montserrat", "Segoe UI", sans-serif; font-size: 60px; font-weight: 800; }
+QWidget#screen_gray { background: %(ground)s; }
 QLabel#lead { font-size: 30px; font-weight: 500; color: %(body)s; }
-QLabel#muted { font-size: 20px; font-weight: 600; color: %(muted)s; }
-QLabel#step { font-size: 26px; font-weight: 600; }
-QLabel#num { background: %(primary)s; color: white; border-radius: 28px; min-width: 56px; max-width: 56px; min-height: 56px; max-height: 56px; font-family: "Montserrat"; font-size: 26px; font-weight: 800; }
-QLabel#cardkicker { font-size: 20px; font-weight: 700; color: %(pale)s; letter-spacing: 3px; background: transparent; }
-QLabel#cardtitle { font-family: "Montserrat"; font-size: 44px; font-weight: 800; color: white; background: transparent; }
-QLabel#cardtext { font-size: 24px; font-weight: 600; color: #DCE8F5; background: transparent; }
-QLabel#cardstatus { font-size: 22px; font-weight: 700; color: white; background: transparent; }
-QFrame#row { background: %(bg)s; border-radius: 20px; }
-QFrame#row_active { background: %(light)s; border: 2px solid %(primary)s; border-radius: 20px; }
+QLabel#lead_s { font-size: 24px; font-weight: 500; color: %(body)s; }
+QLabel#muted { font-size: 19px; font-weight: 600; color: %(muted)s; }
+QLabel#step { font-size: 28px; font-weight: 600; }
+QLabel#num { background: %(action)s; color: white; border-radius: 16px; min-width: 58px; max-width: 58px; min-height: 58px; max-height: 58px; }
+QLabel#cardtext { font-size: 20px; font-weight: 400; color: %(body)s; }
+QLabel#cardstatus { font-size: 20px; font-weight: 700; color: %(brand)s; }
+QFrame#row { background: %(ground)s; border-radius: 18px; }
+QFrame#row_active { background: %(tint)s; border: 2px solid %(action)s; border-radius: 18px; }
 QLabel#rowtitle { font-size: 24px; font-weight: 700; }
-QLabel#rowstate { font-size: 20px; font-weight: 600; color: %(muted)s; }
-QLabel#rowstate_active { font-size: 20px; font-weight: 700; color: %(primary)s; }
-QLabel#dot_done { background: %(okdot)s; border-radius: 22px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; color: white; font-size: 22px; font-weight: 800; }
-QLabel#dot_wait { background: transparent; border: 3px solid #C9D5E3; border-radius: 22px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; }
-QLabel#dot_run { background: transparent; border: 4px solid %(primary)s; border-radius: 22px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; }
-QLabel#dot_warn { background: %(warn)s; border-radius: 22px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; color: white; font-size: 22px; font-weight: 800; }
-QLabel#dot_fail { background: %(bad)s; border-radius: 22px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; color: white; font-size: 22px; font-weight: 800; }
-QFrame#bluecard { background: %(primary)s; border-radius: 32px; }
-QLabel#bluekicker { font-size: 20px; font-weight: 700; color: %(pale)s; letter-spacing: 2px; }
-QLabel#bluetitle { font-family: "Montserrat"; font-size: 38px; font-weight: 800; color: white; }
-QLabel#bluestep { font-size: 24px; font-weight: 600; color: white; }
-QLabel#bluenote { font-size: 20px; font-weight: 600; color: white; background: rgba(255,255,255,0.12); border-radius: 16px; padding: 18px 22px; }
-QPushButton#skip { font-size: 20px; font-weight: 700; color: %(pale)s; background: transparent; border: 2px solid %(pale)s; border-radius: 14px; padding: 12px 22px; }
-QFrame#card { background: white; border: 1px solid %(border)s; border-radius: 28px; }
-QLabel#kicker { font-size: 18px; font-weight: 700; color: %(muted)s; letter-spacing: 2px; }
-QLabel#price { font-family: "Montserrat"; font-size: 92px; font-weight: 800; }
-QLabel#pricenote { font-size: 22px; font-weight: 600; color: %(body)s; }
-QLabel#big { font-family: "Montserrat"; font-size: 54px; font-weight: 800; }
+QLabel#rowtitle_wait { font-size: 24px; font-weight: 700; color: %(body)s; }
+QLabel#rowstate { font-size: 19px; font-weight: 600; color: %(muted)s; }
+QLabel#rowstate_active { font-size: 19px; font-weight: 700; color: %(action)s; }
+QFrame#bluecard { background: qlineargradient(x1:0, y1:0, x2:0.45, y2:1, stop:0 #1F5FB0, stop:1 #13325B); border-radius: 36px; }
+QLabel#bluestep { font-size: 23px; font-weight: 500; color: white; }
+QLabel#bluenote { font-size: 20px; font-weight: 500; color: #DCE8F5; background: rgba(255,255,255,0.12); border-radius: 16px; padding: 18px 22px; }
+QPushButton#skip { font-size: 20px; font-weight: 700; color: %(pale)s; background: transparent; border: 2px solid %(pale)s; border-radius: 14px; padding: 14px 26px; }
+QPushButton#skip:pressed { background: rgba(255,255,255,0.12); }
+QFrame#card { background: white; border: 1px solid %(border)s; border-radius: 24px; }
+QFrame#card_main { background: white; border: 1px solid %(border)s; border-radius: 28px; }
 QLabel#line { font-size: 22px; font-weight: 600; }
-QLabel#kv_k { font-size: 21px; font-weight: 600; color: %(muted)s; }
-QLabel#kv_v { font-size: 21px; font-weight: 700; }
-QLabel#chip_ok { background: %(okbg)s; color: %(ok)s; border-radius: 28px; padding: 12px 22px; font-size: 22px; font-weight: 700; }
-QLabel#chip_warn { background: #FFF1CC; color: %(warntext)s; border-radius: 28px; padding: 12px 22px; font-size: 22px; font-weight: 700; }
-QLabel#chip_bad { background: #FBE9E7; color: %(bad)s; border-radius: 28px; padding: 12px 22px; font-size: 22px; font-weight: 700; }
-QPushButton#primary { background: %(primary)s; color: white; border-radius: 22px; font-size: 28px; font-weight: 800; min-height: 88px; border: none; }
-QPushButton#primary:pressed { background: #123C74; }
-QPushButton#secondary { background: %(bg)s; color: %(text)s; border-radius: 22px; font-size: 22px; font-weight: 700; min-height: 64px; border: none; }
-QFrame#ticket { background: %(primary)s; border-radius: 40px; }
-QLabel#ticketkicker { font-size: 22px; font-weight: 700; color: %(pale)s; letter-spacing: 3px; }
-QLabel#ticketnum { font-family: "Montserrat"; font-size: 220px; font-weight: 800; color: white; }
-QLabel#ticketnote { font-size: 24px; font-weight: 600; color: #DCE8F5; }
-QFrame#qrbox { border: 2px dashed #C9D5E3; border-radius: 24px; }
-QLabel#footer { font-size: 19px; font-weight: 500; color: %(muted)s; }
-QLabel#bar_bg { background: %(border)s; border-radius: 7px; min-height: 14px; max-height: 14px; }
-QLabel#bar_fg { background: %(okdot)s; border-radius: 7px; min-height: 14px; max-height: 14px; }
-QLabel#bar_fg_warn { background: %(warn)s; border-radius: 7px; min-height: 14px; max-height: 14px; }
+QLabel#line_s { font-size: 21px; font-weight: 600; }
+QLabel#note { font-size: 19px; font-weight: 400; color: %(muted)s; }
+QLabel#qrtext { font-size: 23px; font-weight: 500; color: %(body)s; }
+QLabel#kv_k { font-size: 19px; font-weight: 400; color: %(muted)s; }
+QLabel#kv_v { font-size: 19px; font-weight: 700; }
+QLabel#chip_ok { background: %(okbg)s; color: %(ok)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
+QLabel#chip_warn { background: %(warnbg)s; color: %(warntext)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
+QLabel#chip_bad { background: %(badbg)s; color: %(badtext)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
+QPushButton#primary { background: %(action)s; color: white; border-radius: 20px; font-size: 28px; font-weight: 700; min-height: 80px; border: none; }
+QPushButton#primary:pressed { background: %(action_dark)s; }
+QLabel#footer { font-size: 18px; font-weight: 500; color: %(muted)s; }
 """ % C
 
 
@@ -77,6 +78,50 @@ def load_fonts():
                 QFontDatabase.addApplicationFont(os.path.join(d, name))
 
 
+def app_font():
+    f = QFont(FONT_TEXT)
+    f.setPixelSize(16)
+    return f
+
+
+def font(family=FONT_TEXT, px=16, weight=W.Normal, spacing=None):
+    f = QFont(family)
+    f.setPixelSize(px)
+    f.setWeight(weight)
+    if spacing is not None:
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return f
+
+
+def label(text, name=None, wrap=False, font_=None, color=None):
+    lab = QLabel(text)
+    if name:
+        lab.setObjectName(name)
+    lab.setWordWrap(wrap)
+    if font_ is not None:
+        lab.setFont(font_)
+    if color:
+        lab.setStyleSheet(f"color: {color};")
+    return lab
+
+
+def kicker(text, px=14, spacing=2.0, color=None):
+    """Надзаголовок капителью: «ВАШ НОМЕР», «БАТАРЕЯ»…"""
+    return label(text, font_=font(FONT_TEXT, px, W.Bold, spacing), color=color or C["muted"])
+
+
+def ease_out():
+    """cubic-bezier(.2,.8,.2,1) из макета."""
+    c = QEasingCurve(QEasingCurve.Type.BezierSpline)
+    c.addCubicBezierSegment(QPointF(0.2, 0.8), QPointF(0.2, 1.0), QPointF(1.0, 1.0))
+    return c
+
+
+def smoothstep(x):
+    x = min(1.0, max(0.0, x))
+    return x * x * (3 - 2 * x)
+
+
 def logo_label(height=44):
     lab = QLabel()
     p = os.path.join(ASSETS, "logo.png")
@@ -87,40 +132,387 @@ def logo_label(height=44):
     return lab
 
 
-def label(text, name=None, wrap=False):
-    lab = QLabel(text)
-    if name:
-        lab.setObjectName(name)
-    lab.setWordWrap(wrap)
-    return lab
+def point_text(point):
+    return f"Выкуп iPhone · {point}" if point else "Выкуп iPhone"
 
 
-def header(right_widget=None, left_extra=None):
+def header(point_label, right=None):
     row = QHBoxLayout()
+    row.setSpacing(14)
     row.addWidget(logo_label())
-    if left_extra:
-        row.addSpacing(28)
-        row.addWidget(left_extra)
+    row.addWidget(point_label)
     row.addStretch(1)
-    if right_widget:
-        row.addWidget(right_widget)
+    if right is not None:
+        row.addWidget(right)
     return row
 
 
 def status_label(text, ok=True):
-    lab = label(("● " if ok else "○ ") + text, "muted")
-    lab.setStyleSheet(f"color: {C['okdot'] if ok else C['muted']}; font-size: 20px; font-weight: 600;")
-    return lab
+    return label(("● " if ok else "○ ") + text, font_=font(FONT_TEXT, 19, W.DemiBold),
+                 color=C["okdot"] if ok else C["muted"])
 
+
+# ---------- анимированные примитивы ----------
+
+class Pulse(QWidget):
+    """Точка статуса 12 px: мигает (1 → 0.2 → 1 за 1,4 с) или горит ровно."""
+
+    def __init__(self, color, blink=True):
+        super().__init__()
+        self.setFixedSize(12, 12)
+        self.color = QColor(color)
+        self.blink = blink
+        self.t0 = time.monotonic()
+        self.timer = QTimer(self)
+        self.timer.setInterval(40)
+        self.timer.timeout.connect(self.update)
+
+    def set(self, color, blink):
+        self.color = QColor(color)
+        self.blink = blink
+        if blink and self.isVisible():
+            self.timer.start()
+        elif not blink:
+            self.timer.stop()
+        self.update()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self.blink:
+            self.timer.start()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.timer.stop()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        col = QColor(self.color)
+        if self.blink:
+            t = time.monotonic() - self.t0
+            col.setAlphaF(0.2 + 0.8 * (0.5 + 0.5 * math.cos(2 * math.pi * t / 1.4)))
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawEllipse(QRectF(0, 0, 12, 12))
+
+
+class Dot(QWidget):
+    """Индикатор шага проверки: ждёт, крутится, готово, внимание, ошибка."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(42, 42)
+        self.state = "wait"
+        self.t0 = time.monotonic()
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self.update)
+
+    def set_state(self, state):
+        self.state = state
+        if state == "run" and self.isVisible():
+            self.timer.start()
+        else:
+            self.timer.stop()
+        self.update()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self.state == "run":
+            self.timer.start()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.timer.stop()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(2.5, 2.5, 37, 37)
+        p.setBrush(Qt.NoBrush)
+        if self.state == "wait":
+            p.setPen(QPen(QColor(C["ring"]), 3))
+            p.drawEllipse(r)
+        elif self.state == "run":
+            faint = QColor(C["action"])
+            faint.setAlphaF(0.22)
+            p.setPen(QPen(faint, 4))
+            p.drawEllipse(r)
+            p.setPen(QPen(QColor(C["action"]), 4, Qt.SolidLine, Qt.RoundCap))
+            ang = int((time.monotonic() - self.t0) * 300) % 360          # оборот за 1,2 с
+            p.drawArc(r, (90 - ang) * 16, -110 * 16)
+        else:
+            col = {"done": C["okdot"], "warn": C["warn"], "fail": C["bad"]}.get(self.state, C["okdot"])
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(col))
+            p.drawEllipse(QRectF(0, 0, 42, 42))
+            p.setPen(QPen(QColor("white"), 3.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.setBrush(Qt.NoBrush)
+            if self.state == "done":
+                path = QPainterPath(QPointF(13, 21.5))
+                path.lineTo(QPointF(18.5, 27))
+                path.lineTo(QPointF(29.5, 15.5))
+                p.drawPath(path)
+            elif self.state == "fail":
+                p.drawLine(QPointF(15, 15), QPointF(27, 27))
+                p.drawLine(QPointF(27, 15), QPointF(15, 27))
+            else:
+                p.drawLine(QPointF(21, 12), QPointF(21, 24))
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor("white"))
+                p.drawEllipse(QPointF(21, 30.5), 2.3, 2.3)
+
+
+class ConnectArt(QWidget):
+    """Телефон, кабель и расходящиеся кольца — как в макете. Рисуется в своих 240×410
+    (хвост кабеля уходит за нижний край) и масштабируется под отведённое место;
+    анимация идёт только пока виджет виден."""
+    AW, AH = 240, 410
+    PW, PH = 188, 330
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(120, 200)
+        self.state = "wait"
+        self.t0 = time.monotonic()
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self.update)
+
+    def set_state(self, state):
+        self.state = state
+        self.update()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.t0 = time.monotonic()
+        self.timer.start()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.timer.stop()
+
+    def paintEvent(self, e):
+        t = time.monotonic() - self.t0
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        k = min(self.width() / self.AW, self.height() / self.AH)
+        p.translate((self.width() - self.AW * k) / 2, (self.height() - self.AH * k) / 2)
+        p.scale(k, k)
+        # парение всей группы: 0 → −10 px → 0 за 4,5 с
+        p.translate(0, -10 * (0.5 - 0.5 * math.cos(2 * math.pi * t / 4.5)))
+        ox, oy = (self.AW - self.PW) / 2, 8
+        cx = ox + self.PW / 2
+        base = oy + self.PH - 6                                           # верх нижнего блока
+        # кольца — только пока ждём кабель
+        if self.state == "wait":
+            for delay in (0.0, 0.9):
+                if t < delay:
+                    continue
+                u = ((t - delay) % 2.2) / 2.2
+                ue = 1 - (1 - u) ** 2
+                col = QColor(C["action"])
+                col.setAlphaF(0.95 * (1 - ue))
+                p.setPen(QPen(col, 3))
+                p.setBrush(Qt.NoBrush)
+                rr = 30 * (0.55 + 1.35 * ue)
+                p.drawEllipse(QPointF(cx, base + 12), rr, rr)
+        # тень телефона: несколько полупрозрачных слоёв
+        p.setPen(Qt.NoPen)
+        for i in range(8):
+            sh = QColor(C["ink"])
+            sh.setAlphaF(0.035)
+            p.setBrush(sh)
+            g = i * 5
+            p.drawRoundedRect(QRectF(ox - g, oy + 22 - g, self.PW + 2 * g, self.PH + 2 * g), 34 + g, 34 + g)
+        # телефон
+        p.setBrush(QColor(C["ink"]))
+        p.drawRoundedRect(QRectF(ox, oy, self.PW, self.PH), 34, 34)
+        p.setBrush(QColor(C["screen"]))
+        p.drawRoundedRect(QRectF(ox + 9, oy + 9, 170, 312), 27, 27)
+        p.setBrush(QColor(C["ink"]))
+        p.drawRoundedRect(QRectF(ox + 59, oy + 20, 70, 18), 9, 9)
+        p.setBrush(QColor(255, 255, 255, 46))
+        p.drawRoundedRect(QRectF(ox + 40, oy + 120, 108, 12), 6, 6)
+        p.setBrush(QColor(255, 255, 255, 31))
+        p.drawRoundedRect(QRectF(ox + 54, oy + 146, 80, 12), 6, 6)
+        p.setBrush(QColor("#0A1526"))
+        p.drawRoundedRect(QRectF(ox + 76, oy + 314, 36, 9), 5, 5)
+        # кабель: снизу вверх в разъём, пауза, снова
+        if self.state == "found":
+            dy, a = 0.0, 1.0
+        elif self.state == "nodriver":
+            dy, a = 84.0, 0.3
+        else:
+            u = (t % 3.4) / 3.4
+            kk = 0.0 if u < 0.12 else (smoothstep((u - 0.12) / 0.28) if u < 0.40 else 1.0)
+            dy, a = 84 * (1 - kk), kk
+        if a > 0:
+            p.setOpacity(a)
+            p.setBrush(QColor(C["action"]))
+            head = QPainterPath()
+            head.addRoundedRect(QRectF(cx - 17, base + 2 + dy, 34, 22), 6, 6)
+            p.drawPath(head)
+            p.drawRoundedRect(QRectF(cx - 4, base + 22 + dy, 8, 100), 4, 4)
+            p.setOpacity(1.0)
+
+
+class Bar(QWidget):
+    """Полоска батареи. Заполняется один раз после показа экрана (1,6 с, задержка 0,35 с)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(12)
+        self.value, self.progress, self.color = 0, 1.0, QColor(C["okdot"])
+        self.pending = False
+        self.anim = QVariantAnimation(self)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setDuration(1600)
+        self.anim.setEasingCurve(ease_out())
+        self.anim.valueChanged.connect(self._step)
+
+    def prepare(self, value, color, animate):
+        self.value, self.color = max(0, min(100, value or 0)), QColor(color)
+        self.pending = bool(animate)
+        self.progress = 0.0 if animate else 1.0
+        self.update()
+
+    def play(self):
+        if self.pending:
+            self.pending = False
+            QTimer.singleShot(350, self.anim.start)
+
+    def _step(self, v):
+        self.progress = float(v)
+        self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(C["border"]))
+        p.drawRoundedRect(QRectF(0, 0, self.width(), 12), 6, 6)
+        w = self.width() * self.value / 100 * self.progress
+        if w > 0:
+            p.setBrush(self.color)
+            p.drawRoundedRect(QRectF(0, 0, max(w, 12), 12), 6, 6)
+
+
+class PopNumber(QWidget):
+    """Номер заявки 150 px (Space Grotesk). «—» серым, пока номера нет; номер появляется
+    один раз с лёгким подскоком (0,55 → 1,06 → 1 за 0,9 с)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(150)
+        self.setMinimumWidth(320)
+        self.text, self.color = "—", QColor(C["ghost"])
+        self.scale_, self.alpha, self.pending = 1.0, 1.0, False
+        self.font_ = font(FONT_NUM, 150, W.Bold)
+        self.anim = QVariantAnimation(self)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setDuration(900)
+        self.anim.setEasingCurve(ease_out())
+        self.anim.valueChanged.connect(self._step)
+
+    def set_text(self, text, number, pop):
+        self.text = text
+        self.color = QColor(C["brand"] if number else C["ghost"])
+        self.pending = bool(pop)
+        self.scale_, self.alpha = (0.55, 0.0) if pop else (1.0, 1.0)
+        self.update()
+
+    def play(self):
+        if self.pending:
+            self.pending = False
+            QTimer.singleShot(200, self.anim.start)
+
+    def _step(self, v):
+        v = float(v)
+        if v < 0.6:
+            k = v / 0.6
+            self.scale_, self.alpha = 0.55 + 0.51 * k, k
+        else:
+            self.scale_, self.alpha = 1.06 - 0.06 * (v - 0.6) / 0.4, 1.0
+        self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.setOpacity(self.alpha)
+        h = self.height()
+        p.translate(0, h / 2)
+        p.scale(self.scale_, self.scale_)
+        p.translate(0, -h / 2)
+        p.setFont(self.font_)
+        p.setPen(self.color)
+        p.drawText(QRectF(0, 0, self.width() / max(self.scale_, 0.01), h), Qt.AlignLeft | Qt.AlignVCenter, self.text)
+
+
+class QrBlock(QWidget):
+    """QR 200×200 в белой рамке с подписью. Умеет один раз «всплыть» снизу (0,7 с, задержка 0,6 с)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(216, 246)
+        self.pm, self.caption = None, ""
+        self.dy, self.alpha, self.pending = 0.0, 1.0, False
+        self.font_ = font(FONT_TEXT, 14, W.Bold, 2.0)
+        self.anim = QVariantAnimation(self)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setDuration(700)
+        self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.anim.valueChanged.connect(self._step)
+
+    def set(self, pm, caption, rise):
+        self.pm = pm.scaled(200, 200, Qt.KeepAspectRatio, Qt.FastTransformation) if pm else None
+        self.caption = caption
+        self.pending = bool(rise)
+        self.dy, self.alpha = (18.0, 0.0) if rise else (0.0, 1.0)
+        self.setVisible(self.pm is not None)
+        self.update()
+
+    def play(self):
+        if self.pending:
+            self.pending = False
+            QTimer.singleShot(600, self.anim.start)
+
+    def _step(self, v):
+        v = float(v)
+        self.dy, self.alpha = 18 * (1 - v), v
+        self.update()
+
+    def paintEvent(self, e):
+        if self.pm is None:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setOpacity(self.alpha)
+        p.translate(0, self.dy)
+        p.setPen(QPen(QColor(C["border"]), 1))
+        p.setBrush(QColor("white"))
+        p.drawRoundedRect(QRectF(0.5, 0.5, 215, 215), 18, 18)
+        p.drawPixmap(8 + (200 - self.pm.width()) // 2, 8 + (200 - self.pm.height()) // 2, self.pm)
+        p.setFont(self.font_)
+        p.setPen(QColor(C["muted"]))
+        p.drawText(QRectF(0, 224, 216, 20), Qt.AlignHCenter | Qt.AlignVCenter, self.caption)
+
+
+# ---------- каркас ----------
 
 class Screen(QWidget):
-    def __init__(self, gray=False):
+    def __init__(self, gray=False, margins=(88, 72, 88, 72), spacing=24):
         super().__init__()
         self.setObjectName("screen_gray" if gray else "screen")
         self.setAutoFillBackground(True)
         self.root = QVBoxLayout(self)
-        self.root.setContentsMargins(96, 56, 96, 48)
-        self.root.setSpacing(28)
+        self.root.setContentsMargins(*margins)
+        self.root.setSpacing(spacing)
 
 
 # ---------- 1. Ожидание ----------
@@ -128,41 +520,46 @@ class Screen(QWidget):
 class MainScreen(Screen):
     def __init__(self, point=""):
         super().__init__()
-        self.point_label = label(f"Выкуп iPhone · {point}" if point else "Выкуп iPhone", "muted")
-        self.root.addLayout(header(self.point_label))
+        self.point_label = label(point_text(point), "muted")
+        self.status = status_label("Готов к работе")
+        self.root.addLayout(header(self.point_label, self.status))
         body = QHBoxLayout()
-        body.setSpacing(96)
+        body.setSpacing(88)
         left = QVBoxLayout()
-        left.setSpacing(36)
+        left.setSpacing(0)
         left.addStretch(1)
-        left.addWidget(label("Узнайте, сколько стоит ваш iPhone", "h1", wrap=True))
-        left.addWidget(label("Подключите телефон кабелем. Через две минуты вы увидите его состояние и цену, "
-                             "за которую мы готовы выкупить его прямо сейчас.", "lead", wrap=True))
-        for i, t in enumerate(("Подключите iPhone кабелем справа", "Разблокируйте и нажмите «Доверять»",
-                               "Получите цену и решайте сами"), 1):
+        left.addWidget(label("Узнайте, сколько стоит ваш iPhone", wrap=True, font_=font(FONT_HEAD, 78, W.Bold, -1.5)))
+        left.addSpacing(28)
+        lead = label("Подключите телефон кабелем. Через пару минут увидите состояние, а цену назовёт сотрудник.",
+                     "lead", wrap=True)
+        lead.setMaximumWidth(760)
+        left.addWidget(lead)
+        left.addSpacing(48)
+        steps = ("Подключите iPhone", "Разблокируйте и нажмите «Доверять»", "Получите отчёт — остальное у сотрудника")
+        for i, t in enumerate(steps, 1):
             r = QHBoxLayout()
-            r.setSpacing(20)
-            n = label(str(i), "num")
+            r.setSpacing(22)
+            n = label(str(i), "num", font_=font(FONT_NUM, 26, W.Bold))
             n.setAlignment(Qt.AlignCenter)
             r.addWidget(n)
             r.addWidget(label(t, "step"))
             r.addStretch(1)
             left.addLayout(r)
+            if i < len(steps):
+                left.addSpacing(22)
         left.addStretch(1)
         body.addLayout(left, 1)
         self.card = ConnectCard()
         body.addWidget(self.card, 0, Qt.AlignVCenter)
         self.root.addLayout(body, 1)
-        foot = QHBoxLayout()
-        foot.addWidget(label("Телефон остаётся у вас. Ничего не устанавливаем, данные читаем только с вашего согласия.", "footer"))
-        foot.addStretch(1)
-        self.status = status_label("Готов к работе")
-        foot.addWidget(self.status)
-        self.root.addLayout(foot)
+        self.root.addWidget(label("Ничего не устанавливаем. Данные читаем только с вашего согласия.", "footer"))
+
+    def set_point(self, point):
+        self.point_label.setText(point_text(point))
 
     def set_status(self, text, ok=True):
         self.status.setText(("● " if ok else "○ ") + text)
-        self.status.setStyleSheet(f"color: {C['okdot'] if ok else C['bad']}; font-size: 20px; font-weight: 600;")
+        self.status.setStyleSheet(f"color: {C['okdot'] if ok else C['bad']};")
 
     def set_device(self, state):
         """wait | found | nodriver — состояние правой карточки."""
@@ -170,135 +567,68 @@ class MainScreen(Screen):
 
 
 class ConnectCard(QFrame):
-    """Правая часть экрана ожидания: тёмно-синяя карточка с кабелем и живым статусом."""
+    """Правая часть экрана ожидания: светлая карточка с живой иллюстрацией."""
 
     def __init__(self):
         super().__init__()
-        self.setFixedSize(640, 640)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setFixedSize(620, 620)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(52, 48, 52, 44)
-        lay.setSpacing(16)
-        self.kicker = label("ШАГ 1 ИЗ 3", "cardkicker")
-        self.title = label("Подключите телефон кабелем", "cardtitle", wrap=True)
+        lay.setContentsMargins(52, 48, 52, 40)
+        lay.setSpacing(0)
+        self.kicker = kicker("ШАГ 1 ИЗ 3", 15, 3.0, C["brand"])
+        self.title = label("Подключите телефон кабелем", wrap=True, font_=font(FONT_HEAD, 38, W.Bold))
         lay.addWidget(self.kicker)
+        lay.addSpacing(10)
         lay.addWidget(self.title)
-        self.art = QLabel()
-        self.art.setPixmap(cable_pixmap())
-        self.art.setAlignment(Qt.AlignCenter)
-        self.art.setStyleSheet("background: transparent;")
+        lay.addSpacing(6)
+        self.art = ConnectArt()
         lay.addWidget(self.art, 1)
-        self.text = label("Кабели Lightning и USB‑C — справа от экрана. Телефон остаётся у вас в руках.", "cardtext", wrap=True)
+        lay.addSpacing(6)
+        self.text = label("Кабели Lightning и USB‑C — справа. Телефон остаётся у вас в руках.", "cardtext", wrap=True)
         lay.addWidget(self.text)
-        self.status = label("●  ждём подключения", "cardstatus")
-        lay.addWidget(self.status)
-        self._blink = QTimer(self)
-        self._blink.setInterval(700)
-        self._blink.timeout.connect(self._tick)
-        self._blink.start()
-        self._on = True
+        lay.addSpacing(16)
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        self.pulse = Pulse(C["action"])
+        self.status = label("ждём подключения", "cardstatus")
+        row.addWidget(self.pulse)
+        row.addWidget(self.status)
+        row.addStretch(1)
+        lay.addLayout(row)
         self.state = "wait"
-
-    def _tick(self):
-        if self.state != "wait":
-            return
-        self._on = not self._on
-        self.status.setText(("●" if self._on else "○") + "  ждём подключения")
 
     def set_state(self, state):
         """wait | found | nodriver"""
         self.state = state
+        self.art.set_state(state)
         if state == "found":
             self.kicker.setText("ШАГ 2 ИЗ 3")
             self.title.setText("Телефон найден")
             self.text.setText("Разблокируйте его и нажмите «Доверять» на экране телефона.")
-            self.status.setText("●  подключён")
+            self.status.setText("подключён")
+            self.status.setStyleSheet(f"color: {C['ok']};")
+            self.pulse.set(C["okdot"], blink=False)
         elif state == "nodriver":
             self.kicker.setText("ТЕХНИЧЕСКАЯ ПАУЗА")
             self.title.setText("Киоск временно не принимает")
             self.text.setText("Подойдите к сотруднику — он проверит телефон на кассе.")
-            self.status.setText("○  нет связи с кабелем")
+            self.status.setText("нет связи с кабелем")
+            self.status.setStyleSheet(f"color: {C['badtext']};")
+            self.pulse.set(C["bad"], blink=False)
         else:
             self.kicker.setText("ШАГ 1 ИЗ 3")
             self.title.setText("Подключите телефон кабелем")
-            self.text.setText("Кабели Lightning и USB‑C — справа от экрана. Телефон остаётся у вас в руках.")
-            self.status.setText("●  ждём подключения")
+            self.text.setText("Кабели Lightning и USB‑C — справа. Телефон остаётся у вас в руках.")
+            self.status.setText("ждём подключения")
+            self.status.setStyleSheet(f"color: {C['brand']};")
+            self.pulse.set(C["action"], blink=True)
 
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        g = QLinearGradient(0, 0, 0, self.height())
-        g.setColorAt(0, QColor("#1F5FB0"))
-        g.setColorAt(1, QColor("#123C74"))
-        p.setPen(Qt.NoPen)
-        p.setBrush(g)
-        p.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 48, 48)
-        p.end()
-        super().paintEvent(e)
-
-
-def cable_pixmap(size=300):
-    """Разъём и кабель — тонкими белыми линиями, без мультяшности."""
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    white = QColor(255, 255, 255)
-    pen = QPen(white, 9, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(QColor(255, 255, 255, 28))
-    cx = size / 2
-    # штекер
-    p.drawRoundedRect(QRectF(cx - 46, 36, 92, 44), 22, 22)
-    # корпус разъёма
-    p.drawRoundedRect(QRectF(cx - 62, 80, 124, 96), 26, 26)
-    # хвост кабеля — плавная кривая вниз
-    path = QPainterPath()
-    path.moveTo(cx, 176)
-    path.cubicTo(cx, 240, cx - 110, 230, cx - 110, size - 20)
-    p.setBrush(Qt.NoBrush)
-    p.drawPath(path)
-    # контакты штекера
-    pen2 = QPen(QColor(255, 255, 255, 170), 5, Qt.SolidLine, Qt.RoundCap)
-    p.setPen(pen2)
-    for dx in (-18, 0, 18):
-        p.drawLine(int(cx + dx), 48, int(cx + dx), 68)
-    p.end()
-    return pm
-
-
-def phone_pixmap():
-    pm = QPixmap(420, 560)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(C["text"]))
-    p.drawRoundedRect(70, 10, 280, 500, 56, 56)
-    p.setBrush(QColor("#FFFFFF"))
-    p.drawRoundedRect(84, 24, 252, 472, 44, 44)
-    p.setBrush(QColor(C["text"]))
-    p.drawRoundedRect(160, 40, 100, 26, 13, 13)
-    p.setBrush(QColor("#DCE6F0"))
-    p.drawRoundedRect(118, 130, 184, 18, 9, 9)
-    p.drawRoundedRect(118, 166, 140, 18, 9, 9)
-    p.setBrush(QColor("#E8F4FB"))
-    p.drawRoundedRect(118, 230, 184, 120, 20, 20)
-    p.setBrush(QColor(C["primary"]))
-    p.drawRoundedRect(190, 496, 40, 36, 8, 8)
-    p.drawEllipse(184, 264, 52, 52)
-    p.setPen(QColor(C["primary"]))
-    p.setBrush(Qt.NoBrush)
-    from PySide6.QtGui import QPen
-    pen = QPen(QColor(C["primary"]), 10, Qt.SolidLine, Qt.RoundCap)
-    p.setPen(pen)
-    p.drawLine(210, 532, 210, 556)
-    pen = QPen(QColor("#FFFFFF"), 5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-    p.setPen(pen)
-    p.drawLine(198, 290, 206, 298)
-    p.drawLine(206, 298, 222, 280)
-    p.end()
-    return pm
+        p.setPen(QPen(QColor(C["tint_border"]), 1))
+        p.setBrush(QColor(C["tint"]))
+        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 36, 36)
 
 
 # ---------- 2. Проверка ----------
@@ -313,12 +643,10 @@ class StepRow(QFrame):
         super().__init__()
         self.setObjectName("row")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setContentsMargins(24, 18, 24, 18)
         lay.setSpacing(20)
-        self.dot = QLabel("")
-        self.dot.setObjectName("dot_wait")
-        self.dot.setAlignment(Qt.AlignCenter)
-        self.title = label(title, "rowtitle")
+        self.dot = Dot()
+        self.title = label(title, "rowtitle_wait")
         self.state = label("", "rowstate")
         lay.addWidget(self.dot)
         lay.addWidget(self.title, 1)
@@ -326,58 +654,62 @@ class StepRow(QFrame):
         self.set("wait", "")
 
     def set(self, state, text):
-        names = {"wait": ("dot_wait", ""), "run": ("dot_run", ""), "done": ("dot_done", "✓"),
-                 "warn": ("dot_warn", "!"), "fail": ("dot_fail", "✕")}
-        dn, glyph = names.get(state, ("dot_wait", ""))
-        self.dot.setObjectName(dn)
-        self.dot.setText(glyph)
+        self.dot.set_state(state)
         self.setObjectName("row_active" if state == "run" else "row")
+        self.title.setObjectName("rowtitle_wait" if state == "wait" else "rowtitle")
         self.state.setObjectName("rowstate_active" if state == "run" else "rowstate")
-        self.state.setText(text or {"wait": "следом", "run": "…", "done": "готово", "warn": "", "fail": ""}[state])
-        self.setGraphicsEffect(None)
-        self.setStyleSheet(self.styleSheet())           # перечитать QSS после смены objectName
-        for w in (self.dot, self.state):
-            w.setStyleSheet(w.styleSheet())
+        self.state.setText(text or {"wait": "следом", "run": "…", "done": "готово", "warn": "", "fail": ""}.get(state, ""))
+        for w in (self, self.title, self.state):                  # перечитать QSS после смены objectName
+            w.style().unpolish(w)
+            w.style().polish(w)
+            w.update()
 
 
 class ScanScreen(Screen):
     skip_requested = Signal()
 
-    def __init__(self):
+    def __init__(self, point=""):
         super().__init__()
+        self.point_label = label(point_text(point), "muted")
         self.device_label = status_label("Телефон подключён")
-        self.root.addLayout(header(self.device_label))
+        self.root.addLayout(header(self.point_label, self.device_label))
         body = QHBoxLayout()
-        body.setSpacing(72)
+        body.setSpacing(64)
         left = QVBoxLayout()
-        left.setSpacing(28)
-        left.addWidget(label("Проверяем телефон", "h1s", wrap=True))
-        self.lead = label("Не отключайте кабель. Обычно это занимает около минуты.", "lead", wrap=True)
+        left.setSpacing(0)
+        left.addWidget(label("Проверяем телефон", font_=font(FONT_HEAD, 60, W.Bold, -1.0)))
+        left.addSpacing(10)
+        self.lead = label("Не отключайте кабель. Обычно это занимает около минуты.", "lead_s", wrap=True)
         left.addWidget(self.lead)
+        left.addSpacing(30)
         self.rows = {}
-        col = QVBoxLayout()
-        col.setSpacing(14)
-        for key, title in STEPS:
+        for i, (key, title) in enumerate(STEPS):
             r = StepRow(title)
             self.rows[key] = r
-            col.addWidget(r)
-        left.addLayout(col)
+            if i:
+                left.addSpacing(12)
+            left.addWidget(r)
         left.addStretch(1)
         body.addLayout(left, 1)
         self.panel = QFrame()
         self.panel.setObjectName("bluecard")
-        self.panel.setFixedWidth(720)
+        self.panel.setFixedWidth(680)
         pl = QVBoxLayout(self.panel)
-        pl.setContentsMargins(48, 44, 48, 44)
-        pl.setSpacing(22)
-        pl.addWidget(label("НЕОБЯЗАТЕЛЬНО · ДЛЯ ДАТ РЕМОНТА", "bluekicker"))
-        pl.addWidget(label("Откройте сведения о телефоне — и Apple сама скажет, что менялось", "bluetitle", wrap=True))
-        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
-                               "Если там есть «Запчасти и история обслуживания» — зайдите в неё"), 1):
-            pl.addWidget(label(f"{i}   {t}", "bluestep", wrap=True))
+        pl.setContentsMargins(48, 48, 48, 48)
+        pl.setSpacing(0)
+        pl.addWidget(kicker("НЕОБЯЗАТЕЛЬНО · ДЛЯ ДАТ РЕМОНТА", 16, 3.0, C["pale"]))
+        pl.addSpacing(14)
+        pl.addWidget(label("Откройте сведения о телефоне — Apple сама скажет, что менялось", wrap=True,
+                           font_=font(FONT_HEAD, 34, W.Bold), color="white"))
+        pl.addSpacing(34)
+        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве", "«Запчасти и история обслуживания»"), 1):
+            if i > 1:
+                pl.addSpacing(18)
+            pl.addWidget(label(f"{i} · {t}", "bluestep", wrap=True))
         pl.addStretch(1)
-        pl.addWidget(label("Подлинность деталей мы уже проверили по кабелю. Этот шаг нужен только чтобы показать "
-                           "ДАТЫ ремонтов — его можно пропустить.", "bluenote", wrap=True))
+        pl.addWidget(label("Подлинность деталей мы уже проверили по кабелю. Этот шаг нужен только для ДАТ ремонтов — "
+                           "его можно пропустить.", "bluenote", wrap=True))
+        pl.addSpacing(22)
         self.skip = QPushButton("Пропустить этот шаг")
         self.skip.setObjectName("skip")
         self.skip.setCursor(Qt.PointingHandCursor)
@@ -386,6 +718,9 @@ class ScanScreen(Screen):
         body.addWidget(self.panel)
         self.root.addLayout(body, 1)
         self.show_prompt(False)
+
+    def set_point(self, point):
+        self.point_label.setText(point_text(point))
 
     def reset(self, device_text="Телефон подключён"):
         for r in self.rows.values():
@@ -418,21 +753,19 @@ def _changed_verb(name):
     return "менялся"
 
 
-def card(kicker):
+def card():
     f = QFrame()
     f.setObjectName("card")
     lay = QVBoxLayout(f)
-    lay.setContentsMargins(36, 32, 36, 32)
-    lay.setSpacing(10)
-    lay.addWidget(label(kicker, "kicker"))
+    lay.setContentsMargins(30, 30, 30, 30)
+    lay.setSpacing(8)
     return f, lay
 
 
-def line(text, colour=None):
-    lab = label(("● " if colour else "") + text, "line", wrap=True)
+def line(text, colour=None, small=False):
+    lab = label(text, "line_s" if small else "line", wrap=True)
     if colour:
-        lab.setStyleSheet(f"color: {C['text']};")
-        lab.setText(f'<span style="color:{colour}">●</span>  {text}')
+        lab.setText(f'<span style="color:{colour}">●</span>&nbsp;&nbsp;{text}')
     return lab
 
 
@@ -464,43 +797,53 @@ class ResultScreen(Screen):
     sell = Signal()
     just_looking = Signal()
     TEXT_DATA = ("Отсканируйте телефоном и введите имя и номер телефона — после этого появится номер заявки. "
-                 "Цену назовёт сотрудник после осмотра.")
-    TEXT_MEDIA = ("Номер выдан. Теперь отсканируйте и приложите фото и видео телефона. "
+                 f'<b style="color:{C["ink"]}">Цену назовёт сотрудник</b> после осмотра.')
+    TEXT_MEDIA = (f'Номер выдан. Теперь отсканируйте и приложите <b style="color:{C["ink"]}">фото и видео</b> телефона. '
                   "Цену назовёт сотрудник после осмотра.")
+    TEXT_LOCAL = "Назовите этот номер сотруднику — он осмотрит телефон и назовёт цену."
 
-    def __init__(self, currency="₸"):
-        super().__init__(gray=True)
-        self.currency = currency
-        self.title = label("iPhone", "h1s")
-        self.title.setStyleSheet("font-size: 34px;")
-        self.sub = label("", "muted")
-        self.sub.setStyleSheet("font-size: 24px; font-weight: 600; color: %s;" % C["muted"])
-        left = QWidget()
-        ll = QHBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.setSpacing(28)
-        ll.addWidget(self.title)
-        ll.addWidget(self.sub)
-        self.chip = label("Готовы выкупить", "chip_ok")
-        self.root.addLayout(header(self.chip, left))
+    def __init__(self):
+        super().__init__(gray=True, margins=(72, 64, 72, 64), spacing=28)
+        self.title = label("iPhone", font_=font(FONT_NUM, 40, W.Bold, -0.5))
+        self.sub = label("", font_=font(FONT_TEXT, 22, W.DemiBold), color=C["muted"])
+        self.chip = label("Хорошее состояние", "chip_ok")
+        head = QHBoxLayout()
+        head.setSpacing(24)
+        head.addWidget(self.title)
+        head.addWidget(self.sub)
+        head.addStretch(1)
+        head.addWidget(self.chip)
+        self.root.addLayout(head)
         body = QHBoxLayout()
         body.setSpacing(28)
-        # что дальше: номер + QR на страницу ввода данных (цену называет сотрудник, на киоске её нет)
-        self.next_card, pl = card("ВАШ НОМЕР")
-        self.next_card.setFixedWidth(640)
-        pl.setContentsMargins(48, 40, 48, 40)
-        self.ticket_num = label("—", "price")
-        pl.addWidget(self.ticket_num)
+        # номер + QR; цены на киоске нет — её называет сотрудник
+        self.next_card = QFrame()
+        self.next_card.setObjectName("card_main")
+        self.next_card.setFixedWidth(600)
+        pl = QVBoxLayout(self.next_card)
+        pl.setContentsMargins(44, 44, 44, 44)
+        pl.setSpacing(0)
+        pl.addWidget(kicker("ВАШ НОМЕР", 15))
+        pl.addSpacing(6)
+        self.number = PopNumber()
+        pl.addWidget(self.number)
+        pl.addSpacing(10)
         qrow = QHBoxLayout()
         qrow.setSpacing(24)
-        self.qr = QLabel()
-        self.qr.setFixedSize(190, 190)
-        self.qr.setStyleSheet("background:white; border:1px solid %s; border-radius:16px;" % C["border"])
-        self.qr.setAlignment(Qt.AlignCenter)
-        qrow.addWidget(self.qr, 0)
-        self.qr_text = label(self.TEXT_DATA, "pricenote", wrap=True)
-        qrow.addWidget(self.qr_text, 1)
+        self.qr = QrBlock()
+        qrow.addWidget(self.qr, 0, Qt.AlignTop)
+        self.qr_text = label(self.TEXT_DATA, "qrtext", wrap=True)
+        qrow.addWidget(self.qr_text, 1, Qt.AlignVCenter)
         pl.addLayout(qrow)
+        pl.addSpacing(22)
+        srow = QHBoxLayout()
+        srow.setSpacing(12)
+        self.pulse = Pulse(C["action"])
+        self.status = label("ожидаем имя и телефон", "cardstatus")
+        srow.addWidget(self.pulse)
+        srow.addWidget(self.status)
+        srow.addStretch(1)
+        pl.addLayout(srow)
         pl.addStretch(1)
         self.btn_done = QPushButton("Готово")
         self.btn_done.setObjectName("primary")
@@ -510,19 +853,18 @@ class ResultScreen(Screen):
         body.addWidget(self.next_card)
         grid = QGridLayout()
         grid.setSpacing(24)
-        self.c_bat, self.l_bat = card("БАТАРЕЯ")
-        self.c_apple, self.l_apple = card("ЧТО ГОВОРИТ APPLE")
-        self.c_locks, self.l_locks = card("БЛОКИРОВКИ И БАЗЫ")
-        self.c_pass, self.l_pass = card("ПАСПОРТ")
+        self.c_bat, self.l_bat = card()
+        self.c_apple, self.l_apple = card()
+        self.c_locks, self.l_locks = card()
+        self.c_pass, self.l_pass = card()
         grid.addWidget(self.c_bat, 0, 0)
         grid.addWidget(self.c_apple, 0, 1)
         grid.addWidget(self.c_locks, 1, 0)
         grid.addWidget(self.c_pass, 1, 1)
         body.addLayout(grid, 1)
         self.root.addLayout(body, 1)
-        self.footer = label("Цена предварительная: сотрудник осмотрит корпус и экран на месте. "
-                            "Данные телефона мы не храним без вашего согласия.", "footer", wrap=True)
-        self.root.addWidget(self.footer)
+        self.bar = None
+        self._mode = None
 
     def fill(self, rep, server=None):
         pas, bat, leg = rep.get("паспорт") or {}, rep.get("батарея") or {}, rep.get("правовой") or {}
@@ -535,45 +877,51 @@ class ResultScreen(Screen):
         verdict = itog.get("вердикт")
         if verdict == "ПРОБЛЕМНЫЙ":
             self.chip.setObjectName("chip_bad")
-            self.chip.setText("Есть вопросы — к сотруднику")
+            self.chip.setText("● Есть вопросы — к сотруднику")
         elif verdict in ("ИДЕАЛ", "ХОРОШИЙ"):
             self.chip.setObjectName("chip_ok")
-            self.chip.setText("Хорошее состояние")
+            self.chip.setText("● Хорошее состояние")
         else:
             self.chip.setObjectName("chip_warn")
-            self.chip.setText("Нужен осмотр сотрудника")
-        self.chip.setStyleSheet(self.chip.styleSheet())
-        self.set_intake(server or {})
+            self.chip.setText("● Нужен осмотр сотрудника")
+        self.chip.style().unpolish(self.chip)
+        self.chip.style().polish(self.chip)
+        if not self.isVisible():                        # новый телефон: состояние заявки с нуля
+            self._mode = None
+            self.set_intake(server or {})
         # батарея
         clear_layout(self.l_bat)
-        self.l_bat.addWidget(label("БАТАРЕЯ", "kicker"))
+        self.l_bat.addWidget(kicker("БАТАРЕЯ"))
         h = bat.get("здоровье_%")
+        good = h is not None and h >= 85
         row = QHBoxLayout()
-        row.addWidget(label(f"{h} %" if h is not None else "—", "big"))
-        st = ("хорошее состояние" if h is not None and h >= 85 else ("заметный износ" if h is not None else "не прочиталась"))
-        sl = label(st, "line")
-        sl.setStyleSheet(f"color: {C['ok'] if h is not None and h >= 85 else C['warntext']}; font-weight: 700;")
-        row.addSpacing(14)
+        row.setSpacing(16)
+        row.addWidget(label(f"{h} %" if h is not None else "—", font_=font(FONT_NUM, 54, W.Bold)))
+        st = "хорошее состояние" if good else ("заметный износ" if h is not None else "не прочиталась")
+        sl = label(st, font_=font(FONT_TEXT, 20, W.Bold), color=C["ok"] if good else C["warntext"])
+        sl.setContentsMargins(0, 0, 0, 9)
         row.addWidget(sl, 0, Qt.AlignBottom)
         row.addStretch(1)
         self.l_bat.addLayout(row)
-        bar_bg = QLabel()
-        bar_bg.setObjectName("bar_bg")
-        bar_fg = QLabel(bar_bg)
-        bar_fg.setObjectName("bar_fg" if (h or 0) >= 85 else "bar_fg_warn")
-        bar_fg.setFixedHeight(14)
-        self._bar = (bar_bg, bar_fg, h or 0)
-        self.l_bat.addWidget(bar_bg)
+        self.l_bat.addSpacing(4)
+        self.bar = Bar()
+        self.bar.prepare(h or 0, C["okdot"] if good else C["warn"], animate=not self.isVisible())
+        self.l_bat.addWidget(self.bar)
+        self.l_bat.addSpacing(4)
         fake = bat.get("подделка") or []
         self.l_bat.addWidget(label(f"{bat.get('циклы') if bat.get('циклы') is not None else '?'} циклов · "
                                    + ("признаки неоригинальной батареи" if fake else "оригинальный аккумулятор Apple"),
-                                   "pricenote", wrap=True))
-        # Apple
+                                   "note", wrap=True))
+        self.l_bat.addStretch(1)
+        # подлинность деталей
         clear_layout(self.l_apple)
         pv = rep.get("детали_вердикт") or {}
-        self.l_apple.addWidget(label("ПОДЛИННОСТЬ ДЕТАЛЕЙ", "kicker"))
+        self.l_apple.addWidget(kicker("ПОДЛИННОСТЬ ДЕТАЛЕЙ"))
+        self.l_apple.addSpacing(6)
         if pv.get("итог") == "родные":
             self.l_apple.addWidget(line("Все проверенные детали родные", C["okdot"]))
+            self.l_apple.addWidget(label("Привязка модулей к плате и заводская печать Apple сошлись — проверено по кабелю.",
+                                         "note", wrap=True))
         elif pv.get("итог") == "ремонт":
             for d in pv.get("детали", []):
                 if d["статус"] in ("used", "repaired"):
@@ -587,7 +935,6 @@ class ResultScreen(Screen):
             groups = {}
             for v in hist.values():
                 groups.setdefault(v["деталь"], v)
-            shown = 0
             for name, v in list(groups.items())[:5]:
                 verb = _changed_verb(name)
                 if v.get("записи_без_деталей"):
@@ -595,89 +942,88 @@ class ResultScreen(Screen):
                 elif v.get("неизвестная"):
                     self.l_apple.addWidget(line(f"{name} — деталь неизвестного происхождения", C["bad"]))
                 elif v.get("меняли"):
-                    self.l_apple.addWidget(line(f"{name} — {verb}, " + ("б/у деталь" if v.get("бу") else "деталь Apple, новая"), C["warn"] if not v.get("бу") else C["bad"]))
+                    self.l_apple.addWidget(line(f"{name} — {verb}, " + ("б/у деталь" if v.get("бу") else "деталь Apple, новая"),
+                                                C["warn"] if not v.get("бу") else C["bad"]))
                 else:
                     self.l_apple.addWidget(line(f"{name} — не {verb}", C["okdot"]))
-                shown += 1
             self.l_apple.addWidget(label("По сверке Apple с заводской печатью вашего телефона" if any(
                 v.get("источник", "").startswith("сверка") for v in hist.values())
-                else "Из раздела «Запчасти и история обслуживания» вашего телефона", "muted"))
+                else "Из раздела «Запчасти и история обслуживания» вашего телефона", "note", wrap=True))
         else:
             st = rep.get("apple_история_статус")
             if st == "не поддерживается":
                 self.l_apple.addWidget(line("У этой модели Apple не ведёт историю обслуживания", C["muted"]))
-                self.l_apple.addWidget(label("Детали проверены по кабелю — см. сотрудника.", "pricenote", wrap=True))
+                self.l_apple.addWidget(label("Детали проверены по кабелю — остальное уточнит сотрудник.", "note", wrap=True))
             elif st == "формат не распознан":
                 self.l_apple.addWidget(line("Раздел открыт — сотрудник сверит его на экране телефона", C["warn"]))
             elif cable_done:
-                self.l_apple.addWidget(label("Проверка деталей завершена по кабелю. Хотите увидеть ДАТЫ ремонтов — "
-                                             "откройте на телефоне «Об этом устройстве»; это не обязательно.",
-                                             "pricenote", wrap=True))
+                self.l_apple.addWidget(label("Хотите увидеть ДАТЫ ремонтов — откройте на телефоне «Об этом устройстве»; "
+                                             "это не обязательно.", "note", wrap=True))
             else:
                 self.l_apple.addWidget(line("Раздел пока не открыт", C["warn"]))
                 self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве — "
-                                             "данные появятся здесь сами.", "pricenote", wrap=True))
+                                             "данные появятся здесь сами.", "note", wrap=True))
+        self.l_apple.addStretch(1)
         # блокировки
         clear_layout(self.l_locks)
-        self.l_locks.addWidget(label("БЛОКИРОВКИ И БАЗЫ", "kicker"))
+        self.l_locks.addWidget(kicker("БЛОКИРОВКИ И БАЗЫ"))
+        self.l_locks.addSpacing(6)
         blk = sk.get("в_чёрном_списке")
         self.l_locks.addWidget(line("Не в чёрном списке" if blk is False else ("В ЧЁРНОМ СПИСКЕ" if blk else "База IMEI не проверялась"),
-                                    C["okdot"] if blk is False else (C["bad"] if blk else C["warn"])))
+                                    C["okdot"] if blk is False else (C["bad"] if blk else C["warn"]), small=True))
+        fmi_on = leg.get("найти_iphone") == "включён" or sk.get("fmi_включён") is True
+        self.l_locks.addWidget(line("«Найти iPhone» включён — выключите перед продажей" if fmi_on else "Найти iPhone выключен",
+                                    C["warn"] if fmi_on else C["okdot"], small=True))
         mdm = leg.get("mdm")
         self.l_locks.addWidget(line("Без корпоративного надзора" if mdm is False else ("Корпоративный надзор (MDM)" if mdm else "Надзор уточнит сотрудник"),
-                                    C["okdot"] if mdm is False else (C["bad"] if mdm else C["warn"])))
-        fmi_on = leg.get("найти_iphone") == "включён" or sk.get("fmi_включён") is True
-        self.l_locks.addWidget(line("«Найти iPhone» включён — выключите перед продажей" if fmi_on else "«Найти iPhone» выключен",
-                                    C["warn"] if fmi_on else C["okdot"]))
+                                    C["okdot"] if mdm is False else (C["bad"] if mdm else C["warn"]), small=True))
         if leg.get("пароль"):
-            self.l_locks.addWidget(line("Стоит пароль — попросим снять при продаже", C["warn"]))
+            self.l_locks.addWidget(line("Стоит пароль — попросим снять при продаже", C["warn"], small=True))
+        self.l_locks.addStretch(1)
         # паспорт
         clear_layout(self.l_pass)
-        self.l_pass.addWidget(label("ПАСПОРТ", "kicker"))
-        self.l_pass.addLayout(kv("Серийный номер", pas.get("серийник") or "?"))
+        self.l_pass.addWidget(kicker("ПАСПОРТ"))
+        self.l_pass.addSpacing(6)
+        self.l_pass.addLayout(kv("Серийный", pas.get("серийник") or "?"))
         self.l_pass.addLayout(kv("IMEI", pas.get("imei") or "—"))
         self.l_pass.addLayout(kv("Память", f"{sto.get('объём_гб') or '?'} ГБ, свободно {int(sto.get('свободно_гб') or 0)}"))
         self.l_pass.addLayout(kv("Куплен (по базе)", sk.get("дата_покупки") or "—"))
         self.l_pass.addLayout(kv("Уже приносили", "да" if (server or {}).get("уже_приносили") else "нет"))
+        self.l_pass.addStretch(1)
 
     def set_intake(self, st):
         """Номер заявки появляется только после имени и телефона (киоск опрашивает сервер):
-        до этого QR ведёт на страницу данных, после — на отдельную страницу фото/видео."""
+        до этого QR ведёт на страницу данных, после — на отдельную страницу фото/видео.
+        Смена состояния анимируется один раз: номер «подскакивает», QR всплывает."""
         num = st.get("номер")
         if num and not st.get("локально"):
-            self.ticket_num.setText(str(num))
-            self.qr_text.setText(self.TEXT_MEDIA)
-            url = st.get("ссылка_медиа") or st.get("ссылка_данных")
+            mode, url, caption, text = "media", st.get("ссылка_медиа") or st.get("ссылка_данных"), "ФОТО · ВИДЕО", self.TEXT_MEDIA
+            status, colour, blink = "имя и телефон получены", C["ok"], False
         elif num:                                         # автономно, без сервера — только номер
-            self.ticket_num.setText(str(num))
-            url = None
+            mode, url, caption, text = "local", None, "", self.TEXT_LOCAL
+            status, colour, blink = "номер выдан", C["ok"], False
         else:
-            self.ticket_num.setText("—")
-            self.qr_text.setText(self.TEXT_DATA)
-            url = st.get("ссылка_данных")
-        pm = qr_pixmap(url, 190) if url else None
-        if pm:
-            self.qr.setPixmap(pm.scaled(190, 190, Qt.KeepAspectRatio, Qt.FastTransformation))
-            self.qr.setVisible(True)
-        else:
-            self.qr.setVisible(False)
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self._fit_bar()
+            mode, url, caption, text = "data", st.get("ссылка_данных"), "ДАННЫЕ", self.TEXT_DATA
+            status, colour, blink = "ожидаем имя и телефон", C["brand"], True
+        changed = mode != self._mode
+        self._mode = mode
+        self.number.set_text(str(num) if num else "—", number=bool(num), pop=changed and bool(num))
+        self.qr.set(qr_pixmap(url, 200) if url else None, caption, rise=changed and mode == "media")
+        self.qr_text.setText(text)
+        self.status.setText(status)
+        self.status.setStyleSheet(f"color: {colour};")
+        self.pulse.set(C["okdot"] if not blink else C["action"], blink)
+        if self.isVisible():
+            self.number.play()
+            self.qr.play()
 
     def showEvent(self, e):
         super().showEvent(e)
-        self._fit_bar()
+        self.number.play()
+        self.qr.play()
+        if self.bar is not None:
+            self.bar.play()
 
-    def _fit_bar(self):
-        b = getattr(self, "_bar", None)
-        if b:
-            bg, fg, h = b
-            fg.setGeometry(0, 0, int(bg.width() * min(100, max(0, h)) / 100), 14)
-
-
-# ---------- 4. Талон ----------
 
 def qr_pixmap(text, size=200):
     try:
@@ -694,103 +1040,10 @@ def qr_pixmap(text, size=200):
     pm.fill(Qt.white)
     p = QPainter(pm)
     p.setPen(Qt.NoPen)
-    p.setBrush(QColor(C["text"]))
+    p.setBrush(QColor(C["ink"]))
     for y, row in enumerate(m):
         for x, v in enumerate(row):
             if v:
                 p.drawRect(x * box, y * box, box, box)
     p.end()
     return pm
-
-
-class TicketScreen(Screen):
-    def __init__(self):
-        super().__init__()
-        self.sub = label("", "muted")
-        self.root.addLayout(header(self.sub))
-        body = QHBoxLayout()
-        body.setSpacing(96)
-        self.ticket = QFrame()
-        self.ticket.setObjectName("ticket")
-        self.ticket.setFixedSize(560, 640)
-        tl = QVBoxLayout(self.ticket)
-        tl.setContentsMargins(48, 48, 48, 48)
-        tl.setSpacing(12)
-        tl.addStretch(1)
-        k = label("ВАШ НОМЕР", "ticketkicker")
-        k.setAlignment(Qt.AlignCenter)
-        tl.addWidget(k)
-        self.num = label("—", "ticketnum")
-        self.num.setAlignment(Qt.AlignCenter)
-        tl.addWidget(self.num)
-        self.note = label("Подойдите к сотруднику — он уже видит вашу оценку на своём экране", "ticketnote", wrap=True)
-        self.note.setAlignment(Qt.AlignCenter)
-        tl.addWidget(self.note)
-        tl.addStretch(1)
-        body.addWidget(self.ticket, 0, Qt.AlignVCenter)
-        right = QVBoxLayout()
-        right.setSpacing(30)
-        right.addWidget(label("Пока идёте к кассе — два шага на телефоне", "h1s", wrap=True))
-        self.steps_box = QVBoxLayout()
-        self.steps_box.setSpacing(16)
-        right.addLayout(self.steps_box)
-        qrbox = QFrame()
-        qrbox.setObjectName("qrbox")
-        ql = QHBoxLayout(qrbox)
-        ql.setContentsMargins(28, 22, 28, 22)
-        ql.setSpacing(24)
-        self.qr = QLabel()
-        self.qr.setFixedSize(140, 140)
-        ql.addWidget(self.qr)
-        ql.addWidget(label("Хотите забрать оценку с собой? Отсканируйте — откроется страница с полным отчётом по этому телефону.", "line", wrap=True), 1)
-        right.addWidget(qrbox)
-        self.back_note = label("Экран вернётся к началу через 60 секунд или когда вы отключите телефон", "muted")
-        right.addWidget(self.back_note)
-        right.addStretch(1)
-        body.addLayout(right, 1)
-        self.root.addLayout(body, 1)
-
-    def fill(self, rep, server, return_seconds):
-        pas, leg, price = rep.get("паспорт") or {}, rep.get("правовой") or {}, rep.get("цена") or {}
-        cur = price.get("валюта") or "₸"
-        self.sub.setText(f"{pas.get('модель') or 'iPhone'}" + (f" · {int(price['цена']):,} {cur}".replace(",", " ") if price.get("цена") else ""))
-        if server and server.get("номер") and server.get("локально"):
-            self.num.setText(str(server["номер"]))
-            self.note.setText("Подойдите к сотруднику и назовите этот номер")
-        elif server and server.get("номер"):
-            self.num.setText(str(server["номер"]))
-            self.note.setText("Подойдите к сотруднику — он уже видит вашу оценку на своём экране")
-        else:
-            self.num.setText("—")
-            self.note.setText("Связи с кассой сейчас нет. Подойдите к сотруднику, оценка сохранена на этом киоске")
-        clear_layout(self.steps_box)
-        steps = []
-        if leg.get("найти_iphone") == "включён":
-            steps.append(("Выключите «Найти iPhone»", "Настройки → ваше имя → Локатор → Найти iPhone → выключить. Понадобится пароль Apple ID."))
-        steps.append(("Сделайте резервную копию, если нужна", "Перед выкупом телефон будет стёрт. Сотрудник поможет перенести данные на новый."))
-        if pas.get("esim"):
-            steps.append(("Удалите eSIM при стирании", "Телефон предложит удалить профиль eSIM — согласитесь, чтобы номер не остался на чужом аппарате."))
-        for i, (t, d) in enumerate(steps, 1):
-            f = QFrame()
-            f.setObjectName("row")
-            lay = QHBoxLayout(f)
-            lay.setContentsMargins(28, 24, 28, 24)
-            lay.setSpacing(22)
-            n = label(str(i), "num")
-            n.setAlignment(Qt.AlignCenter)
-            lay.addWidget(n, 0, Qt.AlignTop)
-            col = QVBoxLayout()
-            col.setSpacing(6)
-            col.addWidget(label(t, "step"))
-            dl = label(d, "pricenote", wrap=True)
-            col.addWidget(dl)
-            lay.addLayout(col, 1)
-            self.steps_box.addWidget(f)
-        url = (server or {}).get("ссылка_отчёта")
-        pm = qr_pixmap(url, 140) if url else None
-        if pm:
-            self.qr.setPixmap(pm.scaled(140, 140, Qt.KeepAspectRatio, Qt.FastTransformation))
-            self.qr.setVisible(True)
-        else:
-            self.qr.setVisible(False)
-        self.back_note.setText(f"Экран вернётся к началу через {return_seconds} секунд или когда вы отключите телефон")

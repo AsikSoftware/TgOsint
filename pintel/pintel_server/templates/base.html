@@ -11,11 +11,11 @@
 {% block body %}
 <div class="layout">
   <nav class="side" aria-label="Разделы">
-    <img class="logo" src="/static/logo.png" alt="Pintel">
-    <a href="/queue" class="{{ 'active' if active == 'queue' else '' }}">Очередь</a>
-    <a href="/queue?period=all" class="{{ 'active' if active == 'deals' else '' }}">Сделки</a>
-    {% if user and user.role in ('admin', 'senior') %}<a href="/settings" class="{{ 'active' if active == 'settings' else '' }}">Настройки</a>{% endif %}
-    {% if user and user.role == 'admin' %}<a href="/employees" class="{{ 'active' if active == 'employees' else '' }}">Сотрудники</a>{% endif %}
+    <a class="brand" href="/queue"><span class="mark">P</span><span class="name">Pintel</span></a>
+    <a href="/queue" class="item {{ 'active' if active == 'queue' else '' }}">Очередь</a>
+    <a href="/queue?period=all" class="item {{ 'active' if active == 'deals' else '' }}">Сделки</a>
+    {% if user and user.role in ('admin', 'senior') %}<a href="/settings" class="item {{ 'active' if active == 'settings' else '' }}">Настройки</a>{% endif %}
+    {% if user and user.role == 'admin' %}<a href="/employees" class="item {{ 'active' if active == 'employees' else '' }}">Сотрудники</a>{% endif %}
     <div class="status">
       {% block sidestatus %}{% endblock %}
       {% if user %}Вы вошли как<br><b>{{ user.role_label }} · {{ user.name }}</b>

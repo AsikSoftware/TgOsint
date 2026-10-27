@@ -1,19 +1,11 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Фото и видео · Pintel</title><link rel="stylesheet" href="/static/app.css">
-<style>
-  .drop{border:2px dashed #cbd5e1;border-radius:14px;padding:18px;text-align:center;background:#fff}
-  .big{display:block;width:100%;padding:16px;font-size:18px;border-radius:14px;border:0;background:#2563eb;color:#fff;font-weight:700}
-  .thumbs{display:flex;flex-wrap:wrap;gap:8px}
-  .thumb{background:#f1f5f9;border-radius:10px;padding:6px 10px;font-size:14px}
-  .okbar{background:#dcfce7;color:#166534;border-radius:10px;padding:10px 12px}
-  .warnbar{background:#fef9c3;color:#854d0e;border-radius:10px;padding:10px 12px}
-</style></head>
+<title>Фото и видео · Pintel</title><link rel="icon" href="/static/logo.png"><link rel="stylesheet" href="/static/app.css"></head>
 <body>
-<main style="max-width:560px;margin:0 auto;padding:24px 16px;gap:16px;display:flex;flex-direction:column">
-  <img src="/static/logo.png" alt="Pintel" style="height:34px;width:auto;align-self:flex-start">
-  <h1 style="margin:0">Фото и видео телефона</h1>
-  <div class="muted">{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.number %} · заявка №{{ ev.number }}{% endif %}</div>
+<main class="client">
+  <div class="brand"><img src="/static/logo.png" alt="Pintel"></div>
+  <div><h1>Фото и видео телефона</h1>
+    <div class="sub">{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.number %} · заявка №{{ ev.number }}{% endif %}</div></div>
 
   {% if imported %}
     <div class="okbar">Сделка уже оформлена — загрузка закрыта. Спасибо!</div>
@@ -24,12 +16,12 @@
       <label class="drop">
         <input type="file" name="files" multiple accept="image/*,video/*" style="display:none"
                onchange="document.getElementById('n').textContent = this.files.length + ' выбрано'">
-        <div style="font-weight:600">Нажмите, чтобы снять или выбрать</div>
-        <div class="muted">Телефон со всех сторон и экран с IMEI. Можно видео.</div>
-        <div class="muted" id="n" style="margin-top:6px"></div>
+        <div class="q">Нажмите, чтобы снять или выбрать</div>
+        <div class="note">Телефон со всех сторон и экран с IMEI. Можно видео.</div>
+        <div class="note" id="n" style="margin-top:6px"></div>
       </label>
-      <button class="big" type="submit">Загрузить</button>
-      <div class="note">До {{ max_files }} файлов, каждый до {{ max_mb }} МБ.</div>
+      <button class="bigbtn" type="submit">Загрузить</button>
+      <div class="note foot">До {{ max_files }} файлов, каждый до {{ max_mb }} МБ.</div>
     </form>
   {% endif %}
 

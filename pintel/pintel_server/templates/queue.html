@@ -36,10 +36,10 @@
     <td class="num">{{ r.number or '—' }}</td>
     <td class="muted">{{ r.created_at|time }}{% if period != 'today' %}<br><small>{{ r.day }}</small>{% endif %}</td>
     <td><b>{{ r.model_name or '?' }}{% if r.capacity_gb %} · {{ r.capacity_gb }}{% endif %}</b>{% if r.device and r.device.evaluations_count > 1 %} <span class="pill gray">уже приносили</span>{% endif %}</td>
-    <td class="{{ 'ok' if r.battery_health and r.battery_health >= 85 else 'warn' }}">{{ r.battery_health if r.battery_health is not none else '?' }} % · {{ r.battery_cycles or '?' }} ц.</td>
+    <td class="nowrap {{ 'ok' if r.battery_health and r.battery_health >= 85 else 'warn' }}">{{ r.battery_health if r.battery_health is not none else '?' }} % · {{ r.battery_cycles or '?' }} ц.</td>
     <td class="{{ 'ok' if r.apple_summary == 'всё родное' else ('muted' if r.apple_summary == 'история не получена' else 'warn') }}">{{ r.apple_summary }}</td>
     <td class="{{ 'ok' if r.locks_summary == 'чисто' else ('bad' if 'ЧЁРНЫЙ' in (r.locks_summary or '') or 'MDM' in (r.locks_summary or '') else 'warn') }}">{{ r.locks_summary }}</td>
-    <td><b>{% if r.verdict == 'ПРОБЛЕМНЫЙ' %}<span class="bad">не принимаем</span>{% elif r.price_offer %}{{ r.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</b></td>
+    <td class="nowrap"><b>{% if r.verdict == 'ПРОБЛЕМНЫЙ' %}<span class="bad">не принимаем</span>{% elif r.price_offer %}{{ r.price_offer|money }} {{ settings.currency }}{% else %}—{% endif %}</b></td>
     <td>
       {% if r.status == 'bought' %}<span class="pill ok">Выкуплен · {{ r.final_price|money }} {{ settings.currency }}</span>
       {% elif r.status == 'declined' %}<span class="pill bad">Отказ</span>

@@ -415,3 +415,17 @@ def test_references_collect_themselves_from_every_phone(app):
              and "Неизвестная запасная часть" in zipfile.ZipFile(
                  io.BytesIO(z3.read(n))).read("расхождения.txt").decode("utf-8")]
     assert снова, z3.namelist()
+
+
+def test_queue_never_says_all_genuine_without_apple():
+    """«Всё родное» в очереди — только с подтверждением Apple. Записи о ремонтах с нулями
+    выглядят так же, и на демо именно они дали зелёное при «Неизвестно» на экране."""
+    from pintel_server.services.evaluations import apple_summary
+    журнал = {"Display": {"деталь": "Экран", "меняли": False}}
+    assert apple_summary({"apple_история": журнал,
+                          "детали_вердикт": {"apple_подтверждено": True}}) == "всё родное"
+    assert apple_summary({"apple_история": журнал,
+                          "детали_вердикт": {"apple_подтверждено": False}}) == "Apple не подтвердила"
+    assert apple_summary({"apple_история": {}}) == "ждёт раздел на телефоне"
+    assert apple_summary({"apple_история": {"Display": {"деталь": "Экран", "меняли": True}},
+                          "детали_вердикт": {"apple_подтверждено": True}}) == "менялось: Экран"

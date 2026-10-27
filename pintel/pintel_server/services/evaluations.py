@@ -34,11 +34,18 @@ def next_number(db, point_id, day) -> int:
 
 
 def apple_summary(rep) -> str:
+    """Короткая строка для очереди и для комментария в Оценке.
+
+    «Всё родное» говорим ТОЛЬКО когда Apple это подтвердила. Записи о ремонтах без сверки
+    деталей выглядят так же (все нули), и на демо именно они дали зелёное при «Неизвестно»
+    на экране телефона — в очереди такая строка обманывает сотрудника ровно так же."""
     hist = rep.get("apple_история") or {}
     if not hist:
         return "ждёт раздел на телефоне"
     changed = [v["деталь"] for v in hist.values() if v.get("меняли")]
-    return "всё родное" if not changed else ("менялось: " + ", ".join(changed[:3]))
+    if changed:
+        return "менялось: " + ", ".join(changed[:3])
+    return "всё родное" if (rep.get("детали_вердикт") or {}).get("apple_подтверждено") else "Apple не подтвердила"
 
 
 def locks_summary(rep) -> str:

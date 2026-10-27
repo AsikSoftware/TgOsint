@@ -278,3 +278,50 @@ def test_untrusted_module_is_a_verdict_of_its_own():
     assert comp["детали"]["Display"]["неизвестная"] and comp["детали"]["Display"]["меняли"]
     assert "Battery" not in comp["детали"]              # доверенный модуль деталью-проблемой не становится
     assert comp["доверие"]["Display"]["isTrusted"] == 0 and comp["доверие"]["Battery"]["isTrusted"] == 1
+
+
+# ---------------------------------------------------------------- сверка печати без «delta components»
+# Разобрано по прошивке iOS 17.7 (iPhone15,2): в ней есть строка `Unsealed: %@`, а
+# `delta components` нет вовсе. Раньше по такому журналу вердикт не собирался вообще —
+# целое поколение iOS молча уходило в «проверка неполная».
+UNSEALED_CLEAN = ('Oct 27 10:00:01 iPhone corerepaird(CoreRepairCore)[163] <Notice>: '
+                  'fetched RCHL successfully: (null) length = 0\n'
+                  'Oct 27 10:00:01 iPhone corerepaird(CoreRepairCore)[163] <Notice>: Unsealed: {\n}\n')
+UNSEALED_DIRTY = ('Oct 27 10:00:01 iPhone corerepaird(CoreRepairCore)[163] <Notice>: '
+                  'fetched RCHL successfully: (null) length = 0\n'
+                  'Oct 27 10:00:01 iPhone corerepaird(CoreRepairCore)[163] <Notice>: Unsealed: {\n'
+                  '    Display =     {\n        serial = "x";\n    };\n}\n')
+
+
+def _прогнать(строки):
+    lst = rh.Listener(None)
+    for s in строки:
+        lst._feed(s)
+    return lst
+
+
+def test_seal_verdict_without_delta_line():
+    """Чистый аппарат: пустая сверка и пустой RCHL — базовые детали «не меняли»."""
+    lst = _прогнать([UNSEALED_CLEAN])
+    assert lst.meta["формат"].startswith("сверка")
+    assert set(lst.items) >= {"Battery", "Display", "Camera", "FaceID"}
+    assert not any(v["меняли"] for v in lst.items.values())
+
+
+def test_seal_verdict_without_delta_line_catches_unknown_part():
+    """Деталь вне заводской печати — «неизвестного происхождения», это СТОП."""
+    lst = _прогнать([UNSEALED_DIRTY])
+    assert lst.items["Display"]["неизвестная"] and lst.items["Display"]["меняли"]
+    assert lst.meta["формат"].startswith("сверка")
+
+
+@pytest.mark.parametrize("строка", [
+    "Oct 27 06:59:05 iPhone mobilerepaird(CoreRepairCore)[163] <Notice>: Display failed preflight",
+    "Oct 27 10:00:01 iPhone mobilerepaird(CoreRepairCore)[163] <Notice>: Display result: failed preflight checks",
+])
+def test_preflight_refusal_is_caught_in_both_wordings(строка):
+    """iOS 26 пишет «Display failed preflight», iOS 17.7 — «Display result: failed preflight
+    checks» (видно в прошивке). Отказ по детали обязан читаться в обоих случаях."""
+    comp = rh.parse_components(строка + "\n")
+    assert comp["преflight"] == ["Display"]
+    assert comp["детали"]["Display"]["неизвестная"]

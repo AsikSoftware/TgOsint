@@ -75,7 +75,10 @@ def supported(product_type, ios_version):
 #      страховку: если на другой iOS не окажется строк systemhealth, вердикт даст это.
 SYSHEALTH_RE = re.compile(r"systemhealth \{(.*?)\n\}", re.S)
 REPAIRED_RE = re.compile(r"component: (\w+) isComponentRepairedUsing(\w+): (\d)")
-PREFLIGHT_RE = re.compile(r"\b(\w+) failed preflight")
+# iOS 26 пишет «Display failed preflight», а в прошивке iOS 17.7 строка другая:
+# «%{public}@ result: failed preflight checks». Ловим обе, иначе на iOS 17 отказ по детали
+# прошёл бы мимо: имя компонента стоит перед «result:», а не перед «failed».
+PREFLIGHT_RE = re.compile(r"\b(\w+)(?:\s+result:)?\s+failed preflight")
 AUTHCP_RE = re.compile(r"AuthCP Components: \((.*?)\n\)", re.S)
 BATTERY_STATE_RE = re.compile(r"Battery Health State\{(.*?)\n\}", re.S)
 _KV_RE = re.compile(r'^\s*"?([A-Za-z]\w*)"?\s*=\s*"?(-?\d+)"?\s*;', re.M)
@@ -126,15 +129,19 @@ def parse_unsealed(line):
 
 
 def synthesize(meta):
-    """Итог по сверке с заводской печатью (iOS 18):
+    """Итог по сверке с заводской печатью:
       дельта пуста и RCHL пуст      → базовые детали «не меняли»
       дельта пуста, RCHL не пуст    → у Apple есть записи о ремонте, но в журнал они не вышли:
                                       вердикт «есть записи» (не «всё родное»!)
-      дельта/Unsealed не пусты       → эти детали «неизвестного происхождения»."""
-    delta = meta.get("дельта")
-    if delta is None:
+      дельта/Unsealed не пусты       → эти детали «неизвестного происхождения».
+
+    Достаточно ЛЮБОЙ из двух строк. В прошивке iOS 17.7 (iPhone15,2) есть `Unsealed: %@`,
+    а строки `delta components` нет вовсе — раньше по такому журналу вердикт не собирался
+    вообще, то есть целое поколение iOS молча уходило в «проверка неполная»."""
+    delta, unsealed = meta.get("дельта"), meta.get("unsealed")
+    if delta is None and unsealed is None:
         return {}
-    unknown = list(dict.fromkeys(list(delta) + list(meta.get("unsealed") or [])))
+    unknown = list(dict.fromkeys(list(delta or []) + list(unsealed or [])))
     rchl = meta.get("rchl_байт")
     items = {}
     if rchl:
@@ -355,12 +362,13 @@ class Listener:
             self.meta["unsealed"] = unsealed
             if unsealed:
                 self.buf.append(line if line.endswith("\n") else line + "\n")
-        if self.meta["дельта"] is not None and not self.items:
+        if (self.meta["дельта"] is not None or self.meta["unsealed"] is not None) and not self.items:
             self.items = synthesize(self.meta)
-            self.meta["формат"] = "сверка с заводской печатью (iOS 18)"
+            self.meta["формат"] = "сверка с заводской печатью (iOS 17/18)"
             if self.items and not self.found_at:
                 self.found_at = time.monotonic()
-                self.log(f"история Apple (сверка с печатью): замен {len(self.meta['дельта'])}, "
+                замен = len(self.meta["дельта"] or []) + len(self.meta["unsealed"] or [])
+                self.log(f"история Apple (сверка с печатью): замен {замен}, "
                          f"RCHL {self.meta['rchl_байт']}")
         elif self.items and (delta is not None or unsealed is not None):
             self._apply_seal()                     # записи уже есть — сверка их дополняет, а не теряется

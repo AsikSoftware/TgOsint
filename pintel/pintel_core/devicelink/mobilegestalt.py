@@ -23,13 +23,21 @@ SEAL_KEYS = [
     "FDRSealingStatus", "IsServicePart", "DeviceSupportsBatteryModuleAuthentication",
     "TopModuleAuthChipID",
 ]
-# Серийники модулей (для сверки привязки, когда IORegistry их не отдаёт по кабелю)
+# Серийники модулей (для сверки привязки, когда IORegistry их не отдаёт по кабелю).
+# Имена сверены с дампами ключей libMobileGestalt: «DisplaySerialNumber»,
+# «FrontIRCameraModuleSerialNumber» и «WirelessChargingSerialNumber» ключами Apple
+# не являются — их запрос всегда возвращал пусто. Ниже — набор, который телефон
+# сам сверяет с заводской печатью (видно по строкам corerepaird в журнале).
 SERIAL_KEYS = [
-    "BatterySerialNumber", "DisplaySerialNumber", "PanelSerialNumber", "ScreenSerialNumber",
+    "BatterySerialNumber", "PanelSerialNumber", "RawPanelSerialNumber", "ScreenSerialNumber",
     "CoverglassSerialNumber", "MLBSerialNumber", "RearFacingCameraModuleSerialNumber",
-    "FrontFacingCameraModuleSerialNumber", "FrontIRCameraModuleSerialNumber",
-    "ArcModuleSerialNumber", "MesaSerialNumber", "SavageSerialNumber",
-    "AmbientLightSensorSerialNumber", "WirelessChargingSerialNumber",
+    "RearFacingSuperWideCameraModuleSerialNumber", "RearFacingTelephotoCameraModuleSerialNumber",
+    "FrontFacingCameraModuleSerialNumber", "FrontFacingIRCameraModuleSerialNumber",
+    "FrontFacingIRStructuredLightProjectorModuleSerialNumber",
+    "ArcModuleSerialNumber", "MesaSerialNumber", "SavageSerialNumber", "SavageChipID",
+    "AmbientLightSensorSerialNumber", "RosalineSerialNumber", "DisplayDriverICChipID",
+    "ArrowChipID", "ArrowUniqueChipID", "NFCUniqueChipID", "BasebandSerialNumber",
+    "BasebandUniqueId", "UniqueChipID", "LunaFlexSerialNumber", "JasperSerialNumber",
 ]
 # Цвета корпуса (на iOS 17.4+ только этим путём; на старых — тоже отдаёт)
 COLOUR_KEYS = [

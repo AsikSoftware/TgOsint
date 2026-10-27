@@ -306,15 +306,17 @@ def test_staff_parts_check_gates_import(app, monkeypatch):
     monkeypatch.setattr(cfg, "ocenka_db_url", "postgresql+psycopg://u:p@localhost/pintel_ocenka_test")
     r = admin.post(f"/deal/{ev_id}/import_ocenka")
     assert r.status_code == 303 and "сверьте" in loc(r)                 # без сверки — не уходит
-    r = admin.post(f"/deal/{ev_id}/parts", data={"Battery": "serviced", "Display": "unknown", "Camera": "orig", "note": "экран без даты"})
+    r = admin.post(f"/deal/{ev_id}/parts", data={"Battery": "serviced", "Display": "unknown",
+                                                "Camera": "genuine", "note": "экран без даты"})
     assert r.status_code == 303
     page = admin.get(f"/deal/{ev_id}").text
-    assert "Дисплей: неизвестная деталь" in page and "экран без даты" in page
+    assert "Дисплей: Неизвестная запасная часть" in page and "экран без даты" in page
     db = SessionLocal(); ev = db.get(Evaluation, ev_id)
     from pintel_server.services import ocenka_import as oi
-    assert oi._phone_status(ev) == "Ранее был в ремонте" and "Дисплей — неизвестная деталь" in oi._comment_ocenka(ev)
+    assert oi._phone_status(ev) == "Ранее был в ремонте"
+    assert "Дисплей — Неизвестная запасная часть" in oi._comment_ocenka(ev)
     logs = [l.text for l in db.scalars(select(AuditLog).where(AuditLog.entity_id == ev_id, AuditLog.entity == "evaluation")).all()]
-    assert any("Сверка «Детали и обслуживание»" in t and "Дисплей — неизвестная деталь" in t for t in logs)
+    assert any("Сверка «Детали и обслуживание»" in t and "Дисплей — Неизвестная запасная часть" in t for t in logs)
     db.close()
     r = admin.post(f"/deal/{ev_id}/import_ocenka")
     assert "сверьте" not in loc(r)                      # дальше упирается в недоступную БД Оценки, не в сверку

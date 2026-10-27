@@ -65,8 +65,8 @@ def test_compare_catches_the_demo_case():
     truth = reference.truth_template(детали={"Battery": "serviced", "Display": "unknown"}, раздел_открывали=True)
     bad = reference.compare(rep, truth)
     assert len(bad) == 3, bad
-    assert any("Аккумулятор" in b and "сервисное обслуживание" in b for b in bad)
-    assert any("Дисплей" in b and "неизвестная деталь" in b for b in bad)
+    assert any("Аккумулятор" in b and "Сервисное обслуживание" in b for b in bad)
+    assert any("Дисплей" in b and "Неизвестная запасная часть" in b for b in bad)
     assert any("все детали родные" in b for b in bad)
 
 
@@ -76,8 +76,17 @@ def test_compare_silent_when_everything_matches():
                                          {"деталь": "Дисплей", "статус": "ok", "почему": "ок"}]},
            "apple_история": {"Display": {"деталь": "Дисплей", "меняли": False}},
            "apple_история_статус": "получена"}
-    truth = reference.truth_template(детали={"Battery": "orig", "Display": "orig"}, раздел_открывали=True)
+    truth = reference.truth_template(детали={"Battery": "genuine", "Display": "genuine"}, раздел_открывали=True)
     assert reference.compare(rep, truth) == []
+
+
+def test_states_are_apple_wording():
+    """Варианты в опросе — официальные формулировки Apple, а не наши выдумки."""
+    assert reference.STATES["unknown"] == "Неизвестная запасная часть"
+    assert reference.STATES["unverified"] == "Непроверенная запасная часть"
+    assert reference.STATES["used"] == "Запасная часть использовалась"
+    assert reference.STATES["finish"] == "Завершение ремонта"
+    assert set(reference.MUST_STOP) == {"unknown", "unverified"}        # обе — СТОП для выкупа
 
 
 def test_compare_wants_raw_log_when_section_was_opened():

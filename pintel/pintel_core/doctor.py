@@ -18,7 +18,7 @@ import argparse, asyncio, json, os, sys, time, tomllib
 from datetime import datetime
 
 from . import __version__
-from .analysis import report as report_mod
+from .analysis import capabilities, report as report_mod
 from . import reference
 from .devicelink import connect, repair_history, snapshot
 from .external import gsheet, pricing, sickw
@@ -280,12 +280,17 @@ def _ask_truth(rep):
     """Спросить сотрудника, что ПРЯМО СЕЙЧАС показывает экран телефона.
     Это и есть правда, с которой сверяется наша проверка."""
     say("\n  На телефоне: Настройки → Основные → Об этом устройстве → «Детали и обслуживание».")
-    say("  Что написано напротив каждой детали?")
-    say("    1 оригинальная деталь Apple   2 сервисное обслуживание   3 неизвестная деталь")
-    say("    4 б/у деталь                  5 в списке нет            Enter — пропустить")
-    codes = {"1": "orig", "2": "serviced", "3": "unknown", "4": "used", "5": "absent"}
+    say("  Что написано напротив каждой детали? (формулировки Apple)")
+    codes = {}
+    for i, (code, (label, why, _)) in enumerate(reference.APPLE_STATES.items(), 1):
+        codes[str(i)] = code
+        say(f"    {i} {label}")
+    say("    Enter — пропустить деталь")
+    tracked = set(capabilities.apple_tracked_parts((rep.get("паспорт") or {}).get("код_модели")))
     parts = {}
     for key, name in reference.PARTS:
+        if tracked and key not in tracked:
+            continue                                   # Apple по этой детали у этой модели не пишет
         try:
             v = input(f"    {name}: ").strip()
         except EOFError:

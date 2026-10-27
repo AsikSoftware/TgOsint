@@ -25,14 +25,14 @@ import re
 import zipfile
 from datetime import datetime
 
-# Детали, которые Apple показывает в разделе «Детали и обслуживание».
-PARTS = (("Battery", "Аккумулятор"), ("Display", "Дисплей"), ("Camera", "Камера"),
-         ("FaceID", "Face ID"), ("BackGlass", "Заднее стекло"))
-# Что может быть написано напротив детали на экране телефона.
-STATES = {"orig": "оригинальная деталь Apple", "serviced": "сервисное обслуживание",
-          "unknown": "неизвестная деталь", "used": "б/у деталь", "absent": "в списке нет"}
-# Состояния, при которых деталь НЕ родная: наш вердикт обязан это поймать.
-NOT_ORIGINAL = ("serviced", "unknown", "used")
+from .analysis.parts import APPLE_PART_ORDER as PARTS, APPLE_STATES
+
+# Что может быть написано напротив детали на экране телефона (формулировки Apple).
+STATES = {k: v[0] for k, v in APPLE_STATES.items()}
+# Состояния, при которых деталь НЕ оригинальная: наш вердикт обязан это поймать.
+NOT_ORIGINAL = tuple(k for k, v in APPLE_STATES.items() if v[2] in ("bad", "used", "repaired"))
+# Состояния, которые обязаны дать СТОП.
+MUST_STOP = tuple(k for k, v in APPLE_STATES.items() if v[2] == "bad")
 
 # ---------------------------------------------------------------- обезличивание
 
@@ -180,11 +180,11 @@ def compare(rep, truth):
             if ours not in ("bad", "used", "repaired"):
                 bad.append(f"{name}: телефон — «{STATES[state]}», мы — "
                            + ("«родная»" if ours == "ok" else "ничего не сказали"))
-            elif state == "unknown" and ours != "bad":
-                bad.append(f"{name}: телефон — «неизвестная деталь» (это СТОП), мы — «{ours}»")
-        elif state == "orig" and ours in ("bad", "used"):
-            bad.append(f"{name}: телефон — «оригинальная деталь Apple», мы — «{ours}»")
-    if marked and all(v == "orig" for v in marked.values()):
+            elif state in MUST_STOP and ours != "bad":
+                bad.append(f"{name}: телефон — «{STATES[state]}» (это СТОП), мы — «{ours}»")
+        elif state == "genuine" and ours in ("bad", "used"):
+            bad.append(f"{name}: телефон — «{STATES[state]}», мы — «{ours}»")
+    if marked and all(v == "genuine" for v in marked.values()):
         if parts_v.get("итог") != "родные":
             bad.append(f"телефон: все детали оригинальные, наш вердикт по деталям — «{parts_v.get('итог')}»"
                        + ("" if parts_v.get("apple_подтверждено") else " (Apple не подтвердила — ждём разбора журнала)"))

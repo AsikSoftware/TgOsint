@@ -27,3 +27,31 @@ def has_face_id(pt):
 def has_touch_id(pt):
     fid = has_face_id(pt)
     return None if fid is None else (not fid)
+
+
+# Какие детали Apple вообще отслеживает в разделе «Детали и обслуживание» —
+# официальная таблица Apple (support.apple.com/ru-ru/102658):
+#   iPhone XR / XS / XS Max / SE 2 / SE 3 — только аккумулятор;
+#   iPhone 11 — аккумулятор и дисплей;
+#   iPhone 12 и новее — + материнская плата, фронтальная и задние камеры.
+# Чего в таблице нет, того Apple не подтвердит никогда: требовать по такой детали
+# подтверждения нельзя, надо честно сказать, что по ней судим только по кабелю.
+APPLE_PARTS_BATTERY = ("Battery",)
+APPLE_PARTS_11 = ("Battery", "Display")
+APPLE_PARTS_12 = ("Battery", "Display", "LogicBoard", "FrontCamera", "Camera")
+
+
+def apple_tracked_parts(pt):
+    """→ детали, по которым Apple ведёт историю для этой модели. Пусто — раздела нет."""
+    major, minor = _major(pt)
+    if major is None:
+        return ()
+    if pt in TOUCH_ID_IN_FACE_ID_ERA:                 # SE 2 и SE 3 — только аккумулятор
+        return APPLE_PARTS_BATTERY
+    if major < 11:                                    # iPhone X и старше — раздела нет
+        return ()
+    if major == 11:                                   # XR, XS, XS Max
+        return APPLE_PARTS_BATTERY
+    if major == 12:                                   # iPhone 11 семейство
+        return APPLE_PARTS_11
+    return APPLE_PARTS_12

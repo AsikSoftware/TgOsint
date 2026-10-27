@@ -74,7 +74,7 @@
       {% if parts['отмечено'] %}<div class="tile {{ 'bad' if parts['замены'] else ('warn' if parts['сервис'] else 'ok') }}"><b>{% if parts['замены'] %}{{ parts['замены']|join(', ') }}{% elif parts['сервис'] %}Сервисное обслуживание: {{ parts['сервис']|join(', ') }}{% else %}На экране телефона замен нет{% endif %}</b><small>отметил(а) {{ parts['кто'] }}{% if parts['примечание'] %} · {{ parts['примечание'] }}{% endif %}</small></div>{% endif %}
       {% if not ev.ocenka_device_id %}
       <form method="post" action="/deal/{{ ev.id }}/parts" class="grid3" style="gap:10px 14px">
-        {% for key, name in PARTS_STAFF %}
+        {% for key, name in parts['строки'] %}
         <label class="f">{{ name }}<select name="{{ key }}"><option value="">—</option>{% for code, title in PART_STATES.items() %}<option value="{{ code }}" {{ 'selected' if parts['метки'].get(key) == code }}>{{ title }}</option>{% endfor %}</select></label>
         {% endfor %}
         <label class="f">Примечание<input type="text" name="note" value="{{ parts['примечание'] }}" placeholder="например: дата ремонта с экрана"></label>

@@ -203,24 +203,28 @@ def set_client_details(db, user, ev: Evaluation, *, name=None, phone=None,
     return ev
 
 
-PARTS_STAFF = (("Battery", "Аккумулятор"), ("Display", "Дисплей"), ("Camera", "Камера"),
-               ("FaceID", "Face ID"), ("BackGlass", "Заднее стекло"))
-PART_STATES = {"orig": "оригинальная деталь Apple", "serviced": "сервисное обслуживание",
-               "unknown": "неизвестная деталь", "used": "б/у деталь", "absent": "в списке нет"}
+from pintel_core.analysis.capabilities import apple_tracked_parts
+from pintel_core.analysis.parts import APPLE_PART_ORDER as PARTS_STAFF, APPLE_STATES
+
+PART_STATES = {k: v[0] for k, v in APPLE_STATES.items()}
+_SEVERITY = {k: v[2] for k, v in APPLE_STATES.items()}
 
 
 def parts_check(ev: Evaluation) -> dict:
     """Нужна ли сверка раздела «Детали и обслуживание» с экрана телефона и что отметил сотрудник.
-    Автоматика даёт зелёный только с подтверждением Apple; иначе без сверки сделка в Оценку не уйдёт."""
+    Автоматика даёт зелёный только с подтверждением Apple; иначе без сверки сделка в Оценку не уйдёт.
+    Показываем только те детали, по которым Apple вообще ведёт историю для этой модели."""
     pv = (ev.report or {}).get("детали_вердикт") or {}
     names = dict(PARTS_STAFF)
     staff = ev.staff_parts or {}
-    marks = {k: v for k, v in staff.items() if k in names and v}
-    return {"авто": pv.get("итог"), "почему": pv.get("почему") or "",
+    marks = {k: v for k, v in staff.items() if k in names and v in PART_STATES}
+    tracked = set(apple_tracked_parts(ev.model_code))
+    строки = [(k, n) for k, n in PARTS_STAFF if not tracked or k in tracked or k in marks]
+    return {"авто": pv.get("итог"), "почему": pv.get("почему") or "", "строки": строки,
             "нужна_сверка": pv.get("итог") not in ("родные", "ремонт", "замена"),
             "отмечено": bool(marks), "метки": marks,
-            "замены": [f"{names[k]}: {PART_STATES.get(v, v)}" for k, v in marks.items() if v in ("unknown", "used")],
-            "сервис": [names[k] for k, v in marks.items() if v == "serviced"],
+            "замены": [f"{names[k]}: {PART_STATES[v]}" for k, v in marks.items() if _SEVERITY.get(v) == "bad"],
+            "сервис": [names[k] for k, v in marks.items() if _SEVERITY.get(v) in ("repaired", "used")],
             "кто": staff.get("кто"), "когда": staff.get("когда"), "примечание": staff.get("примечание") or ""}
 
 

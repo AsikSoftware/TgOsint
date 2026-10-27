@@ -139,7 +139,8 @@ def deal(request: Request, ev_id: int, user: User = Depends(require_staff), db: 
 
 @router.post("/deal/{ev_id}/parts")
 def deal_parts(ev_id: int, Battery: str = Form(""), Display: str = Form(""), Camera: str = Form(""),
-               FaceID: str = Form(""), BackGlass: str = Form(""), note: str = Form(""),
+               FaceID: str = Form(""), BackGlass: str = Form(""), LogicBoard: str = Form(""),
+               FrontCamera: str = Form(""), note: str = Form(""),
                user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
     """Сверка с экраном телефона: что показывает «Детали и обслуживание». Обязательна,
     когда автоматика не получила подтверждения Apple."""
@@ -147,7 +148,8 @@ def deal_parts(ev_id: int, Battery: str = Form(""), Display: str = Form(""), Cam
     if ev.ocenka_device_id:
         return RedirectResponse(f"/deal/{ev_id}?e=Сделка уже отправлена в Оценку — сверку не меняем", 303)
     ev_service.set_staff_parts(db, user, ev, {"Battery": Battery, "Display": Display, "Camera": Camera,
-                                              "FaceID": FaceID, "BackGlass": BackGlass}, note)
+                                              "FaceID": FaceID, "BackGlass": BackGlass,
+                                              "LogicBoard": LogicBoard, "FrontCamera": FrontCamera}, note)
     return RedirectResponse(f"/deal/{ev_id}?m=Сверка деталей сохранена", 303)
 
 

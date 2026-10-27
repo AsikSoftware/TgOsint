@@ -33,3 +33,23 @@ def test_needles_cover_every_known_format():
                    "CRRepairHistory", "Unsealed", "delta components", "fetched RCHL",
                    "isTrustedForUI", "failed preflight", "AuthCP Components", "Battery Health State"):
         assert строка in текст, строка
+
+
+def test_aea_decryptor_parses():
+    """Расшифровщик .dmg.aea — тоже рабочий инструмент: обязан разбираться и держать метки
+    HKDF из эталона blacktop/ipsw (на них посегментно держится расшифровка) и свой API."""
+    дерево, текст = _разобрать("aea.py")
+    assert isinstance(дерево, ast.Module)
+    for метка in ("AEA_AMK", "AEA_RHEK", "AEA_CK", "AEA_CHEK", "AEA_SK"):
+        assert метка in текст, метка
+    for имя in ("разобрать_auth", "ключ_из_полей", "корневой_заголовок", "идти_по_сегментам"):
+        assert имя in текст, имя
+    # HPKE-развёртка ключа и проверка по HMAC — обе должны остаться в коде
+    assert "HPKE-v1" in текст and "compare_digest" in текст
+
+
+def test_scanner_wired_to_aea_decryptor():
+    """Сканер прошивок должен уметь звать расшифровщик на .dmg.aea, а не молча их пропускать."""
+    _, текст = _разобрать("прошивка.py")
+    assert "import aea" in текст
+    assert ".dmg.aea" in текст and "зашифрованный(" in текст

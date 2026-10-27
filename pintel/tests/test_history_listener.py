@@ -379,3 +379,24 @@ def test_rchl_without_length_still_means_records_exist():
                         ПРЕФИКС + "Unsealed: {\n}\n"])
     assert чистый.meta["rchl_байт"] == 0 and not чистый.meta.get("rchl_непусто")
     assert not чистый.items["Battery"]["меняли"] and "RepairRecords" not in чистый.items
+
+
+def test_trust_line_alone_is_not_an_apple_confirmation():
+    """Одна строка доверия не имеет права выдать зелёный по всему аппарату: она говорит
+    только о своей детали. Иначе «Battery isTrustedForUI: 1» на iOS 15 подтвердила бы всё."""
+    from pintel_core.analysis import parts as parts_mod
+    lst = _прогнать(["Oct 27 10:00:01 iPhone mobilerepaird[1] <Notice>: Display isTrustedForUI: 0\n"])
+    assert lst.meta["формат"].startswith("доверие к модулям")
+    assert lst.items["Display"]["источник"] == "доверие к модулю"
+    v = parts_mod.verdict({}, {}, lst.items, None, None, hist_meta=lst.meta, apple_supported=True)
+    assert v["apple_подтверждено"] is False            # подтверждения не было
+    assert v["итог"] == "замена"                       # но «неизвестная деталь» — это СТОП
+
+
+def test_component_dictionary_is_an_apple_confirmation():
+    """А словарь состояния — подтверждение: он говорит про каждую отслеживаемую деталь."""
+    from pintel_core.analysis import parts as parts_mod
+    lst = _прогнать([CLEAN_14PRO])
+    assert lst.meta["формат"].startswith("проверка компонентов")
+    v = parts_mod.verdict({}, {}, lst.items, None, None, hist_meta=lst.meta, apple_supported=True)
+    assert v["apple_подтверждено"] is True and v["итог"] == "родные"

@@ -237,9 +237,15 @@ def parse_components(text):
     def part(name):
         return COMPONENT_ALIAS.get(name, name)
 
-    def item(key):
-        return out["детали"].setdefault(key, {"деталь": RU.get(key, key), "код": 0, "меняли": False,
-                                              "бу": False, "дата": "", "источник": "проверка компонентов"})
+    def item(key, источник="проверка компонентов"):
+        """Источник у детали разный, и это важно: словарь состояния — подтверждение Apple,
+        а одна строка доверия к модулю подтверждением НЕ является. Иначе «Battery
+        isTrustedForUI: 1» на iOS 15 выдала бы зелёный по всему аппарату."""
+        it = out["детали"].setdefault(key, {"деталь": RU.get(key, key), "код": 0, "меняли": False,
+                                            "бу": False, "дата": "", "источник": источник})
+        if источник == "проверка компонентов":
+            it["источник"] = источник                 # словарь состояния сильнее доверия
+        return it
 
     m = SYSHEALTH_RE.search(text)
     if m:
@@ -282,7 +288,7 @@ def parse_components(text):
     # Держим как страховку: если на другой iOS не окажется строк systemhealth, вердикт даст это.
     for key, vals in out["доверие"].items():
         if (key in HEALTH_PARTS) and (vals.get("isTrusted") == 0 or vals.get("isTrustedForUI") == 0):
-            it = item(key)
+            it = item(key, "доверие к модулю")
             it["меняли"], it["неизвестная"] = True, True
     m = BATTERY_STATE_RE.search(text)
     if m:
@@ -431,7 +437,10 @@ class Listener:
                 if it.get("неизвестная"):
                     cur["неизвестная"] = True
                 cur.setdefault("источник", it["источник"])
-        self.meta["формат"] = "проверка компонентов (iOS 26)"
+        # Словарь состояния — это подтверждение Apple; одно доверие к модулю — нет, и формат
+        # обязан это различать: по нему строится право выдать зелёный.
+        self.meta["формат"] = ("проверка компонентов (iOS 26)" if comp.get("здоровье")
+                               else "доверие к модулям (iOS 15/16)")
         self.meta["раздел_открыт"] = True
         self.last_related_at = time.monotonic()
         if not self.found_at:

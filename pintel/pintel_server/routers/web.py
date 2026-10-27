@@ -382,7 +382,13 @@ def references_page(request: Request, user: User = Depends(require_senior), db: 
     на сервере, сверка сотрудника — правда с экрана. Здесь видно, что из этого ценно."""
     rows = ref_service.rows(db)
     новых = len([r for r in rows if not r["выгружен"]])
-    return render(request, "references.html", user, rows=rows, новых=новых,
+    # по каким iOS и каким форматам журнала у нас уже есть аппараты — так видно, где дыра
+    срез = {}
+    for r in rows:
+        ключ = (r["ios"], r["формат"])
+        срез[ключ] = срез.get(ключ, 0) + 1
+    срез = sorted(((f"iOS {i}", f, n) for (i, f), n in срез.items()), key=lambda t: (-t[2], t[0]))
+    return render(request, "references.html", user, rows=rows, новых=новых, срез=срез,
                   готово=len(ref_service.pick(db)), важность=ref_service.ВАЖНОСТЬ,
                   flash_=request.query_params.get("m"))
 

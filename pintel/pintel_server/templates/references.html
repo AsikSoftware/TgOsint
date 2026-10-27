@@ -29,6 +29,18 @@
 </div>
 
 <div class="sec">
+  <h2>Что уже видели</h2>
+  <div class="note">Каждая строка — живой аппарат, на котором проверка либо работает, либо нет.
+    «Не распознан» значит, что телефон отдал журнал, а мы его не прочитали: такие аппараты и
+    нужны разбору в первую очередь.</div>
+  <div class="grid4" style="margin-top:10px">
+    {% for ios, fmt, n in срез %}
+      <div class="sig"><span>{{ ios }} · {{ fmt }}</span><span class="{{ 'warn' if fmt in ('—', 'не распознан') else 'ok' }}">{{ n }}</span></div>
+    {% else %}<div class="note">Пока пусто.</div>{% endfor %}
+  </div>
+</div>
+
+<div class="sec">
   <h2>Поток</h2>
   <div class="tablewrap"><table>
     <thead><tr><th>Заявка</th><th>Аппарат</th><th>iOS</th><th>Формат журнала</th><th>Строк</th>

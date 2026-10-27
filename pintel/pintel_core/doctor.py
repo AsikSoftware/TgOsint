@@ -147,6 +147,28 @@ def fmt_report(rep):
 
 # ---------- команды ----------
 
+def канал_туннеля():
+    """Готов ли userspace-туннель CoreDevice. Без него на iOS 17.4+ MobileGestalt не
+    читается вовсе: цвет корпуса и серийники части модулей просто не приходят.
+
+    Проверка появилась не из осторожности: в сборке не было wintun.dll, туннель молча не
+    поднимался, и узнали мы об этом только по журналу живого аппарата. Окружение обязано
+    ловить такое само, до того как к кабелю подключат телефон."""
+    try:
+        from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel   # noqa: F401
+    except Exception as exc:                                     # noqa: BLE001
+        return f"НЕТ — {type(exc).__name__}: {exc}"[:200]
+    if os.name == "nt":
+        try:
+            import pytun_pmd3
+            dll = os.path.join(os.path.dirname(pytun_pmd3.__file__), "wintun", "bin", "amd64", "wintun.dll")
+            if not os.path.isfile(dll):
+                return f"НЕТ — не найден {dll}; на iOS 17.4+ часть данных по кабелю не прочитается"
+        except Exception as exc:                                 # noqa: BLE001
+            return f"НЕТ — pytun_pmd3 не импортируется ({type(exc).__name__}: {exc})"[:200]
+    return "есть"
+
+
 def cmd_selfcheck(args, cfg):
     import pymobiledevice3
     try:
@@ -159,6 +181,7 @@ def cmd_selfcheck(args, cfg):
     say(f"конфиг: {cfg.get('_path') or 'НЕ НАЙДЕН (config.toml рядом с программой)'}")
     say(f"ключ Sickw: {'есть' if (cfg.get('sickw') or {}).get('key') else 'нет'}; "
         f"gservice.json: {'есть' if os.path.isfile(gsheet.sa_path()) else 'нет'}")
+    say(f"туннель CoreDevice (нужен с iOS 17.4): {канал_туннеля()}")
     st, detail, devs = asyncio.run(connect.list_usb())
     say(f"кабель/драйвер: {st} — {connect.HUMAN[st]} {detail}")
     if devs:

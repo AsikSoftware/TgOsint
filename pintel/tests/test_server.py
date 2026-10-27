@@ -405,3 +405,13 @@ def test_references_collect_themselves_from_every_phone(app):
     правда = json.loads(внутри.read("правда.json"))
     assert правда["детали"] == {"Display": "unknown"} and правда["кто"] == "Администратор"
     assert "Неизвестная запасная часть" in внутри.read("расхождения.txt").decode("utf-8")
+
+    # и главное: аппарат уже выгружали, но сверка появилась ПОСЛЕ — значит он обязан уехать
+    # снова, иначе расхождение, найденное задним числом, не дойдёт до разбора никогда
+    r3 = admin.post("/эталоны/выгрузка")
+    assert r3.status_code == 200, loc(r3)
+    z3 = zipfile.ZipFile(io.BytesIO(r3.content))
+    снова = [n for n in z3.namelist() if n.endswith(".zip")
+             and "Неизвестная запасная часть" in zipfile.ZipFile(
+                 io.BytesIO(z3.read(n))).read("расхождения.txt").decode("utf-8")]
+    assert снова, z3.namelist()

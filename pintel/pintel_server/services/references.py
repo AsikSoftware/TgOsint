@@ -13,6 +13,7 @@ Apple, а сверка сотрудника на кассе — это та же
 import io
 import json
 import zipfile
+from datetime import datetime
 
 from sqlalchemy import desc, select
 
@@ -93,13 +94,26 @@ def combo(ev):
     return (ev.model_code or "?", ev.ios or "?", _fmt(ev))
 
 
+def сверка_позже_выгрузки(ev):
+    """Сотрудник сверил экран телефона уже ПОСЛЕ того, как аппарат уехал в выгрузку.
+    Расхождение, найденное задним числом, — самый ценный материал, и без этой проверки
+    оно не дошло бы до разбора никогда: заявка уже помечена выгруженной."""
+    когда, было = (ev.staff_parts or {}).get("когда"), ev.reference_at
+    if not когда or not было:
+        return False
+    try:
+        return datetime.fromisoformat(str(когда)) > было and rank(ev)[0] == 3
+    except Exception:                                             # noqa: BLE001 — часовые пояса, мусор в дате
+        return False
+
+
 def pick(db, only_new=True, limit=60, per_combo=2):
     """Отобрать аппараты для выгрузки: ценные — все, обычные — по паре на
     «модель + iOS + формат», иначе выгрузка зарастёт одинаковыми телефонами."""
     q = select(Evaluation).where(Evaluation.snapshot.is_not(None))
-    if only_new:
-        q = q.where(Evaluation.reference_at.is_(None))
     evs = db.scalars(q.order_by(desc(Evaluation.created_at)).limit(1000)).all()
+    if only_new:
+        evs = [ev for ev in evs if ev.reference_at is None or сверка_позже_выгрузки(ev)]
     scored = sorted(((rank(ev), ev) for ev in evs), key=lambda t: (-t[0][0], -(t[1].id or 0)))
     # счёт ведём с учётом прошлых выгрузок: обычный аппарат уже знакомой комбинации больше
     # не нужен, иначе каждая следующая выгрузка привозила бы по паре тех же телефонов

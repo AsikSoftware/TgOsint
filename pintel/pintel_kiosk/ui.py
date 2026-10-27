@@ -939,10 +939,18 @@ class ResultScreen(Screen):
                 if d["статус"] == "bad":
                     self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["bad"]))
         else:                                           # кабель / неполно: без Apple зелёного не бывает
-            self.l_apple.addWidget(line("Подлинность не подтверждена Apple", C["warn"]))
-            self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве → "
-                                         "Детали и обслуживание — экран обновится сам. Сотрудник сверит раздел "
-                                         "при оформлении.", "note", wrap=True))
+            self.l_apple.addWidget(line("Подлинность подтвердит только Apple", C["warn"]))
+            self.l_apple.addWidget(label("Один шаг на телефоне — и этот экран обновится сам:", "note", wrap=True))
+            for i, t in enumerate(("Настройки → Основные", "Об этом устройстве", "«Детали и обслуживание»"), 1):
+                row = QHBoxLayout()
+                row.setSpacing(12)
+                num = label(str(i), font_=font(FONT_NUM, 17, W.Bold), color="white")
+                num.setAlignment(Qt.AlignCenter)
+                num.setFixedSize(28, 28)
+                num.setStyleSheet(f"background: {C['warn']}; border-radius: 14px; color: white;")
+                row.addWidget(num, 0, Qt.AlignTop)
+                row.addWidget(label(t, "line_s", wrap=True), 1)
+                self.l_apple.addLayout(row)
         if hist:
             groups = {}
             for v in hist.values():

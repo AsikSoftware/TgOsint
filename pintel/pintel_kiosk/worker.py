@@ -117,19 +117,21 @@ class Pipeline(QThread):
             # Вердикт по деталям уже собран с кабеля (привязка + печать Apple). Журнал Apple —
             # только обогащение датами, поэтому ждём коротко и не держим клиента.
             secs = int(self.cfg.get("apple_history_seconds") or 45)
-            self._step("apple", "run", f"читаем историю Apple · {secs} с (не обязательно)")
+            self._step("apple", "run", f"ждём один шаг на телефоне · {secs} с")
             items, raw, waited = await listener.wait(
                 secs, keep_going=lambda: not (self.skip_apple.is_set() or self.cancel.is_set()),
                 on_tick=lambda s: self.step.emit(
                     "apple", "run", ("раздел открыт, читаем…" if listener.meta.get("раздел_открыт")
-                                     else f"ждём один шаг на телефоне · {max(0, secs - s)} с")))
+                                     else f"«Детали и обслуживание» на телефоне · {max(0, secs - s)} с")))
             self.apple_prompt.emit(False)
             if items:
                 self._step("apple", "done", "получена")
             elif listener.state == "opened_unknown":
                 self._step("apple", "warn", "раздел открыт — проверит сотрудник")
             else:
-                self._step("apple", "done", "вердикт по деталям готов с кабеля")
+                # подтвердить подлинность может только Apple, и только с экрана телефона:
+                # шаг остаётся открытым, слушатель работает, пока телефон на кабеле
+                self._step("apple", "warn", "откройте раздел на телефоне")
         snap["repair_history"], snap["repair_history_raw"] = items, raw
         meta = dict(getattr(listener, "meta", None) or {})
         meta.update({"статус": listener.state if hist_ok else "не поддерживается", "почему": hist_why})

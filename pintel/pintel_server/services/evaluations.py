@@ -36,7 +36,7 @@ def next_number(db, point_id, day) -> int:
 def apple_summary(rep) -> str:
     hist = rep.get("apple_история") or {}
     if not hist:
-        return "история не получена"
+        return "ждёт раздел на телефоне"
     changed = [v["деталь"] for v in hist.values() if v.get("меняли")]
     return "всё родное" if not changed else ("менялось: " + ", ".join(changed[:3]))
 

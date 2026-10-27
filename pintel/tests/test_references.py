@@ -121,3 +121,22 @@ def test_reference_matches_phone_screen(path):
     snap, truth = reference.load_bundle(path, loads=snapshot.loads)
     bad = reference.compare(report_mod.build(snap), truth)
     assert not bad, os.path.basename(path) + ":\n  " + "\n  ".join(bad)
+
+
+def test_clean_ios26_gives_apple_confirmed_green():
+    """Чистый iPhone 14 Pro (iOS 26.5) — тот случай, из-за которого сотруднику пришлось бы
+    отмечать руками КАЖДЫЙ аппарат: проверка компонентов приходит сама при открытии
+    «Об этом устройстве» и даёт зелёный С ПОДТВЕРЖДЕНИЕМ Apple, а не «проверка неполная».
+    Записи о ремонтах в том же журнале подтверждением по-прежнему не считаются."""
+    path = os.path.join(HERE, "fixtures_real", "эталоны", "эталон_iPhone-14-Pro_iOS26.5.zip")
+    snap, truth = reference.load_bundle(path, loads=snapshot.loads)
+    assert str(snap["repair_history_meta"]["формат"]).startswith("проверка компонентов")
+    rep = report_mod.build(snap)
+    v = rep["детали_вердикт"]
+    assert v["итог"] == "родные" and v["apple_подтверждено"] is True
+    assert rep["итог"]["вердикт"] == "ХОРОШИЙ" and rep["apple_история_статус"] == "получена"
+    # слова Apple видны сотруднику подетально, а не только флагом в вердикте
+    сильные = [d for d in v["детали"] if str(d.get("почему")).startswith("Apple подтвердила")]
+    assert {d["ключ"] for d in сильные} >= {"Battery", "Display", "Camera", "FaceID"}
+    assert all("сверка Apple" in d["источник"] for d in сильные)
+    assert reference.compare(rep, truth) == []

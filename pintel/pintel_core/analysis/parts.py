@@ -58,12 +58,20 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
     parts = {}
 
     def note(key, status, why, source):
-        """status: bad(подделка/чужая) > used(б/у) > repaired(новая оригинал) > ok(родная)."""
+        """status: bad(подделка/чужая) > used(б/у) > repaired(новая оригинал) > ok(родная).
+        При РАВНОМ статусе побеждает подтверждение Apple: кабель не видит пересаженный
+        оригинальный экран, а Apple видит, поэтому сотрудник должен читать её слова, а не
+        нашу калибровку. Канал, согласившийся вторым, не теряем — дописываем в «источник»."""
         rank = {"bad": 3, "used": 2, "repaired": 1, "ok": 0}
+        сила = {"сверка Apple": 2, "печать Apple": 2}
+        new = {"ключ": key, "деталь": PART_RU.get(key, key), "статус": status,
+               "почему": why, "источник": source}
         cur = parts.get(key)
         if cur is None or rank[status] > rank[cur["статус"]]:
-            parts[key] = {"ключ": key, "деталь": PART_RU.get(key, key), "статус": status,
-                          "почему": why, "источник": source}
+            parts[key] = new
+        elif rank[status] == rank[cur["статус"]] and сила.get(source, 1) > сила.get(cur["источник"], 1):
+            new["источник"] = source + " + " + cur["источник"]        # оба канала согласны
+            parts[key] = new
 
     had_cable = False
     # Канал 1: привязка модулей
@@ -112,7 +120,11 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
             note(key, "used", "б/у деталь" + (f", {d}" if d else ""), "журнал Apple")
         elif h.get("меняли"):
             note(key, "repaired", "меняли на новую оригинальную" + (f", {d}" if d else ""), "журнал Apple")
+        elif str(h.get("источник") or "").startswith(("сверка", "проверка")):
+            # Apple сама сверила деталь с заводской печатью — сильнейшее подтверждение
+            note(key, "ok", "Apple подтвердила: деталь оригинальная", "сверка Apple")
         else:
+            # одни записи о ремонтах: «ремонтов не было» ≠ «деталь родная» (демо 15 Pro)
             note(key, "ok", "не меняли" + (f" (журнал, {d})" if d else " (журнал)"), "журнал Apple")
 
     # Подтверждение Apple: сверка с заводской печатью прочитана (iOS 18 — сама сверка;

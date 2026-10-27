@@ -61,7 +61,11 @@ def supported(product_type, ios_version):
 # CRRepairHistoryItem пришли со всеми нулями: это НЕ вердикт, а список ремонтов Apple
 # (их на аппарате не было). Сам вердикт телефон пишет отдельными строками, и они
 # совпали с экраном слово в слово:
-#   systemhealth { … Display = "-1"; … }      -1 = деталь не подтверждена, 1 = в порядке, 0 = не оценивалась
+#   systemhealth { … Display = "-1"; … }      значения сверены на ДВУХ эталонах:
+#       1  — деталь в порядке (чистый iPhone 14 Pro: Battery/Display/Camera/FaceID = 1)
+#      -1  — деталь не подтверждена; на экране телефона «Неизвестно» (15 Pro: Display)
+#       0  — Apple её у этой модели не отслеживает (BackGlass: 1 у 15 Pro, 0 у 14 Pro)
+#      RCameraFailed = 1 стоит и на чистом аппарате — смысл не ясен, вердикт по нему не строим
 #   mobilerepaird: Display failed preflight    явный отказ по детали
 #   component: X isComponentRepairedUsingRCHL|FDR|CAA: 1   ремонт Apple по этой детали
 #   Battery Health State{ IOPSBatteryHealthServiceState = 1 }  аккумулятор требует обслуживания (износ, не замена)

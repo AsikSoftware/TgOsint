@@ -699,17 +699,19 @@ class ScanScreen(Screen):
         pl.setSpacing(0)
         pl.addWidget(kicker("ОДИН ШАГ НА ТЕЛЕФОНЕ · ПОДТВЕРЖДЕНИЕ APPLE", 16, 3.0, C["pale"]))
         pl.addSpacing(14)
-        pl.addWidget(label("Откройте на телефоне «Детали и обслуживание» — Apple сама скажет, что менялось",
+        pl.addWidget(label("Откройте на телефоне «Об этом устройстве» — Apple сама скажет, что менялось",
                            wrap=True, font_=font(FONT_HEAD, 34, W.Bold), color="white"))
         pl.addSpacing(34)
         for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
-                               "«Детали и обслуживание»\n(на старых iOS — «Запчасти и история обслуживания»)"), 1):
+                               "если появится «Детали и обслуживание» —\nзайдите в неё"), 1):
             if i > 1:
                 pl.addSpacing(18)
             pl.addWidget(label(f"{i} · {t}", "bluestep", wrap=True))
         pl.addStretch(1)
         pl.addWidget(label("По кабелю мы видим привязку модулей, но подтвердить подлинность может только Apple — "
-                           "и только с этого экрана. Если раздел уже открыт, выйдите и зайдите снова.",
+                           "и только с этого экрана. Строки «Детали и обслуживание» может не быть: "
+                           "Apple показывает её, только если деталь меняли — проверка всё равно уйдёт. "
+                           "Если экран уже открыт, выйдите и зайдите снова.",
                            "bluenote", wrap=True))
         pl.addSpacing(22)
         self.skip = QPushButton("Сделает сотрудник")
@@ -941,7 +943,8 @@ class ResultScreen(Screen):
         else:                                           # кабель / неполно: без Apple зелёного не бывает
             self.l_apple.addWidget(line("Подлинность подтвердит только Apple", C["warn"]))
             self.l_apple.addWidget(label("Один шаг на телефоне — и этот экран обновится сам:", "note", wrap=True))
-            for i, t in enumerate(("Настройки → Основные", "Об этом устройстве", "«Детали и обслуживание»"), 1):
+            for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
+                                   "если появится «Детали и обслуживание» — зайдите в неё"), 1):
                 row = QHBoxLayout()
                 row.setSpacing(12)
                 num = label(str(i), font_=font(FONT_NUM, 17, W.Bold), color="white")
@@ -968,9 +971,9 @@ class ResultScreen(Screen):
                     self.l_apple.addWidget(line(f"{name} — не {verb}", C["okdot"]))
                 else:
                     self.l_apple.addWidget(line(f"{name} — ремонтов Apple не отмечено", C["muted"], small=True))
-            self.l_apple.addWidget(label("По сверке Apple с заводской печатью вашего телефона" if any(
-                v.get("источник", "").startswith("сверка") for v in hist.values())
-                else "Из раздела «Детали и обслуживание» вашего телефона", "note", wrap=True))
+            self.l_apple.addWidget(label("По проверке Apple на вашем телефоне" if any(
+                str(v.get("источник") or "").startswith(("сверка", "проверка")) for v in hist.values())
+                else "Из записей обслуживания вашего телефона", "note", wrap=True))
         else:
             st = rep.get("apple_история_статус")
             if st == "формат не распознан":

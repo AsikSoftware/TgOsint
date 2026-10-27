@@ -289,8 +289,8 @@ def test_cashier_sees_client_data_media_and_import_button(app):
 
 
 def test_staff_parts_check_gates_import(app, monkeypatch):
-    """Без подтверждения Apple автоматика зелёного не даёт; сотрудник сверяет «Детали и обслуживание»
-    на телефоне и отмечает в карточке — только после этого сделка может уйти в Оценку."""
+    """Без подтверждения Apple автоматика зелёного не даёт; сотрудник сверяет экран телефона
+    («Об этом устройстве») и отмечает в карточке — только после этого сделка может уйти в Оценку."""
     admin = client_for(app, "admin", "admin123")
     r = admin.post("/settings/kiosks", data={"name": "Сверка-киоск", "point_id": ""})
     token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
@@ -302,7 +302,8 @@ def test_staff_parts_check_gates_import(app, monkeypatch):
     admin.post(f"/deal/{ev_id}/client", data={"client_name": "Ержан", "client_phone": "+77005550000"})
     page = admin.get(f"/deal/{ev_id}").text
     assert "Apple не подтвердила подлинность деталей" in page
-    assert "Откройте раздел на телефоне" in page and "данные придут сами" in page   # сначала ждём телефон
+    assert "Откройте экран на телефоне" in page and "данные придут сами" in page   # сначала ждём телефон
+    assert "может не быть" in page                  # честно: на чистом аппарате строки раздела нет
     assert "если телефон уже отключили" in page                                     # руками — только запасной путь
     st = admin.get(f"/deal/{ev_id}/state").json()
     assert st["нужна_сверка"] is True and st["детали"] == "кабель" and "|" in st["ключ"]

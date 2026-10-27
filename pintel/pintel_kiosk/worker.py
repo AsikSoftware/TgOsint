@@ -121,8 +121,8 @@ class Pipeline(QThread):
             items, raw, waited = await listener.wait(
                 secs, keep_going=lambda: not (self.skip_apple.is_set() or self.cancel.is_set()),
                 on_tick=lambda s: self.step.emit(
-                    "apple", "run", ("раздел открыт, читаем…" if listener.meta.get("раздел_открыт")
-                                     else f"«Детали и обслуживание» на телефоне · {max(0, secs - s)} с")))
+                    "apple", "run", ("экран открыт, читаем…" if listener.meta.get("раздел_открыт")
+                                     else f"«Об этом устройстве» на телефоне · {max(0, secs - s)} с")))
             self.apple_prompt.emit(False)
             if items:
                 self._step("apple", "done", "получена")

@@ -217,3 +217,47 @@ def test_report_uses_seal_verdict_for_face_id_and_unknown_part_is_stop():
     snap["repair_history"] = rh.synthesize(meta)
     rep = report_mod.build(snap)
     assert any("неизвестного происхождения" in x for x in rep["стоп"]) and rep["итог"]["вердикт"] == "ПРОБЛЕМНЫЙ"
+
+
+# ---------------------------------------------------------------- проверка компонентов (iOS 26)
+# Значения сверены на двух живых аппаратах: чистый iPhone 14 Pro (iOS 26.5) и iPhone 15 Pro
+# с «Неизвестно» на экране (iOS 26.6.1). Это единственный известный канал, который даёт
+# вердикт Apple по деталям, поэтому его смысл закреплён тестами подетально.
+CLEAN_14PRO = (
+    'Oct 27 19:35:24 iPhone Preferences(CoreRepairKit)[2093] <Notice>: systemhealth {\n'
+    '    Audio = 1;\n    AudioCodec = 1;\n    BackGlass = 0;\n    Baseband = 1;\n    Battery = 1;\n'
+    '    Bluetooth = 1;\n    Camera = 1;\n    CoverGlass = 0;\n    Display = 1;\n    Enclosure = 0;\n'
+    '    FaceID = 1;\n    MTUB = 0;\n    NFC = 1;\n    RCameraFailed = 1;\n    TouchID = 0;\n'
+    '    UWB = 1;\n    VolumeButton = 0;\n    Wifi = 1;\n}\n'
+    'Oct 27 19:35:24 iPhone mobilerepaird(CoreRepairCore)[212] <Notice>: component: Display isComponentRepairedUsingRCHL: 0\n'
+    'Oct 27 19:35:24 iPhone mobilerepaird[212] <Notice>: Battery Health State{\n'
+    '    IOPSBatteryHealthServiceState = 0;\n    IOPSBatteryHealthState = 0;\n}\n')
+
+
+def test_components_clean_phone_is_a_confirmation():
+    """Чистый аппарат: 1 — деталь в порядке, 0 — Apple её у этой модели не отслеживает.
+    Ноль не имеет права стать «плохой деталью», иначе чистый телефон получит СТОП зря.
+    RCameraFailed = 1 стоит и на чистом аппарате — по нему вердикт не строим."""
+    comp = rh.parse_components(CLEAN_14PRO)
+    assert set(comp["детали"]) == {"Battery", "Display", "Camera", "FaceID"}
+    assert not any(d["меняли"] or d.get("неизвестная") for d in comp["детали"].values())
+    for ноль in ("BackGlass", "CoverGlass", "Enclosure", "MTUB", "TouchID", "VolumeButton"):
+        assert ноль not in comp["детали"], ноль
+    assert "RCamera" not in comp["детали"] and "RCameraFailed" not in comp["детали"]
+    assert comp["аккумулятор"]["IOPSBatteryHealthServiceState"] == 0       # обслуживание не требуется
+
+
+def test_components_minus_one_is_stop():
+    """iPhone 15 Pro: Display = "-1" — на экране телефона «Неизвестно», для выкупа это СТОП."""
+    comp = rh.parse_components(CLEAN_14PRO.replace("    Display = 1;", '    Display = "-1";'))
+    assert comp["детали"]["Display"]["неизвестная"] and comp["детали"]["Display"]["меняли"]
+    assert not comp["детали"]["Battery"]["меняли"]                         # соседние детали не задеты
+
+
+def test_battery_health_alone_is_not_a_verdict():
+    """iOS 18 пишет состояние аккумулятора всегда. Одна эта строка не имеет права
+    выдать себя за проверку компонентов — иначе любой открытый экран станет «вердиктом»."""
+    only_battery = ('Oct 27 19:35:24 iPhone mobilerepaird[212] <Notice>: Battery Health State{\n'
+                    '    IOPSBatteryHealthServiceState = 1;\n    IOPSBatteryHealthState = 3;\n}\n')
+    comp = rh.parse_components(only_battery)
+    assert comp["аккумулятор"] and not comp["детали"]

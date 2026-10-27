@@ -171,7 +171,7 @@ def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> d
         raise ImportError_("не заполнены имя и телефон клиента")
     pc = parts_check(ev)
     if pc["нужна_сверка"] and not pc["отмечено"]:
-        raise ImportError_("Apple не подтвердила подлинность деталей — сверьте «Детали и обслуживание» "
+        raise ImportError_("Apple не подтвердила подлинность деталей — сверьте «Об этом устройстве» "
                            "на телефоне и отметьте детали в карточке сделки")
     if ev.number is None:                                       # номер заявки — только с именем и телефоном
         from .evaluations import assign_number

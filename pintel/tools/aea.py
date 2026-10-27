@@ -227,6 +227,7 @@ def идти_по_сегментам(read_exact, main_key, cluster_hmac, rh, р�
             dec_size, comp_size = struct.unpack("<II", seg_hdr_plain[o:o + 8])
             if dec_size == 0:
                 continue
+            checksum = seg_hdr_plain[o + 8:o + 8 + CHECKSUM_SIZE[rh["checksum"]]]
             total += dec_size
             seg_ct = read_exact(comp_size)
             seg_key = _hkdf(cluster_key, b"", SEGMENT_INFO + struct.pack("<I", i), 80)
@@ -237,7 +238,11 @@ def идти_по_сегментам(read_exact, main_key, cluster_hmac, rh, р�
             if dec_size == comp_size:                      # сегмент не сжат
                 yield plain
             elif распаковать is not None:
-                yield распаковать(rh["compression"], plain, dec_size)
+                out = распаковать(rh["compression"], plain, dec_size)
+                if проверять and rh["checksum"] == 2 and \
+                        not _hmac.compare_digest(hashlib.sha256(out).digest(), checksum):
+                    raise ValueError(f"SHA256 сегмента #{i} (кластер {cindex}) не сошёлся после распаковки")
+                yield out
             else:
                 yield b""
         cluster_hmac = next_cluster_mac

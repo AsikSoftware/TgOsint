@@ -48,6 +48,12 @@ def _raw(ev):
     return (ev.snapshot or {}).get("repair_history_raw") or ""
 
 
+def формат_словами(ev):
+    """Формат журнала так, как его читает человек. «Не распознан» и «нет журнала» — разные
+    вещи: первое наша дыра в разборе, второе значит, что экран на телефоне не открывали."""
+    return _fmt(ev) or ("не распознан" if _raw(ev) else "нет журнала")
+
+
 def _truth(ev):
     """Правда с экрана телефона: отметки сотрудника, если он сверял."""
     return reference.auto_truth(ev.staff_parts, раздел_открывали=_meta(ev).get("раздел_открыт"))
@@ -82,10 +88,7 @@ def rows(db, limit=300):
         важн, почему = rank(ev)
         out.append({"id": ev.id, "номер": ev.number, "когда": ev.created_at,
                     "модель": ev.model_name or ev.model_code or "?", "ios": ev.ios or "?",
-                    # «не распознан» и «нет журнала» — разные вещи: первое наша дыра в разборе,
-                    # второе значит, что клиент просто не открывал экран на телефоне
-                    "формат": _fmt(ev) or ("не распознан" if _raw(ev) else "нет журнала"),
-                    "строк": len(_raw(ev).splitlines()),
+                    "формат": формат_словами(ev), "строк": len(_raw(ev).splitlines()),
                     "подтверждено": bool(((ev.report or {}).get("детали_вердикт") or {}).get("apple_подтверждено")),
                     "правда": bool(_truth(ev)["детали"]), "важность": важн, "почему": почему,
                     "выгружен": ev.reference_at})
@@ -181,7 +184,7 @@ def export(db, user, only_new=True, limit=60):
             name = f"{name[:-4]}_заявка{ev.number or ev.id}.zip"
             z.writestr("эталоны/" + name, data)
             строки.append(f"| {name} | {ev.number or ev.id} | {ev.model_name or ev.model_code or '?'} "
-                          f"| {ev.ios or '?'} | {_fmt(ev) or '—'} | {важн} | {почему} |\n")
+                          f"| {ev.ios or '?'} | {формат_словами(ev)} | {важн} | {почему} |\n")
             ev.reference_at = now()
         z.writestr("сводка.md", _summary(строки, пропущено))
     db.commit()

@@ -172,3 +172,22 @@ def test_back_glass_tracked_only_since_iphone_15(pt, back):
     """Заднее стекло Apple ведёт с 15-й серии. Нумерация моделей это не разделяет:
     iPhone 14 Pro — это iPhone15,2, а iPhone 15 — iPhone15,4."""
     assert ("BackGlass" in capabilities.apple_tracked_parts(pt)) is back
+
+
+@pytest.mark.parametrize("ios,можно", [("15.2.1", False), ("15.6.1", False), ("16.0", True),
+                                       ("16.6.1", True), ("17.7", True), ("18.6.2", True), ("26.6.1", True)])
+def test_apple_confirmation_impossible_on_ios15(ios, можно):
+    """Разобрано по прошивкам: в iOS 15 нет ни словаря systemhealth, ни сверки с печатью —
+    только отказы. Значит зелёного от Apple там не будет никогда, и обещать его нельзя."""
+    assert rh.подтверждение_возможно(ios) is можно
+
+
+def test_report_says_plainly_that_ios15_cannot_confirm():
+    """Сотрудник должен прочитать причину, а не ждать подтверждения, которого не будет."""
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    snap["root"] = {**snap["root"], "ProductVersion": "15.6.1"}
+    snap["repair_history"], snap["repair_history_meta"] = {}, {}
+    rep = report_mod.build(snap)
+    assert rep["паспорт"]["ios"].startswith("15.")
+    assert rep["apple_подтверждение_возможно"] is False
+    assert any("не подтверждает в принципе" in x for x in rep["не_прочиталось"]), rep["не_прочиталось"]

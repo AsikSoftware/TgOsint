@@ -940,6 +940,12 @@ class ResultScreen(Screen):
             for d in pv.get("детали", []):
                 if d["статус"] == "bad":
                     self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["bad"]))
+        elif rep.get("apple_подтверждение_возможно") is False:
+            # на iOS 15 телефон пишет только отказы: ждать подтверждения бессмысленно,
+            # и просить клиента открывать экран незачем — честнее сказать прямо
+            self.l_apple.addWidget(line("На этой версии iOS Apple подлинность не подтверждает", C["warn"]))
+            self.l_apple.addWidget(label("Детали проверит сотрудник — по кабелю и на экране телефона.",
+                                         "note", wrap=True))
         else:                                           # кабель / неполно: без Apple зелёного не бывает
             self.l_apple.addWidget(line("Подлинность подтвердит только Apple", C["warn"]))
             self.l_apple.addWidget(label("Один шаг на телефоне — и этот экран обновится сам:", "note", wrap=True))

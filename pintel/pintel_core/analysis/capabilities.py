@@ -39,6 +39,11 @@ def has_touch_id(pt):
 APPLE_PARTS_BATTERY = ("Battery",)
 APPLE_PARTS_11 = ("Battery", "Display")
 APPLE_PARTS_12 = ("Battery", "Display", "LogicBoard", "FrontCamera", "Camera")
+# С 15-й серии заднее стекло меняется отдельно, и Apple ведёт его в разделе. Видно на
+# эталонах: в строках systemhealth BackGlass = 1 у iPhone 15 Pro и 0 (не отслеживается)
+# у 14 Pro. Нумерация моделей это не разделяет — 14 Pro это iPhone15,2, а iPhone 15 —
+# iPhone15,4, поэтому сравниваем пару «поколение, модификация».
+APPLE_PARTS_15 = APPLE_PARTS_12 + ("BackGlass",)
 
 
 def apple_tracked_parts(pt):
@@ -54,4 +59,6 @@ def apple_tracked_parts(pt):
         return APPLE_PARTS_BATTERY
     if major == 12:                                   # iPhone 11 семейство
         return APPLE_PARTS_11
+    if (major, minor) >= (15, 4):                     # iPhone 15 и новее
+        return APPLE_PARTS_15
     return APPLE_PARTS_12

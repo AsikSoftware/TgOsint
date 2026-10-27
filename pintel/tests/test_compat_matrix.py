@@ -160,3 +160,15 @@ def test_every_real_snapshot_builds_full_report(fixture):
     assert rep["паспорт"]["модель"] and rep["батарея"]["здоровье_%"] and rep["память"]["объём_гб"]
     assert rep["итог"]["вердикт"] in ("ИДЕАЛ", "ХОРОШИЙ", "ПРОВЕРКА НЕПОЛНАЯ", "ПРОБЛЕМНЫЙ")
     assert rep["apple_история_статус"] in ("получена", "не открыт", "формат не распознан", "не поддерживается")
+
+
+@pytest.mark.parametrize("pt,back", [("iPhone15,2", False),    # 14 Pro — заднее стекло Apple не ведёт
+                                     ("iPhone15,3", False),    # 14 Pro Max
+                                     ("iPhone15,4", True),     # iPhone 15
+                                     ("iPhone16,1", True),     # 15 Pro — на эталоне BackGlass = 1
+                                     ("iPhone17,1", True),     # 16 Pro
+                                     ("iPhone12,1", False)])   # iPhone 11 — только батарея и экран
+def test_back_glass_tracked_only_since_iphone_15(pt, back):
+    """Заднее стекло Apple ведёт с 15-й серии. Нумерация моделей это не разделяет:
+    iPhone 14 Pro — это iPhone15,2, а iPhone 15 — iPhone15,4."""
+    assert ("BackGlass" in capabilities.apple_tracked_parts(pt)) is back

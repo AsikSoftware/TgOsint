@@ -152,6 +152,55 @@ def test_ios26_items_win_over_synthesis(fake):
     assert items["Display"]["меняли"] and items["Display"]["бу"] and "источник" not in items["Display"]
 
 
+BLOCK_CLEAN = tuple(l.replace("isRepaired:1: isUsed:1: repairDate:2026-03-01", "isRepaired:0: isUsed:0: repairDate:(null)")
+                    for l in BLOCK)
+
+
+def test_seal_delta_merges_into_records(fake):
+    """iPhone 15 Pro с подменённым экраном: записи обслуживания молчат (ремонтов Apple не было),
+    а сверка с печатью видит «Неизвестная деталь» — она не должна теряться из-за записей."""
+    fake.script = [list(BLOCK_CLEAN) + IOS18_DELTA]
+    items, raw, _ = asyncio.run(rh.capture(None, seconds=10))
+    assert items["Display"]["меняли"] and items["Display"]["неизвестная"] and items["Display"]["источник"].startswith("сверка")
+    assert not items["Battery"]["меняли"] and not items["FaceID"]["меняли"]
+    fake.connects = 0
+    fake.script = [IOS18_DELTA + list(BLOCK_CLEAN)]                 # и в обратном порядке
+    items, raw, _ = asyncio.run(rh.capture(None, seconds=10))
+    assert items["Display"]["неизвестная"] and not items["Battery"]["меняли"]
+
+
+def test_parse_tolerates_new_fields_and_accumulates():
+    txt = ('componentName:Battery: componentType:1024: isRepaired:0: isUsed:0: repairDate:(null):"\n'
+           'componentName:Battery: componentType:1024: isRepaired:1: isUsed:0: repairDate:2026-02-02:"\n'
+           'componentName:Battery: componentType:1024: isRepaired:0: isUsed:0: repairDate:(null):"\n'
+           'componentName:Display: componentType:1025: isRepaired:0: isUsed:0: isUnknownPart:1: repairDate:(null):"\n'
+           'componentName:Camera: componentType:1026: isRepaired:0: isUsed:0: isGenuine:1: repairDate:(null):"\n')
+    items = rh.parse(txt)
+    assert items["Battery"]["меняли"] and items["Battery"]["дата"] == "2026-02-02"   # поздняя пустая строка не снимает флаг
+    assert items["Display"]["неизвестная"] and items["Display"]["меняли"] and items["Display"]["поля"] == {"isUnknownPart": "1"}
+    assert not items["Camera"]["меняли"] and items["Camera"]["поля"] == {"isGenuine": "1"}
+    assert rh.signature(items) != rh.signature({})
+
+
+def test_wait_change_sees_late_update(fake):
+    """После первого вердикта телефон допечатал записи с заменой — wait_change это замечает."""
+    fake.script = [list(BLOCK_CLEAN) + ["DROP"], list(BLOCK)]
+
+    async def scenario():
+        lst = rh.Listener(None, reconnect_delay=1.5)            # вторая печать — через 1,5 с, после первого wait
+        await lst.start()
+        items, _, _ = await lst.wait(10, grace=0.1, settle=0.2)
+        seen = rh.signature(items)
+        deadline = asyncio.get_running_loop().time() + 8
+        items2, _, waited = await lst.wait_change(seen, grace=0.1,
+                                                  keep_going=lambda: asyncio.get_running_loop().time() < deadline)
+        await lst.stop()
+        return items, items2, waited
+
+    items, items2, waited = asyncio.run(scenario())
+    assert not items["Display"]["меняли"] and items2["Display"]["меняли"] and items2["Display"]["бу"] and waited < 10
+
+
 def test_report_uses_seal_verdict_for_face_id_and_unknown_part_is_stop():
     import os, json
     from pintel_core.devicelink import snapshot

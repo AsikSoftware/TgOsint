@@ -34,8 +34,11 @@ RU = {"Battery": "Аккумулятор", "Display": "Экран", "Camera": "�
       "FrontCamera": "Фронтальная камера", "RearCamera": "Основная камера"}
 
 # Код 1029 встречался и как MTUB, и как LogicBoard — опираемся на ИМЯ.
-ITEM = re.compile(r"componentName:(\w+): componentType:(\d+): isRepaired:(\d): "
-                  r"isUsed:(\d): repairDate:(.*?):\"?")
+# Запись разбираем как набор полей «ключ:значение:», а не жёстким шаблоном: Apple может
+# добавить поле (например, о неизвестной детали), и его нельзя молча потерять.
+ITEM = re.compile(r"componentName:(\w+):((?:\s*\w+:[^:\n\]\"]*:)*)")
+FIELD = re.compile(r"(\w+):([^:\n\]\"]*):")
+KNOWN_FIELDS = ("componentType", "isRepaired", "isUsed", "repairDate")
 # Модели, у которых Apple ведёт «Запчасти и история обслуживания»: iPhone XR/XS и новее
 # (ProductType iPhone11,x и выше), iOS 15.2+. У iPhone X и старше раздела нет вообще —
 # ждать клиента бессмысленно.
@@ -116,18 +119,47 @@ def synthesize(meta):
     return items
 
 
+def _flag(v):
+    return str(v).strip().lower() in ("1", "true", "yes")
+
+
 def parse(text):
+    """Записи CRRepairHistoryItem → {компонент: {...}}. Одна и та же запись печатается
+    несколько раз (кэш, затем после загрузки списка ремонтов), поэтому признаки
+    накапливаются: раз помеченное «меняли»/«б/у»/«неизвестная» поздней строкой не снимается,
+    дата берётся первая непустая. Неизвестные поля сохраняются в «поля»."""
     items = {}
     for m in ITEM.finditer(text):
-        comp, code, rep, used, date = m.groups()
-        date = re.sub(r"\\U([0-9a-fA-F]{4})", lambda g: chr(int(g.group(1), 16)), date.strip())
+        comp, body = m.groups()
+        f = dict(FIELD.findall(body))
+        date = re.sub(r"\\U([0-9a-fA-F]{4})", lambda g: chr(int(g.group(1), 16)), f.get("repairDate", "").strip())
         if date in ("(null)", ""):
             date = ""
-        if items.get(comp, {}).get("дата") and not date:
-            continue
-        items[comp] = {"деталь": RU.get(comp, comp), "код": int(code),
-                       "меняли": rep == "1", "бу": used == "1", "дата": date}
+        extra = {k: v.strip() for k, v in f.items() if k not in KNOWN_FIELDS}
+        low = {k.lower(): v for k, v in extra.items()}
+        unknown = any(_flag(v) for k, v in low.items() if "unknown" in k or "unseal" in k or "nongenuine" in k)
+        unknown = unknown or any(not _flag(v) for k, v in low.items() if k in ("isgenuine", "genuine"))
+        serviced = any(_flag(v) for k, v in low.items() if "service" in k or "replaced" in k)
+        cur = items.get(comp) or {"деталь": RU.get(comp, comp), "код": 0, "меняли": False, "бу": False, "дата": ""}
+        try:
+            cur["код"] = int(f.get("componentType") or cur["код"])
+        except ValueError:
+            pass
+        cur["меняли"] = cur["меняли"] or _flag(f.get("isRepaired")) or serviced or unknown
+        cur["бу"] = cur["бу"] or _flag(f.get("isUsed"))
+        cur["дата"] = cur["дата"] or date
+        if unknown:
+            cur["неизвестная"] = True
+        if extra:
+            cur["поля"] = {**cur.get("поля", {}), **extra}
+        items[comp] = cur
     return items
+
+
+def signature(items):
+    """Отпечаток записей — чтобы заметить, что вердикт изменился после повторной печати."""
+    import json
+    return json.dumps(items or {}, sort_keys=True, ensure_ascii=False)
 
 
 class Listener:
@@ -196,8 +228,10 @@ class Listener:
             parsed = parse("".join(self.buf))
             if parsed:
                 self.items = parsed
+                self._apply_seal()
                 self.meta["формат"] = "записи обслуживания (iOS 26)"
                 self.meta["раздел_открыт"] = True
+                self.last_related_at = time.monotonic()
                 if not self.found_at:
                     self.found_at = time.monotonic()
                     self.log(f"история Apple: {len(self.items)} записей")
@@ -236,6 +270,19 @@ class Listener:
                 self.found_at = time.monotonic()
                 self.log(f"история Apple (сверка с печатью): замен {len(self.meta['дельта'])}, "
                          f"RCHL {self.meta['rchl_байт']}")
+        elif self.items and (delta is not None or unsealed is not None):
+            self._apply_seal()                     # записи уже есть — сверка их дополняет, а не теряется
+
+    def _apply_seal(self):
+        """Детали, которых нет в заводской печати (delta/Unsealed), — «неизвестного происхождения»,
+        даже если записи обслуживания про них молчат: записи — это ремонты Apple, а подмену
+        детали видит только сверка."""
+        unknown = list(dict.fromkeys(list(self.meta.get("дельта") or []) + list(self.meta.get("unsealed") or [])))
+        for comp in unknown:
+            cur = self.items.get(comp) or {"деталь": RU.get(comp, comp), "код": 0, "бу": False, "дата": ""}
+            if not cur.get("неизвестная"):
+                self.items[comp] = {**cur, "меняли": True, "неизвестная": True,
+                                    "источник": "сверка с заводской печатью"}
 
     @property
     def raw(self):
@@ -253,10 +300,12 @@ class Listener:
             return "opened_unknown"
         return "waiting"
 
-    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0, unknown_quiet=8.0):
+    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0, unknown_quiet=8.0, settle=5.0):
         """Ждать вердикт не дольше seconds (или пока keep_going() истинно).
         После первой записи — добрать grace секунд (записи идут пачкой; если у Apple
-        есть записи о ремонте, а деталей ещё нет — ждём их дольше).
+        есть записи о ремонте, а деталей ещё нет — ждём их дольше), а пока журнал по теме
+        не затих — ещё до settle секунд: телефон допечатывает записи после подгрузки
+        списка ремонтов, и ранний выход отдал бы «всё родное» из кэша.
         Если раздел открыт, но ни один известный формат не встретился, а журнал по
         теме затих на unknown_quiet секунд — выходим: формат этой iOS не распознан,
         сырьё сохранено, клиента дальше не держим.
@@ -266,7 +315,8 @@ class Listener:
             now = time.monotonic()
             if self.found_at:
                 g = grace * 3 if "RepairRecords" in self.items else grace
-                if now - self.found_at >= g:
+                quiet = now - (self.last_related_at or self.found_at) >= 1.0
+                if now - self.found_at >= g and (quiet or now - self.found_at >= g + settle):
                     break
             elif (unknown_quiet and self.meta["раздел_открыт"] and self.last_related_at
                   and now - self.last_related_at >= unknown_quiet):
@@ -276,6 +326,23 @@ class Listener:
                 break
             if on_tick:
                 on_tick(int(now - start))
+            await asyncio.sleep(0.25)
+        return self.items, self.raw, round(time.monotonic() - start, 1)
+
+    async def wait_change(self, seen, keep_going=None, grace=2.0):
+        """Ждать, пока записи станут отличаться от отпечатка seen (signature) — телефон
+        допечатал вердикт позже, — затем добрать grace секунд. Выход и по keep_going().
+        → (items, raw, секунд_ждали); если изменений нет — items с тем же отпечатком."""
+        start = time.monotonic()
+        changed_at = None
+        while True:
+            now = time.monotonic()
+            if changed_at is None and signature(self.items) != seen:
+                changed_at = now
+            if changed_at is not None and now - changed_at >= grace:
+                break
+            if keep_going and not keep_going():
+                break
             await asyncio.sleep(0.25)
         return self.items, self.raw, round(time.monotonic() - start, 1)
 

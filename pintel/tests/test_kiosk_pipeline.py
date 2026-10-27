@@ -21,20 +21,25 @@ class FakeStatus:
 
 
 class FakeListener:
-    """История появляется только во второй wait (после done)."""
+    """История появляется только после done: первый wait пуст, первый wait_change
+    приносит запись, дальше изменений нет (воркер должен сам выйти из цикла)."""
+    ITEMS = {"Display": {"деталь": "Экран", "код": 1025, "меняли": True, "бу": False, "дата": "2026-03-01"}}
+
     def __init__(self, ld, log=None, **kw):
         self.calls = 0; self.lines = 1; self.connects = 1; self.reconnects = 0; self.stopped = False
         self.meta = {"раздел_открыт": False, "формат": None, "строк_по_теме": 0}
         self.state = "waiting"
+        self.items = {}
     async def start(self): return self
-    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0, unknown_quiet=8.0):
+    async def wait(self, seconds, keep_going=None, on_tick=None, grace=2.0, unknown_quiet=8.0, settle=5.0):
+        await asyncio.sleep(0.05)
+        return {}, "", 0.1
+    async def wait_change(self, seen, keep_going=None, grace=2.0):
         self.calls += 1
-        if self.calls == 1:
-            await asyncio.sleep(0.05)
-            return {}, "", 0.1
-        items = {"Display": {"деталь": "Экран", "код": 1025, "меняли": True, "бу": False, "дата": "2026-03-01"}}
+        await asyncio.sleep(0.05)
+        self.items = dict(self.ITEMS)
         self.state, self.meta["формат"] = "found", "записи обслуживания (iOS 26)"
-        return items, "raw", 0.2
+        return self.items, "raw", 0.2
     async def stop(self): self.stopped = True
 
 
@@ -93,7 +98,7 @@ def test_pipeline_done_then_late_history(fake_core):
     assert ("sickw", "done") in steps and ("upload", "done") in steps
     assert [c[0] for c in client.calls] == ["sickw", "upload", "update"]
     assert client.calls[-1][1] == 7 and "repair_history" in client.calls[-1][2]
-    assert fake_core[0].stopped
+    assert fake_core[0].stopped and fake_core[0].calls == 2        # второй wait_change без изменений — выход
 
 
 def test_pipeline_skips_history_wait_on_unsupported_model(fake_core, monkeypatch):

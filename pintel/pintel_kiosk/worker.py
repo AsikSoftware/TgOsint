@@ -178,30 +178,35 @@ class Pipeline(QThread):
             self._step("upload", "done", "отправлено")
         result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial, "out": out}
         self.done.emit(result)
-        if items or self.cancel.is_set() or not hist_ok:
+        if self.cancel.is_set() or not hist_ok:
             return
 
-        # Вердикта ещё нет — слушаем дальше, пока телефон на кабеле
-        self._step("apple", "run", "ждём историю Apple")
-        items, raw, waited = await listener.wait(6 * 3600, keep_going=lambda: not self.cancel.is_set(),
-                                                 grace=2.0, unknown_quiet=None)
+        # Слушаем дальше, пока телефон на кабеле: вердикт мог прийти позже (клиент открыл
+        # раздел после результата) или ИЗМЕНИТЬСЯ — iOS печатает записи повторно, когда
+        # подгрузит список ремонтов Apple, и только тогда в них появляются замены.
         if not items:
-            return
-        snap["repair_history"], snap["repair_history_raw"] = items, raw
-        snap["repair_history_meta"] = {**(getattr(listener, "meta", None) or {}), "статус": "found", "почему": ""}
-        rep = report_mod.build(snap)
-        rep["цена"] = self._price(rep)
-        self._save(out, snap, rep)
-        log_line(f"история Apple пришла позже, через {waited} с")
-        if server and server.get("id") and not server.get("локально") and self.client.enabled:
-            try:
-                self.client.update_evaluation(server["id"], json.loads(snapshot.dumps(rep)),
-                                              {"repair_history": items, "repair_history_raw": raw,
-                                               "repair_history_meta": getattr(listener, "meta", None)})
-            except ServerError as e:
-                log_line(f"обновление оценки не ушло: {e}")
-        self._step("apple", "done", "получена")
-        self.history.emit({**result, "report": rep})
+            self._step("apple", "run", "ждём историю Apple")
+        seen = repair_history.signature(items)
+        while not self.cancel.is_set():
+            items, raw, waited = await listener.wait_change(seen, keep_going=lambda: not self.cancel.is_set())
+            if self.cancel.is_set() or repair_history.signature(items) == seen:
+                return
+            seen = repair_history.signature(items)
+            snap["repair_history"], snap["repair_history_raw"] = items, raw
+            snap["repair_history_meta"] = {**(getattr(listener, "meta", None) or {}), "статус": "found", "почему": ""}
+            rep = report_mod.build(snap)
+            rep["цена"] = self._price(rep)
+            self._save(out, snap, rep)
+            log_line(f"история Apple обновилась через {waited} с: {len(items)} записей")
+            if server and server.get("id") and not server.get("локально") and self.client.enabled:
+                try:
+                    self.client.update_evaluation(server["id"], json.loads(snapshot.dumps(rep)),
+                                                  {"repair_history": items, "repair_history_raw": raw,
+                                                   "repair_history_meta": getattr(listener, "meta", None)})
+                except ServerError as e:
+                    log_line(f"обновление оценки не ушло: {e}")
+            self._step("apple", "done", "получена")
+            self.history.emit({**result, "report": rep})
 
     def _price(self, rep):
         pas, bat = rep["паспорт"], rep["батарея"]

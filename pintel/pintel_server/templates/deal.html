@@ -161,6 +161,12 @@
         {% for x in rep.get('сделать') or [] %}<span class="pill info">{{ x }}</span>{% endfor %}
       </div>
       {% endif %}
+      {% if rep.get('служебное') %}
+      <div class="tile warn" style="margin-top:8px"><b>Неисправность оборудования, не телефона</b>
+        <small>{% for x in rep.get('служебное') %}{{ x }}. {% endfor %}
+        Вердикт по аппарату это не меняет, но часть данных по кабелю не пришла — передайте в поддержку,
+        иначе так будет на каждом телефоне.</small></div>
+      {% endif %}
     </section>
     <section class="sec span2">
       <h2>Серийники деталей</h2>

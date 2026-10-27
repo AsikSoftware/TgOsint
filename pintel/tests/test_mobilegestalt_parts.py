@@ -97,3 +97,26 @@ def test_parts_verdict_log_enriches_with_date_and_used():
 
 def test_parts_verdict_empty_is_incomplete():
     assert parts.verdict({}, {}, {}, {}, {})["итог"] == "неполно"
+
+
+def test_broken_tunnel_is_named_not_hidden():
+    """Канал пропал — проверка обязана это назвать. На живом iPhone 14 Pro в сборке не
+    оказалось wintun.dll, туннель не поднялся, и по кабелю молча терялись цвет корпуса и
+    серийники модулей: отчёт выглядел целым. Теперь это строка в «не прочиталось»."""
+    import os
+    from pintel_core.analysis import report as report_mod
+    from pintel_core.devicelink import snapshot
+    here = os.path.dirname(os.path.abspath(__file__))
+    snap = snapshot.loads(open(os.path.join(here, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
+                               encoding="utf-8").read())
+    snap["mobilegestalt"] = {"недоступен": "туннель: нет CoreDevice: Failed to load dynlib "
+                                           "'...\\\\pytun_pmd3\\\\wintun\\\\bin\\\\amd64\\\\wintun.dll'", "_канал": "нет"}
+    было = report_mod.build(snap)["итог"]["вердикт"]
+    rep = report_mod.build(snap)
+    assert rep["служебное"] and "wintun.dll" in rep["служебное"][0], rep["служебное"]
+    # и при этом вердикт по самому аппарату не портится: это неисправность нашей сборки
+    assert rep["итог"]["вердикт"] == было
+    assert not any("MobileGestalt" in x for x in rep["не_прочиталось"])
+
+    snap["mobilegestalt"] = {"недоступен": "DeprecationError: deprecated on iOS 17.4 and later"}
+    assert any("17.4" in x for x in report_mod.build(snap)["служебное"])

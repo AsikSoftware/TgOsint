@@ -154,6 +154,7 @@ class Evaluation(Base):
     final_price: Mapped[Optional[int]] = mapped_column(Integer)
     deal_kind: Mapped[Optional[str]] = mapped_column(String(16))        # buyout | tradein
     inspection: Mapped[Optional[dict]] = mapped_column(JSON)            # чек-лист осмотра
+    staff_parts: Mapped[Optional[dict]] = mapped_column(JSON)           # сверка «Детали и обслуживание» с экрана телефона (сотрудник)
     decision_note: Mapped[Optional[str]] = mapped_column(Text)
     decided_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime)
     decided_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))

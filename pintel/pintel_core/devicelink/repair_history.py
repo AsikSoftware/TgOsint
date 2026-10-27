@@ -286,9 +286,10 @@ class Listener:
 
     @property
     def raw(self):
+        """Записи + заметки об обрывах + все строки по теме: по ним разбираем новые форматы
+        iOS без догадок (сырьё едет в слепок и видно сотруднику в карточке сделки)."""
         out = "".join(self.buf) + "".join(self.notes)
-        if self.meta["раздел_открыт"] or not self.buf:
-            out += "".join(f"# похожее: {l}\n" for l in self.related[:80])
+        out += "".join(f"# похожее: {l}\n" for l in self.related[:400])
         return out
 
     @property

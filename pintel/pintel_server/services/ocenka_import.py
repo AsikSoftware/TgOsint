@@ -23,6 +23,7 @@ from sqlalchemy import create_engine, text
 from ..config import settings
 from ..db import now
 from ..models import MEDIA_VIDEO, Evaluation
+from .evaluations import PARTS_STAFF, PART_STATES, parts_check
 
 log = logging.getLogger("pintel.ocenka")
 
@@ -87,7 +88,10 @@ def _media_file_ids(db, ev: Evaluation) -> tuple[list[str], list[str]]:
 # ---------------------------------------------------------------- поля сделки
 
 def _phone_status(ev: Evaluation) -> str | None:
-    """Грубый статус состояния по вердикту киоска (админ уточнит)."""
+    """Грубый статус состояния: сверка сотрудника с экраном телефона важнее автоматики."""
+    pc = parts_check(ev)
+    if pc["отмечено"]:
+        return "Ранее был в ремонте" if (pc["замены"] or pc["сервис"]) else "Не был в ремонте"
     rep = ev.report or {}
     итог = ((rep.get("детали_вердикт") or {}).get("итог")) or ""
     if итог == "родные":
@@ -103,6 +107,12 @@ def _comment_ocenka(ev: Evaluation) -> str:
     dv = (rep.get("детали_вердикт") or {}).get("итог")
     if dv:
         parts.append(f"Детали: {dv}")
+    pc = parts_check(ev)
+    if pc["отмечено"]:
+        names = dict(PARTS_STAFF)
+        parts.append("Экран телефона (" + str(pc["кто"] or "сотрудник") + "): "
+                     + ", ".join(f"{names[k]} — {PART_STATES[v]}" for k, v in pc["метки"].items())
+                     + (f"; {pc['примечание']}" if pc["примечание"] else ""))
     if ev.apple_summary:
         parts.append(f"Apple: {ev.apple_summary}")
     if ev.locks_summary and ev.locks_summary != "чисто":
@@ -159,6 +169,10 @@ def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> d
         raise ImportError_("не определён объём памяти — импорт невозможен")
     if not (ev.client_name and ev.client_phone):
         raise ImportError_("не заполнены имя и телефон клиента")
+    pc = parts_check(ev)
+    if pc["нужна_сверка"] and not pc["отмечено"]:
+        raise ImportError_("Apple не подтвердила подлинность деталей — сверьте «Детали и обслуживание» "
+                           "на телефоне и отметьте детали в карточке сделки")
     if ev.number is None:                                       # номер заявки — только с именем и телефоном
         from .evaluations import assign_number
         assign_number(db, ev)

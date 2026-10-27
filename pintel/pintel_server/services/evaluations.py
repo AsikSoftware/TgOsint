@@ -203,6 +203,41 @@ def set_client_details(db, user, ev: Evaluation, *, name=None, phone=None,
     return ev
 
 
+PARTS_STAFF = (("Battery", "Аккумулятор"), ("Display", "Дисплей"), ("Camera", "Камера"),
+               ("FaceID", "Face ID"), ("BackGlass", "Заднее стекло"))
+PART_STATES = {"orig": "оригинальная деталь Apple", "serviced": "сервисное обслуживание",
+               "unknown": "неизвестная деталь", "used": "б/у деталь", "absent": "в списке нет"}
+
+
+def parts_check(ev: Evaluation) -> dict:
+    """Нужна ли сверка раздела «Детали и обслуживание» с экрана телефона и что отметил сотрудник.
+    Автоматика даёт зелёный только с подтверждением Apple; иначе без сверки сделка в Оценку не уйдёт."""
+    pv = (ev.report or {}).get("детали_вердикт") or {}
+    names = dict(PARTS_STAFF)
+    staff = ev.staff_parts or {}
+    marks = {k: v for k, v in staff.items() if k in names and v}
+    return {"авто": pv.get("итог"), "почему": pv.get("почему") or "",
+            "нужна_сверка": pv.get("итог") not in ("родные", "ремонт", "замена"),
+            "отмечено": bool(marks), "метки": marks,
+            "замены": [f"{names[k]}: {PART_STATES.get(v, v)}" for k, v in marks.items() if v in ("unknown", "used")],
+            "сервис": [names[k] for k, v in marks.items() if v == "serviced"],
+            "кто": staff.get("кто"), "когда": staff.get("когда"), "примечание": staff.get("примечание") or ""}
+
+
+def set_staff_parts(db, user, ev: Evaluation, marks: dict, note: str = "") -> Evaluation:
+    """Сотрудник отметил, что показывает телефон в «Детали и обслуживание»."""
+    names = dict(PARTS_STAFF)
+    clean = {k: v for k, v in (marks or {}).items() if k in names and v in PART_STATES}
+    ev.staff_parts = {**clean, "примечание": (note or "").strip()[:300], "кто": user.name, "когда": now().isoformat()}
+    db.commit()
+    audit.log(db, user, "evaluation.parts",
+              f"Сверка «Детали и обслуживание» по заявке {label(ev)}: "
+              + (", ".join(f"{names[k]} — {PART_STATES[v]}" for k, v in clean.items()) or "без отметок"),
+              entity="evaluation", entity_id=ev.id, details=ev.staff_parts)
+    db.commit()
+    return ev
+
+
 def ensure_media_token(db, ev: Evaluation) -> str:
     """Токен временной ссылки /m/ (фото/видео с телефона сотрудника). Создаём лениво."""
     if not ev.media_token:

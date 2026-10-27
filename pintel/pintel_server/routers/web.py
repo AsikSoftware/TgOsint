@@ -41,7 +41,8 @@ def _dt(dt, fmt="%d.%m.%Y %H:%M"):
 TEMPLATES.env.filters["money"] = _fmt_money
 TEMPLATES.env.filters["dt"] = _dt
 TEMPLATES.env.filters["time"] = ev_service.local_time
-TEMPLATES.env.globals.update(ROLES=ROLES, STATUSES=STATUSES, settings=settings)
+TEMPLATES.env.globals.update(ROLES=ROLES, STATUSES=STATUSES, settings=settings,
+                             PARTS_STAFF=ev_service.PARTS_STAFF, PART_STATES=ev_service.PART_STATES)
 
 
 def render(request, name, user=None, **ctx):
@@ -133,7 +134,21 @@ def deal(request: Request, ev_id: int, user: User = Depends(require_staff), db: 
     ev_service.ensure_media_token(db, ev)
     return render(request, "deal.html", user, ev=ev, rep=ev.report or {}, history=history, log=log,
                   ocenka_staff=ocenka_import.staff_list(), media_link=ev_service.media_url(ev),
-                  error=request.query_params.get("e"))
+                  parts=ev_service.parts_check(ev), error=request.query_params.get("e"))
+
+
+@router.post("/deal/{ev_id}/parts")
+def deal_parts(ev_id: int, Battery: str = Form(""), Display: str = Form(""), Camera: str = Form(""),
+               FaceID: str = Form(""), BackGlass: str = Form(""), note: str = Form(""),
+               user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """Сверка с экраном телефона: что показывает «Детали и обслуживание». Обязательна,
+    когда автоматика не получила подтверждения Apple."""
+    ev = _get_eval(db, ev_id)
+    if ev.ocenka_device_id:
+        return RedirectResponse(f"/deal/{ev_id}?e=Сделка уже отправлена в Оценку — сверку не меняем", 303)
+    ev_service.set_staff_parts(db, user, ev, {"Battery": Battery, "Display": Display, "Camera": Camera,
+                                              "FaceID": FaceID, "BackGlass": BackGlass}, note)
+    return RedirectResponse(f"/deal/{ev_id}?m=Сверка деталей сохранена", 303)
 
 
 @router.post("/deal/{ev_id}/take")

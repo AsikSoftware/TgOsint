@@ -922,19 +922,25 @@ class ResultScreen(Screen):
         pv = rep.get("детали_вердикт") or {}
         self.l_apple.addWidget(kicker("ПОДЛИННОСТЬ ДЕТАЛЕЙ"))
         self.l_apple.addSpacing(6)
-        if pv.get("итог") == "родные":
+        itog_pv = pv.get("итог")
+        if itog_pv == "родные":
             self.l_apple.addWidget(line("Все проверенные детали родные", C["okdot"]))
-            self.l_apple.addWidget(label("Привязка модулей к плате и заводская печать Apple сошлись — проверено по кабелю.",
+            self.l_apple.addWidget(label("Привязка модулей по кабелю и проверка Apple сошлись." if pv.get("apple_подтверждено")
+                                         else "Проверено по кабелю: у этой модели Apple историю деталей не ведёт.",
                                          "note", wrap=True))
-        elif pv.get("итог") == "ремонт":
+        elif itog_pv == "ремонт":
             for d in pv.get("детали", []):
                 if d["статус"] in ("used", "repaired"):
                     self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["warn"]))
-        elif pv.get("итог") == "замена":
+        elif itog_pv == "замена":
             for d in pv.get("детали", []):
                 if d["статус"] == "bad":
                     self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["bad"]))
-        cable_done = pv.get("итог") in ("родные", "ремонт", "замена")
+        else:                                           # кабель / неполно: без Apple зелёного не бывает
+            self.l_apple.addWidget(line("Подлинность не подтверждена Apple", C["warn"]))
+            self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве → "
+                                         "Детали и обслуживание — экран обновится сам. Сотрудник сверит раздел "
+                                         "при оформлении.", "note", wrap=True))
         if hist:
             groups = {}
             for v in hist.values():
@@ -948,25 +954,20 @@ class ResultScreen(Screen):
                 elif v.get("меняли"):
                     self.l_apple.addWidget(line(f"{name} — {verb}, " + ("б/у деталь" if v.get("бу") else "деталь Apple, новая"),
                                                 C["warn"] if not v.get("бу") else C["bad"]))
-                else:
+                elif pv.get("apple_подтверждено"):
                     self.l_apple.addWidget(line(f"{name} — не {verb}", C["okdot"]))
+                else:
+                    self.l_apple.addWidget(line(f"{name} — ремонтов Apple не отмечено", C["muted"], small=True))
             self.l_apple.addWidget(label("По сверке Apple с заводской печатью вашего телефона" if any(
                 v.get("источник", "").startswith("сверка") for v in hist.values())
-                else "Из раздела «Запчасти и история обслуживания» вашего телефона", "note", wrap=True))
+                else "Из раздела «Детали и обслуживание» вашего телефона", "note", wrap=True))
         else:
             st = rep.get("apple_история_статус")
-            if st == "не поддерживается":
-                self.l_apple.addWidget(line("У этой модели Apple не ведёт историю обслуживания", C["muted"]))
-                self.l_apple.addWidget(label("Детали проверены по кабелю — остальное уточнит сотрудник.", "note", wrap=True))
-            elif st == "формат не распознан":
+            if st == "формат не распознан":
                 self.l_apple.addWidget(line("Раздел открыт — сотрудник сверит его на экране телефона", C["warn"]))
-            elif cable_done:
-                self.l_apple.addWidget(label("Хотите увидеть ДАТЫ ремонтов — откройте на телефоне «Об этом устройстве»; "
-                                             "это не обязательно.", "note", wrap=True))
-            else:
-                self.l_apple.addWidget(line("Раздел пока не открыт", C["warn"]))
-                self.l_apple.addWidget(label("Откройте на телефоне Настройки → Основные → Об этом устройстве — "
-                                             "данные появятся здесь сами.", "note", wrap=True))
+            elif itog_pv in ("ремонт", "замена"):
+                self.l_apple.addWidget(label("Хотите увидеть ДАТЫ ремонтов — откройте на телефоне «Детали и обслуживание».",
+                                             "note", wrap=True))
         self.l_apple.addStretch(1)
         # блокировки
         clear_layout(self.l_locks)

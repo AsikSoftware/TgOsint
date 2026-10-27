@@ -35,7 +35,11 @@ def test_iphone12_ios26_reads_like_ios18():
         assert sig[k]["ок"] is True, (k, sig[k])
     assert rep["правовой"]["mdm"] is False and rep["правовой"]["найти_iphone"] == "включён"
     assert len(rep["apple_история"]) == 5 and not any(v["меняли"] for v in rep["apple_история"].values())
-    assert rep["итог"]["вердикт"] == "ХОРОШИЙ", rep["итог"]
+    # записи с нулями без сверки с печатью — не подтверждение Apple: зелёного нет, сотрудник сверяет раздел
+    assert rep["детали_вердикт"]["итог"] == "кабель" and rep["итог"]["вердикт"] == "ПРОВЕРКА НЕПОЛНАЯ", rep["итог"]
+    snap["repair_history_meta"] = {"формат": "записи обслуживания (iOS 26)", "дельта": []}   # сверка прочитана
+    rep = report_mod.build(snap)
+    assert rep["детали_вердикт"]["итог"] == "родные" and rep["итог"]["вердикт"] == "ХОРОШИЙ", rep["итог"]
     sk = rep["sickw"]
     assert sk["в_чёрном_списке"] is False and sk["fmi_включён"] is True and sk["sim_lock"] == "разблокирован"
     assert sk["гарантия"] == "Out Of Warranty" and sk["гарантия_до"] == "2023-02-01"
@@ -63,7 +67,8 @@ def test_iphone17pro_usb_c():
     assert sig["Taptic ↔ плата"]["ок"] is True and sig["Телефото"]["ок"] is True
     assert sig["Датчик приближения"]["ок"] is None                      # у 17 Pro свой драйвер, данных пока нет
     assert len(rep["apple_история"]) == 7 and "BackGlass" in rep["apple_история"]
-    assert rep["итог"]["вердикт"] in ("ИДЕАЛ", "ХОРОШИЙ"), rep["итог"]
+    # записи iOS 26 с нулями, сверки с печатью в слепке нет → зелёного не даём, сотрудник сверяет раздел
+    assert rep["детали_вердикт"]["итог"] == "кабель" and rep["итог"]["вердикт"] == "ПРОВЕРКА НЕПОЛНАЯ", rep["итог"]
     assert not any("Face ID" in x for x in rep["не_прочиталось"])
     sk = rep["sickw"]
     assert sk["гарантия"] == "Limited Warranty" and sk["fmi_включён"] is False and sk["в_чёрном_списке"] is False

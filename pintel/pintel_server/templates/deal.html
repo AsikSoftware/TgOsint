@@ -64,20 +64,31 @@
     </section>
     <section class="sec span2">
       {% set pv = rep.get('детали_вердикт') or {} %}
-      <h2>Подлинность деталей — проверено по кабелю</h2>
+      <h2>Подлинность деталей</h2>
       {% if pv.get('итог') == 'замена' %}<div class="tile bad"><b>Найдена замена детали</b><small>{% for d in pv.get('детали') if d['статус'] == 'bad' %}{{ d['деталь'] }}: {{ d['почему'] }}. {% endfor %}</small></div>
       {% elif pv.get('итог') == 'ремонт' %}<div class="tile warn"><b>Деталь меняли</b><small>{% for d in pv.get('детали') if d['статус'] in ('used','repaired') %}{{ d['деталь'] }}: {{ d['почему'] }}. {% endfor %}</small></div>
-      {% elif pv.get('итог') == 'родные' %}<div class="tile ok"><b>Все проверенные детали родные</b><small>Привязка модулей к плате и заводская печать сошлись{% if not pv.get('каналы', {}).get('журнал') %} (вердикт с кабеля, журнал Apple не потребовался){% endif %}.</small></div>
-      {% else %}<div class="tile gray"><b>Деталей по кабелю подтвердить не удалось</b><small>См. сигналы ниже.</small></div>{% endif %}
+      {% elif pv.get('итог') == 'родные' %}<div class="tile ok"><b>Все проверенные детали родные</b><small>{% if pv.get('apple_подтверждено') %}Привязка модулей по кабелю и проверка Apple сошлись.{% else %}По кабелю; у этой модели Apple историю деталей не ведёт.{% endif %}</small></div>
+      {% else %}<div class="tile warn"><b>Apple не подтвердила подлинность деталей</b><small>{{ pv.get('почему') or 'данных нет' }}. Откройте на телефоне Настройки → Основные → Об этом устройстве → Детали и обслуживание и отметьте ниже, что показывает телефон.</small></div>{% endif %}
       {% if pv.get('детали') %}<div class="grid4" style="margin-top:6px">{% for d in pv.get('детали') if not d['деталь'].startswith('Записи') %}<div class="sig"><span>{{ d['деталь'] }}</span><span class="{{ 'bad' if d['статус']=='bad' else ('warn' if d['статус'] in ('used','repaired') else 'ok') }}">{{ {'ok':'родная','repaired':'меняли (ориг.)','used':'б/у','bad':'замена'}[d['статус']] }}</span></div>{% endfor %}</div>{% endif %}
+      <h2 style="margin-top:10px">Сверка с экраном телефона{% if parts['нужна_сверка'] %} — обязательна до отправки в Оценку{% endif %}</h2>
+      {% if parts['отмечено'] %}<div class="tile {{ 'bad' if parts['замены'] else ('warn' if parts['сервис'] else 'ok') }}"><b>{% if parts['замены'] %}{{ parts['замены']|join(', ') }}{% elif parts['сервис'] %}Сервисное обслуживание: {{ parts['сервис']|join(', ') }}{% else %}На экране телефона замен нет{% endif %}</b><small>отметил(а) {{ parts['кто'] }}{% if parts['примечание'] %} · {{ parts['примечание'] }}{% endif %}</small></div>{% endif %}
+      {% if not ev.ocenka_device_id %}
+      <form method="post" action="/deal/{{ ev.id }}/parts" class="grid3" style="gap:10px 14px">
+        {% for key, name in PARTS_STAFF %}
+        <label class="f">{{ name }}<select name="{{ key }}"><option value="">—</option>{% for code, title in PART_STATES.items() %}<option value="{{ code }}" {{ 'selected' if parts['метки'].get(key) == code }}>{{ title }}</option>{% endfor %}</select></label>
+        {% endfor %}
+        <label class="f">Примечание<input type="text" name="note" value="{{ parts['примечание'] }}" placeholder="например: дата ремонта с экрана"></label>
+        <div class="row" style="grid-column:1 / -1"><button class="btn primary sm" type="submit">Сохранить сверку</button><span class="note">Что показывает раздел «Детали и обслуживание» на телефоне клиента.</span></div>
+      </form>
+      {% endif %}
       <h2 style="margin-top:10px">История обслуживания Apple (даты)</h2>
       {% if hist %}
       <div class="grid3">
         {% for k, v in hist.items() %}
-        <div class="tile {{ 'bad' if v['меняли'] and (v['бу'] or v.get('неизвестная')) else ('warn' if v['меняли'] else 'ok') }}"><b>{{ v['деталь'] }}</b><small>{% if v.get('неизвестная') %}деталь неизвестного происхождения{% elif v['меняли'] %}меняли{% if v['дата'] %} {{ v['дата'] }}{% endif %} · {{ 'б/у деталь' if v['бу'] else 'новая деталь' }}{% else %}не меняли{% endif %}</small></div>
+        <div class="tile {{ 'bad' if v['меняли'] and (v['бу'] or v.get('неизвестная')) else ('warn' if v['меняли'] else ('ok' if pv.get('apple_подтверждено') else 'gray')) }}"><b>{{ v['деталь'] }}</b><small>{% if v.get('неизвестная') %}деталь неизвестного происхождения{% elif v['меняли'] %}меняли{% if v['дата'] %} {{ v['дата'] }}{% endif %} · {{ 'б/у деталь' if v['бу'] else 'новая деталь' }}{% elif pv.get('apple_подтверждено') %}не меняли{% else %}ремонтов Apple не отмечено{% endif %}</small></div>
         {% endfor %}
       </div>
-      <div class="note">{{ rep.get('apple_история_источник') or 'Записи обслуживания' }} — снято с телефона клиента при открытии «Запчасти и история обслуживания». Не из наших догадок, а из данных Apple.</div>
+      <div class="note">{{ rep.get('apple_история_источник') or 'Записи обслуживания' }} — снято с телефона клиента при открытии «Детали и обслуживание».{% if not pv.get('apple_подтверждено') %} Это записи о ремонтах Apple, сверка деталей с заводской печатью не прочиталась — подлинность подтверждает только сверка с экраном телефона выше.{% endif %}</div>
       {% else %}
       {% set hst = rep.get('apple_история_статус') %}
       {% if hst == 'не поддерживается' %}
@@ -88,6 +99,8 @@
       <div class="tile gray"><b>История не получена</b><small>Клиент не открыл «Об этом устройстве» за отведённое время. Попросите открыть — киоск дошлёт данные сам, пока телефон на кабеле.</small></div>
       {% endif %}
       {% endif %}
+      {% set raw_log = (ev.snapshot or {}).get('repair_history_raw') %}
+      {% if raw_log %}<details><summary>Журнал Apple с телефона (сырые строки)</summary><pre>{{ raw_log }}</pre></details>{% endif %}
     </section>
     <section class="sec">
       <h2>Батарея</h2>
@@ -164,7 +177,7 @@
         <label class="chk"><input type="checkbox" name="panic_full" {{ 'checked' if ev.panic_full }}>Ошибка Panic full</label>
         <button class="btn primary" type="submit" style="width:100%">Отправить в Оценку</button>
       </form>
-      <div class="note">Создаст сделку в Оценке (оценщик, имя/телефон клиента, фото/видео, статус «Ожидает оценку»). Нужны имя и телефон клиента.</div>
+      <div class="note">Создаст сделку в Оценке (оценщик, имя/телефон клиента, фото/видео, статус «Ожидает оценку»). Нужны имя и телефон клиента{% if parts['нужна_сверка'] and not parts['отмечено'] %} и <b>сверка деталей с экраном телефона</b> (блок слева){% endif %}.</div>
     {% endif %}
     <div style="height:1px;background:var(--border)"></div>
     <h2>Выкуп</h2>

@@ -288,6 +288,38 @@ def test_cashier_sees_client_data_media_and_import_button(app):
     assert r.status_code == 303 and "выключен" in loc(r)
 
 
+def test_staff_parts_check_gates_import(app, monkeypatch):
+    """Без подтверждения Apple автоматика зелёного не даёт; сотрудник сверяет «Детали и обслуживание»
+    на телефоне и отмечает в карточке — только после этого сделка может уйти в Оценку."""
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/kiosks", data={"name": "Сверка-киоск", "point_id": ""})
+    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
+    H = {"X-Kiosk-Token": token}
+    rep, snap = real_report()                        # iPhone 12, iOS 26: записи с нулями, сверки нет
+    assert rep["детали_вердикт"]["итог"] == "кабель" and rep["итог"]["вердикт"] == "ПРОВЕРКА НЕПОЛНАЯ"
+    ev_id = TestClient(app).post("/api/kiosk/evaluations", json={"client_id": "parts-1", "report": rep, "snapshot": snap},
+                                 headers=H).json()["id"]
+    admin.post(f"/deal/{ev_id}/client", data={"client_name": "Ержан", "client_phone": "+77005550000"})
+    page = admin.get(f"/deal/{ev_id}").text
+    assert "Apple не подтвердила подлинность деталей" in page and "обязательна до отправки" in page
+    from pintel_server.config import settings as cfg
+    monkeypatch.setattr(cfg, "ocenka_db_url", "postgresql+psycopg://u:p@localhost/pintel_ocenka_test")
+    r = admin.post(f"/deal/{ev_id}/import_ocenka")
+    assert r.status_code == 303 and "сверьте" in loc(r)                 # без сверки — не уходит
+    r = admin.post(f"/deal/{ev_id}/parts", data={"Battery": "serviced", "Display": "unknown", "Camera": "orig", "note": "экран без даты"})
+    assert r.status_code == 303
+    page = admin.get(f"/deal/{ev_id}").text
+    assert "Дисплей: неизвестная деталь" in page and "экран без даты" in page
+    db = SessionLocal(); ev = db.get(Evaluation, ev_id)
+    from pintel_server.services import ocenka_import as oi
+    assert oi._phone_status(ev) == "Ранее был в ремонте" and "Дисплей — неизвестная деталь" in oi._comment_ocenka(ev)
+    logs = [l.text for l in db.scalars(select(AuditLog).where(AuditLog.entity_id == ev_id, AuditLog.entity == "evaluation")).all()]
+    assert any("Сверка «Детали и обслуживание»" in t and "Дисплей — неизвестная деталь" in t for t in logs)
+    db.close()
+    r = admin.post(f"/deal/{ev_id}/import_ocenka")
+    assert "сверьте" not in loc(r)                      # дальше упирается в недоступную БД Оценки, не в сверку
+
+
 def test_ocenka_import_field_mapping():
     """Маппинг полей оценки → поля сделки Оценки (без обращения к БД)."""
     from pintel_server.services import ocenka_import as oi

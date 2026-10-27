@@ -52,7 +52,8 @@ def build(snap):
         pas["цвет"] = pas["цвет_по_коду"]
     jb = snap.get("jailbreak")
     # Единый вердикт по деталям: кабель (привязка + печать Apple) — основа, журнал — обогащение.
-    parts_v = parts_mod.verdict(snap, sig, hist, bat, seal)
+    parts_v = parts_mod.verdict(snap, sig, hist, bat, seal, snap.get("repair_history_meta") or {},
+                                apple_supported=hist_ok)
 
     stop, todo, warn, unknown = [], [], [], []
     if bat["подделка"]:
@@ -97,6 +98,8 @@ def build(snap):
               and parts_v["итог"] == "неполно"):
             # «нет данных» портит вердикт, только если деталь не подтверждена НИ одним каналом
             unknown.append(f"{name}: {s['почему']}")
+    if parts_v["итог"] in ("кабель", "неполно"):
+        unknown.append("подлинность деталей не подтверждена Apple: " + parts_v["почему"])
     if bat["здоровье_%"] is not None and bat["здоровье_%"] < 80:
         warn.append(f"износ батареи: здоровье {bat['здоровье_%']}%")
     if bat["циклы"] and bat["циклы"] > 800:

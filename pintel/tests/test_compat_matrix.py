@@ -107,18 +107,21 @@ def test_node_absent_from_map_is_not_a_read_failure():
     snap = _snap("iphone12_ios26_anon.snapshot.json")
     snap["nodes"]["AppleHapticsSupportArcEEPROM"] = None
     snap["quality"]["нет_в_карте"] = ["AppleHapticsSupportArcEEPROM"]
+    snap["repair_history_meta"] = {"формат": "записи обслуживания (iOS 26)", "дельта": []}   # Apple подтвердила
     rep = report_mod.build(snap)
     assert "Taptic ↔ плата" not in rep["сигналы"] and rep["итог"]["вердикт"] != "ПРОВЕРКА НЕПОЛНАЯ"
 
 
 def test_history_status_in_report():
-    # полный кабель: нераспознанный формат журнала — НЕ действие (вердикт деталей есть с кабеля)
+    # полный кабель, но Apple не прочиталась: зелёного нет — «кабель», проверка неполная,
+    # сотрудник сверяет раздел на телефоне (кабель не видит пересаженный оригинальный экран)
     snap = _snap("iphone12_ios26_anon.snapshot.json")
     snap.pop("repair_history", None)
     snap["repair_history_meta"] = {"раздел_открыт": True, "формат": "не распознан"}
     rep = report_mod.build(snap)
     assert rep["apple_история_статус"] == "формат не распознан"
-    assert rep["детали_вердикт"]["итог"] == "родные" and rep["итог"]["вердикт"] != "ПРОВЕРКА НЕПОЛНАЯ"
+    assert rep["детали_вердикт"]["итог"] == "кабель" and rep["итог"]["вердикт"] == "ПРОВЕРКА НЕПОЛНАЯ"
+    assert any("не подтверждена Apple" in x for x in rep["не_прочиталось"])
     assert not any("этот формат iOS" in x for x in rep["сделать"])      # не дёргаем клиента зря
     # модель без истории — честный статус, вердикт деталей всё равно с кабеля
     snap["root"]["ProductType"], snap["root"]["ProductVersion"] = "iPhone10,6", "16.7.10"

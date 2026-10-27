@@ -261,3 +261,20 @@ def test_battery_health_alone_is_not_a_verdict():
                     '    IOPSBatteryHealthServiceState = 1;\n    IOPSBatteryHealthState = 3;\n}\n')
     comp = rh.parse_components(only_battery)
     assert comp["аккумулятор"] and not comp["детали"]
+
+
+AUTHCP = ('Oct 27 06:59:05 iPhone Preferences(CoreRepairUI)[1] <Notice>: AuthCP Components: (\n'
+          '        {\n        AuthPassed = 1;\n        ComponentName = Battery;\n        flags = 65544;\n'
+          '        isTrusted = 1;\n        isTrustedForUI = 1;\n    },\n'
+          '        {\n        AuthPassed = 1;\n        ComponentName = TouchController;\n        flags = 196608;\n'
+          '        isTrusted = 0;\n        isTrustedForUI = 0;\n    }\n)\n')
+
+
+def test_untrusted_module_is_a_verdict_of_its_own():
+    """Второй источник того же вердикта: у iPhone 15 Pro с «Неизвестно» на экране дисплей
+    пришёл с isTrusted = 0 (AuthPassed при этом 1), у чистого 14 Pro — с 1. Если на другой
+    iOS не окажется строк systemhealth, вердикт обязан дать эта проверка."""
+    comp = rh.parse_components(AUTHCP)
+    assert comp["детали"]["Display"]["неизвестная"] and comp["детали"]["Display"]["меняли"]
+    assert "Battery" not in comp["детали"]              # доверенный модуль деталью-проблемой не становится
+    assert comp["доверие"]["Display"]["isTrusted"] == 0 and comp["доверие"]["Battery"]["isTrusted"] == 1

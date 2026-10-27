@@ -228,17 +228,20 @@ def parse_components(text):
             it = item(key)
             it["меняли"], it["неизвестная"] = True, True
     m = AUTHCP_RE.search(text)
-    if m:                                         # смысл isTrusted на одном аппарате не подтверждён:
-        cur = {}                                  # сохраняем для разбора, вердикт по нему не строим
-        for name, val in _KV_RE.findall(m.group(1)):
-            cur[name] = int(val)
-            if name == "isTrustedForUI" and "ComponentName" not in cur:
-                continue
+    if m:
         for block in re.split(r"\}\s*,?", m.group(1)):
             kv = dict(_KV_RE.findall(block))
             nm = re.search(r"ComponentName\s*=\s*(\w+)", block)
             if nm:
                 out["доверие"][part(nm.group(1))] = {k: int(v) for k, v in kv.items()}
+    # Доверие к модулю — второй источник того же вердикта. Смысл подтверждён на двух эталонах:
+    # у 15 Pro с «Неизвестно» на экране TouchController (это дисплей) пришёл с isTrusted = 0,
+    # у чистого 14 Pro — с 1, при AuthPassed = 1 у обоих (значит дело не в самой проверке подписи).
+    # Держим как страховку: если на другой iOS не окажется строк systemhealth, вердикт даст это.
+    for key, vals in out["доверие"].items():
+        if (key in HEALTH_PARTS) and (vals.get("isTrusted") == 0 or vals.get("isTrustedForUI") == 0):
+            it = item(key)
+            it["меняли"], it["неизвестная"] = True, True
     m = BATTERY_STATE_RE.search(text)
     if m:
         out["аккумулятор"] = {k: int(v) for k, v in _KV_RE.findall(m.group(1))}

@@ -125,10 +125,20 @@
       <div class="tile ok"><b>Отправлено · сделка №{{ ev.ocenka_device_id }}</b><small>{{ ev.ocenka_imported_at|dt }}</small></div>
     {% else %}
       <form method="post" action="/deal/{{ ev.id }}/import_ocenka" style="display:flex;flex-direction:column;gap:8px">
+        {% if ocenka_staff %}
+        <label class="f">Кто провёл (оценщик в Оценке)
+          <select name="ocenka_user_id">
+            <option value="">— выберите сотрудника —</option>
+            {% for s in ocenka_staff %}<option value="{{ s['id'] }}">{{ s['имя'] }}{{ ' · админ' if s['роль'] == 1 else '' }}</option>{% endfor %}
+          </select>
+        </label>
+        {% else %}
+        <div class="note">Список сотрудников Оценки недоступен (Оценка выключена или нет связи) — сделка уйдёт без оценщика.</div>
+        {% endif %}
         <label class="chk"><input type="checkbox" name="panic_full" {{ 'checked' if ev.panic_full }}>Ошибка Panic full</label>
         <button class="btn primary" type="submit" style="width:100%">Отправить в Оценку</button>
       </form>
-      <div class="note">Создаст сделку в Оценке (имя, телефон, фото/видео, статус «Ожидает оценку»). Нужны имя и телефон клиента.</div>
+      <div class="note">Создаст сделку в Оценке (оценщик, имя/телефон клиента, фото/видео, статус «Ожидает оценку»). Нужны имя и телефон клиента.</div>
     {% endif %}
     <div style="height:1px;background:var(--border)"></div>
     {% if ev.status in ('bought', 'declined') %}

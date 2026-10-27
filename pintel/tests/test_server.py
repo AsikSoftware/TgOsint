@@ -279,3 +279,4 @@ def test_ocenka_import_field_mapping():
     imeis = oi._imeis(ev)
     assert imeis[0][0] == "353915105357912" and imeis[0][2] is True   # основной IMEI первым
     assert "Киоск №7" in oi._comment_ocenka(ev)
+    assert oi.staff_list() == []   # Оценка выключена в тестах → список сотрудников пуст

@@ -131,7 +131,7 @@ def deal(request: Request, ev_id: int, user: User = Depends(require_staff), db: 
     log = db.scalars(select(AuditLog).where(AuditLog.entity == "evaluation", AuditLog.entity_id == ev.id)
                      .order_by(desc(AuditLog.at))).all()
     return render(request, "deal.html", user, ev=ev, rep=ev.report or {}, history=history, log=log,
-                  error=request.query_params.get("e"))
+                  ocenka_staff=ocenka_import.staff_list(), error=request.query_params.get("e"))
 
 
 @router.post("/deal/{ev_id}/take")
@@ -154,13 +154,16 @@ def media_file(media_id: int, user: User = Depends(require_staff), db: DbSession
 
 @router.post("/deal/{ev_id}/import_ocenka")
 def deal_import_ocenka(ev_id: int, panic_full: Optional[str] = Form(None),
+                       ocenka_user_id: Optional[str] = Form(None),
                        user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
-    """Сотрудник отправляет готовую сделку в Pintel Оценку. panic full ставит он же здесь."""
+    """Сотрудник отправляет готовую сделку в Pintel Оценку. panic full и «кто провёл»
+    (оценщик из списка сотрудников Оценки) задаёт он же здесь."""
     ev = _get_eval(db, ev_id)
     ev.panic_full = bool(panic_full)
     db.commit()
+    gid = int(ocenka_user_id) if (ocenka_user_id or "").strip().isdigit() else None
     try:
-        res = ocenka_import.import_evaluation(db, ev)
+        res = ocenka_import.import_evaluation(db, ev, user_grade_id=gid)
     except ocenka_import.ImportError_ as e:
         return RedirectResponse(f"/deal/{ev_id}?e={e}", 303)
     except Exception as e:                                       # noqa: BLE001

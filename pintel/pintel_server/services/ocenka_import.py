@@ -127,8 +127,27 @@ def _imeis(ev: Evaluation) -> list[tuple[str, bool, bool]]:
 
 # ---------------------------------------------------------------- импорт
 
-def import_evaluation(db, ev: Evaluation) -> dict:
+def staff_list() -> list[dict]:
+    """Сотрудники Оценки (роль 1 админ, 2 продавец) для выбора «кто провёл сделку».
+    Только чтение; при выключенной/недоступной Оценке — пустой список."""
+    if not settings.ocenka_enabled:
+        return []
+    try:
+        with _ocenka_engine().connect() as conn:
+            rows = conn.execute(text(
+                "SELECT id, first_name, last_name, phone, staff_id FROM users "
+                "WHERE staff_id IN (1, 2) ORDER BY staff_id, first_name")).mappings().all()
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("ocenka: список сотрудников недоступен: %s", exc)
+        return []
+    return [{"id": r["id"], "роль": r["staff_id"],
+             "имя": " ".join(x for x in (r["first_name"], r["last_name"]) if x) or (r["phone"] or "?")}
+            for r in rows]
+
+
+def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> dict:
     """Создаёт сделку в Оценке и помечает нашу оценку импортированной.
+    user_grade_id — id сотрудника Оценки, который провёл сделку (оценщик).
     Идемпотентно: повторный вызов вернёт уже присвоенный номер."""
     if ev.ocenka_device_id:
         return {"ok": True, "device_id": ev.ocenka_device_id, "повтор": True}
@@ -165,12 +184,12 @@ def import_evaluation(db, ev: Evaluation) -> dict:
             INSERT INTO devices (
                 producer, model, code_name, ddr, akb, akb_exact, color, sim,
                 box, cord, panic_full, phone_status, online, status_id,
-                price_grade_auto, user_client, shop_id_grade,
+                price_grade_auto, user_client, user_grade, shop_id_grade,
                 photo_phone, video_phone, comment, comment_ocenka
             ) VALUES (
                 :producer, :model, :code_name, :ddr, :akb, :akb_exact, :color, :sim,
                 :box, :cord, :panic_full, :phone_status, false, :status_id,
-                :price_auto, :user_client, :shop_id,
+                :price_auto, :user_client, :user_grade, :shop_id,
                 :photo_phone, :video_phone, :comment, :comment_ocenka
             ) RETURNING id
         """), {
@@ -189,6 +208,7 @@ def import_evaluation(db, ev: Evaluation) -> dict:
             "status_id": settings.ocenka_status_id,
             "price_auto": ev.price_offer,
             "user_client": client_id,
+            "user_grade": user_grade_id,
             "shop_id": shop_id,
             "photo_phone": ("||".join(photos) if photos else None),
             "video_phone": (videos[0][:200] if videos else None),
@@ -205,5 +225,7 @@ def import_evaluation(db, ev: Evaluation) -> dict:
     ev.ocenka_device_id = int(device_id)
     ev.ocenka_imported_at = now()
     db.commit()
-    log.info("ocenka: оценка №%s импортирована как сделка №%s", ev.number, device_id)
-    return {"ok": True, "device_id": int(device_id), "фото": len(photos), "видео": len(videos)}
+    log.info("ocenka: оценка №%s импортирована как сделка №%s (оценщик %s)",
+             ev.number, device_id, user_grade_id)
+    return {"ok": True, "device_id": int(device_id), "фото": len(photos), "видео": len(videos),
+            "оценщик": user_grade_id}

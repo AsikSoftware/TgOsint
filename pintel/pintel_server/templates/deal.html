@@ -70,7 +70,27 @@
       {% elif pv.get('итог') == 'родные' %}<div class="tile ok"><b>Все проверенные детали родные</b><small>{% if pv.get('apple_подтверждено') %}Привязка модулей по кабелю и проверка Apple сошлись.{% else %}По кабелю; у этой модели Apple историю деталей не ведёт.{% endif %}</small></div>
       {% else %}<div class="tile warn"><b>Apple не подтвердила подлинность деталей</b><small>{{ pv.get('почему') or 'данных нет' }}. Откройте на телефоне Настройки → Основные → Об этом устройстве → Детали и обслуживание и отметьте ниже, что показывает телефон.</small></div>{% endif %}
       {% if pv.get('детали') %}<div class="grid4" style="margin-top:6px">{% for d in pv.get('детали') if not d['деталь'].startswith('Записи') %}<div class="sig"><span>{{ d['деталь'] }}</span><span class="{{ 'bad' if d['статус']=='bad' else ('warn' if d['статус'] in ('used','repaired') else 'ok') }}">{{ {'ok':'родная','repaired':'меняли (ориг.)','used':'б/у','bad':'замена'}[d['статус']] }}</span></div>{% endfor %}</div>{% endif %}
-      <h2 style="margin-top:10px">Сверка с экраном телефона{% if parts['нужна_сверка'] %} — обязательна до отправки в Оценку{% endif %}</h2>
+      {% if parts['нужна_сверка'] and not ev.ocenka_device_id %}
+      <div class="tile warn" style="display:flex;gap:14px;align-items:flex-start">
+        <span class="waitdot"></span>
+        <div><b>Откройте раздел на телефоне — данные придут сами</b>
+          <small>Пока телефон на кабеле киоска: <b>Настройки → Основные → Об этом устройстве → «Детали и обслуживание»</b>
+          (на старых iOS — «Запчасти и история обслуживания»). Если раздел уже открыт, выйдите и зайдите снова.
+          Эта страница обновится сама, переписывать ничего не нужно.</small></div>
+      </div>
+      <script>
+      (function () {
+        var было = "{{ parts['авто'] }}|{{ rep.get('apple_история_статус') }}|{{ ev.media|length }}|{{ 'да' if ev.staff_parts else 'нет' }}|{{ ev.ocenka_device_id or '' }}";
+        setInterval(function () {
+          fetch("/deal/{{ ev.id }}/state", { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (s) { if (s["ключ"] && s["ключ"].replace("True", "да").replace("False", "нет").replace("None", "") !== было) location.reload(); })
+            .catch(function () {});
+        }, 5000);
+      })();
+      </script>
+      {% endif %}
+      <h2 style="margin-top:10px">Сверка с экраном телефона{% if parts['нужна_сверка'] %} — если телефон уже отключили{% endif %}</h2>
       {% if parts['отмечено'] %}<div class="tile {{ 'bad' if parts['замены'] else ('warn' if parts['сервис'] else 'ok') }}"><b>{% if parts['замены'] %}{{ parts['замены']|join(', ') }}{% elif parts['сервис'] %}Сервисное обслуживание: {{ parts['сервис']|join(', ') }}{% else %}На экране телефона замен нет{% endif %}</b><small>отметил(а) {{ parts['кто'] }}{% if parts['примечание'] %} · {{ parts['примечание'] }}{% endif %}</small></div>{% endif %}
       {% if not ev.ocenka_device_id %}
       <form method="post" action="/deal/{{ ev.id }}/parts" class="grid3" style="gap:10px 14px">
@@ -78,7 +98,7 @@
         <label class="f">{{ name }}<select name="{{ key }}"><option value="">—</option>{% for code, title in PART_STATES.items() %}<option value="{{ code }}" {{ 'selected' if parts['метки'].get(key) == code }}>{{ title }}</option>{% endfor %}</select></label>
         {% endfor %}
         <label class="f">Примечание<input type="text" name="note" value="{{ parts['примечание'] }}" placeholder="например: дата ремонта с экрана"></label>
-        <div class="row" style="grid-column:1 / -1"><button class="btn primary sm" type="submit">Сохранить сверку</button><span class="note">Что показывает раздел «Детали и обслуживание» на телефоне клиента.</span></div>
+        <div class="row" style="grid-column:1 / -1"><button class="btn primary sm" type="submit">Сохранить сверку</button><span class="note">Отметьте, что показывает раздел «Детали и обслуживание» на телефоне. Нужно, только если телефон уже отключили от киоска: на кабеле данные приходят сами.</span></div>
       </form>
       {% endif %}
       <h2 style="margin-top:10px">История обслуживания Apple (даты)</h2>

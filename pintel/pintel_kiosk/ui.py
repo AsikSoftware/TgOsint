@@ -697,20 +697,22 @@ class ScanScreen(Screen):
         pl = QVBoxLayout(self.panel)
         pl.setContentsMargins(48, 48, 48, 48)
         pl.setSpacing(0)
-        pl.addWidget(kicker("НЕОБЯЗАТЕЛЬНО · ДЛЯ ДАТ РЕМОНТА", 16, 3.0, C["pale"]))
+        pl.addWidget(kicker("ОДИН ШАГ НА ТЕЛЕФОНЕ · ПОДТВЕРЖДЕНИЕ APPLE", 16, 3.0, C["pale"]))
         pl.addSpacing(14)
-        pl.addWidget(label("Откройте сведения о телефоне — Apple сама скажет, что менялось", wrap=True,
-                           font_=font(FONT_HEAD, 34, W.Bold), color="white"))
+        pl.addWidget(label("Откройте на телефоне «Детали и обслуживание» — Apple сама скажет, что менялось",
+                           wrap=True, font_=font(FONT_HEAD, 34, W.Bold), color="white"))
         pl.addSpacing(34)
-        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве", "«Запчасти и история обслуживания»"), 1):
+        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
+                               "«Детали и обслуживание»\n(на старых iOS — «Запчасти и история обслуживания»)"), 1):
             if i > 1:
                 pl.addSpacing(18)
             pl.addWidget(label(f"{i} · {t}", "bluestep", wrap=True))
         pl.addStretch(1)
-        pl.addWidget(label("Подлинность деталей мы уже проверили по кабелю. Этот шаг нужен только для ДАТ ремонтов — "
-                           "его можно пропустить.", "bluenote", wrap=True))
+        pl.addWidget(label("По кабелю мы видим привязку модулей, но подтвердить подлинность может только Apple — "
+                           "и только с этого экрана. Если раздел уже открыт, выйдите и зайдите снова.",
+                           "bluenote", wrap=True))
         pl.addSpacing(22)
-        self.skip = QPushButton("Пропустить этот шаг")
+        self.skip = QPushButton("Сделает сотрудник")
         self.skip.setObjectName("skip")
         self.skip.setCursor(Qt.PointingHandCursor)
         self.skip.clicked.connect(self.skip_requested.emit)

@@ -301,7 +301,11 @@ def test_staff_parts_check_gates_import(app, monkeypatch):
                                  headers=H).json()["id"]
     admin.post(f"/deal/{ev_id}/client", data={"client_name": "Ержан", "client_phone": "+77005550000"})
     page = admin.get(f"/deal/{ev_id}").text
-    assert "Apple не подтвердила подлинность деталей" in page and "обязательна до отправки" in page
+    assert "Apple не подтвердила подлинность деталей" in page
+    assert "Откройте раздел на телефоне" in page and "данные придут сами" in page   # сначала ждём телефон
+    assert "если телефон уже отключили" in page                                     # руками — только запасной путь
+    st = admin.get(f"/deal/{ev_id}/state").json()
+    assert st["нужна_сверка"] is True and st["детали"] == "кабель" and "|" in st["ключ"]
     from pintel_server.config import settings as cfg
     monkeypatch.setattr(cfg, "ocenka_db_url", "postgresql+psycopg://u:p@localhost/pintel_ocenka_test")
     r = admin.post(f"/deal/{ev_id}/import_ocenka")

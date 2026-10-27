@@ -137,6 +137,20 @@ def deal(request: Request, ev_id: int, user: User = Depends(require_staff), db: 
                   parts=ev_service.parts_check(ev), error=request.query_params.get("e"))
 
 
+@router.get("/deal/{ev_id}/state")
+def deal_state(ev_id: int, user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """Короткое состояние карточки: карточка опрашивает его, пока ждём, что на телефоне
+    откроют «Детали и обслуживание». Как только журнал Apple пришёл с киоска — страница
+    перезагружается сама, и сотруднику не нужно ничего переписывать руками."""
+    ev = _get_eval(db, ev_id)
+    pv = (ev.report or {}).get("детали_вердикт") or {}
+    pc = ev_service.parts_check(ev)
+    return {"ключ": f"{pv.get('итог')}|{(ev.report or {}).get('apple_история_статус')}|"
+                    f"{len(ev.media)}|{bool(ev.staff_parts)}|{ev.ocenka_device_id}",
+            "детали": pv.get("итог"), "apple": (ev.report or {}).get("apple_история_статус"),
+            "нужна_сверка": pc["нужна_сверка"]}
+
+
 @router.post("/deal/{ev_id}/parts")
 def deal_parts(ev_id: int, Battery: str = Form(""), Display: str = Form(""), Camera: str = Form(""),
                FaceID: str = Form(""), BackGlass: str = Form(""), LogicBoard: str = Form(""),

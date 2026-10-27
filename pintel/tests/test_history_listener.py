@@ -400,3 +400,29 @@ def test_component_dictionary_is_an_apple_confirmation():
     assert lst.meta["формат"].startswith("проверка компонентов")
     v = parts_mod.verdict({}, {}, lst.items, None, None, hist_meta=lst.meta, apple_supported=True)
     assert v["apple_подтверждено"] is True and v["итог"] == "родные"
+
+
+# ---------------------------------------------------------------- страховка на будущие iOS
+НОВЫЙ_ФОРМАТ = ('Oct 27 10:00:01 iPhone Preferences(CoreRepairKit)[9] <Notice>: componentIntegrity {\n'
+                '    Battery = 1;\n    Display = "-1";\n    Camera = 1;\n    FaceID = 1;\n}\n')
+
+
+def test_unknown_dictionary_is_read_by_shape():
+    """Apple уже трижды меняла слова. Форма не менялась: блок «Имя = число;» по деталям.
+    Неизвестное слово обязано делать проверку СТРОЖЕ: плохую деталь ловим, а подтверждения
+    Apple по незнакомому формату не выдаём — иначе одна опечатка Apple дала бы зелёный."""
+    from pintel_core.analysis import parts as parts_mod
+    lst = _прогнать([НОВЫЙ_ФОРМАТ])
+    assert lst.items["Display"]["неизвестная"] and lst.items["Display"]["меняли"]
+    assert "Battery" not in lst.items                  # по единицам в незнакомом формате молчим
+    assert "новый формат" in lst.meta["формат"] and "componentIntegrity" in lst.meta["формат"]
+    v = parts_mod.verdict({}, {}, lst.items, None, None, hist_meta=lst.meta, apple_supported=True)
+    assert v["итог"] == "замена" and v["apple_подтверждено"] is False
+
+
+def test_unknown_dictionary_needs_two_known_parts():
+    """Случайный словарь из журнала не должен сойти за вердикт по деталям."""
+    мимо = ('Oct 27 10:00:01 iPhone mobilerepaird(CoreRepairCore)[9] <Notice>: cacheStats {\n'
+            '    hits = 12;\n    misses = "-1";\n}\n')
+    lst = _прогнать([мимо])
+    assert not lst.items and not (lst.meta.get("формат") or "")

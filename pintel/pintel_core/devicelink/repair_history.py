@@ -102,6 +102,14 @@ BATTERY_STATE_RE = re.compile(r"Battery Health State\{(.*?)\n\}", re.S)
 # на этих версиях отказ по детали приходит именно так. «missing» вердиктом НЕ считаем:
 # это внутреннее «ключа нет», а не «деталь не наша».
 TRUST_LINE_RE = re.compile(r"\b(\w+)\s+isTrustedForUI(?::\s*(\w+)|\s+(failed))")
+# Страховка на будущие версии. Apple уже трижды меняла слова (iOS 16 — systemhealth,
+# 18 — delta components, 26 — isComponentRepairedUsing), и каждый раз мы узнавали об этом
+# по живому аппарату. Форма при этом не менялась: процесс CoreRepair печатает блок
+# «Имя = число;» по деталям. Ловим ЛЮБОЙ такой блок, даже если слово новое.
+# ВАЖНО: по неизвестному формату мы не выдаём подтверждения Apple — только ловим плохие
+# детали. Неизвестное обязано делать проверку строже, а не разрешать зелёный.
+ANY_DICT_RE = re.compile(r"([\w.]+)\s*\{(.*?)\n\}", re.S)
+МИНИМУМ_ДЕТАЛЕЙ = 2
 # iOS 16 пишет ремонт Apple одной записью на событие, а не по деталям:
 # «[CRRepairHistory: timeStr:…: repairDate:… repairCenter:…: dataClasses:…:»
 # timeStr содержит двоеточия времени, поэтому до «: repairDate:» идём нежадно
@@ -248,6 +256,23 @@ def parse_components(text):
         return it
 
     m = SYSHEALTH_RE.search(text)
+    if not m:
+        # слова не узнали — ищем словарь по форме: блок, где не меньше двух НАШИХ деталей
+        # и все значения числовые. Такой набор ключей больше нигде в журнале не встречается.
+        for имя, тело in ANY_DICT_RE.findall(text):
+            пары = _KV_RE.findall(тело)
+            свои = [k for k, _ in пары if k in HEALTH_PARTS or COMPONENT_ALIAS.get(k) in HEALTH_PARTS]
+            if len(пары) >= МИНИМУМ_ДЕТАЛЕЙ and len(свои) >= МИНИМУМ_ДЕТАЛЕЙ and \
+                    any(k in ("Battery", "Display", "CoverGlass", "TouchController") for k in свои):
+                out["новый_формат"] = имя[:40]
+                for name, val in пары:
+                    key = part(name)
+                    if (key in HEALTH_PARTS or name in HEALTH_PARTS) and int(val) < 0:
+                        it = item(key, "новый формат")       # подтверждения не даём, только СТОП
+                        it["меняли"], it["неизвестная"] = True, True
+                    out["здоровье_по_форме"] = out.get("здоровье_по_форме", {})
+                    out["здоровье_по_форме"][name] = int(val)
+                break
     if m:
         for name, val in _KV_RE.findall(m.group(1)):
             out["здоровье"][name] = int(val)
@@ -293,7 +318,8 @@ def parse_components(text):
     m = BATTERY_STATE_RE.search(text)
     if m:
         out["аккумулятор"] = {k: int(v) for k, v in _KV_RE.findall(m.group(1))}
-    return out if any(out[k] for k in ("детали", "здоровье", "ремонты", "преflight", "аккумулятор")) else {}
+    return out if any(out.get(k) for k in ("детали", "здоровье", "ремонты", "преflight",
+                                           "аккумулятор", "здоровье_по_форме")) else {}
 
 
 class Listener:
@@ -380,8 +406,10 @@ class Listener:
         if any(k in line for k in OPENED) and not self.meta["раздел_открыт"]:
             self.meta["раздел_открыт"] = True
             self.log("на телефоне открыт раздел «Об этом устройстве» / история обслуживания")
-        if any(k in line for k in ("systemhealth", "isComponentRepairedUsing", "failed preflight",
-                                   "AuthCP Components", "Battery Health State", "isTrustedForUI")):
+        похоже_на_словарь = "{" in line and "=" in line and ";" in line
+        if похоже_на_словарь or any(k in line for k in (
+                "systemhealth", "isComponentRepairedUsing", "failed preflight",
+                "AuthCP Components", "Battery Health State", "isTrustedForUI")):
             self.buf.append(line if line.endswith("\n") else line + "\n")
             self._apply_components()
         m = RCHL_RE.search(line)
@@ -440,6 +468,8 @@ class Listener:
         # Словарь состояния — это подтверждение Apple; одно доверие к модулю — нет, и формат
         # обязан это различать: по нему строится право выдать зелёный.
         self.meta["формат"] = ("проверка компонентов (iOS 26)" if comp.get("здоровье")
+                               else f"новый формат словаря «{comp['новый_формат']}»"
+                               if comp.get("новый_формат")
                                else "доверие к модулям (iOS 15/16)")
         self.meta["раздел_открыт"] = True
         self.last_related_at = time.monotonic()

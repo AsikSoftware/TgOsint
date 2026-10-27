@@ -104,7 +104,7 @@ class Task(QThread):
 
 class IntakePoller(QThread):
     """Пока показан результат: раз в 2,5 с спрашиваем сервер, выдан ли номер заявки
-    (он появляется только после имени и телефона клиента)."""
+    (его выдаёт сотрудник в кассе, записав имя и телефон клиента)."""
     state = Signal(dict)
 
     def __init__(self, client, ev_id, parent=None):
@@ -348,7 +348,7 @@ class KioskWindow(QMainWindow):
         self.show_screen(self.s_result)
         self.state = "result"
         self.return_timer.start(int(self.cfg.get("return_seconds", 60)) * 3000)
-        # номер заявки сервер выдаст, когда клиент введёт имя и телефон — опрашиваем
+        # номер заявки сервер выдаст, когда сотрудник в кассе запишет имя и телефон клиента — опрашиваем
         self._stop_intake()
         srv = result.get("server") or {}
         if srv.get("id") and not srv.get("локально") and self.client.enabled:

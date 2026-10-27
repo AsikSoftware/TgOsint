@@ -796,10 +796,12 @@ def clear_layout(lay):
 class ResultScreen(Screen):
     sell = Signal()
     just_looking = Signal()
-    TEXT_DATA = ("Отсканируйте телефоном и введите имя и номер телефона — после этого появится номер заявки. "
-                 f'<b style="color:{C["ink"]}">Цену назовёт сотрудник</b> после осмотра.')
-    TEXT_MEDIA = (f'Номер выдан. Теперь отсканируйте и приложите <b style="color:{C["ink"]}">фото и видео</b> телефона. '
-                  "Цену назовёт сотрудник после осмотра.")
+    TEXT_WAIT = ("Подойдите к сотруднику — он запишет ваши имя и телефон, и здесь появится номер заявки. "
+                 f'<b style="color:{C["ink"]}">Цену назовёт сотрудник</b> после осмотра. '
+                 "По QR — отчёт о проверке, его можно забрать с собой.")
+    TEXT_NUMBER = ("Заявка оформлена. Сотрудник сфотографирует телефон и "
+                   f'<b style="color:{C["ink"]}">назовёт цену</b> после осмотра. '
+                   "По QR — отчёт о проверке, его можно забрать с собой.")
     TEXT_LOCAL = "Назовите этот номер сотруднику — он осмотрит телефон и назовёт цену."
 
     def __init__(self):
@@ -832,14 +834,14 @@ class ResultScreen(Screen):
         qrow.setSpacing(24)
         self.qr = QrBlock()
         qrow.addWidget(self.qr, 0, Qt.AlignTop)
-        self.qr_text = label(self.TEXT_DATA, "qrtext", wrap=True)
+        self.qr_text = label(self.TEXT_WAIT, "qrtext", wrap=True)
         qrow.addWidget(self.qr_text, 1, Qt.AlignVCenter)
         pl.addLayout(qrow)
         pl.addSpacing(22)
         srow = QHBoxLayout()
         srow.setSpacing(12)
         self.pulse = Pulse(C["action"])
-        self.status = label("ожидаем имя и телефон", "cardstatus")
+        self.status = label("ожидаем оформление у сотрудника", "cardstatus")
         srow.addWidget(self.pulse)
         srow.addWidget(self.status)
         srow.addStretch(1)
@@ -865,6 +867,7 @@ class ResultScreen(Screen):
         self.root.addLayout(body, 1)
         self.bar = None
         self._mode = None
+        self._qr_url = None
 
     def fill(self, rep, server=None):
         pas, bat, leg = rep.get("паспорт") or {}, rep.get("батарея") or {}, rep.get("правовой") or {}
@@ -888,6 +891,7 @@ class ResultScreen(Screen):
         self.chip.style().polish(self.chip)
         if not self.isVisible():                        # новый телефон: состояние заявки с нуля
             self._mode = None
+            self._qr_url = None
             self.set_intake(server or {})
         # батарея
         clear_layout(self.l_bat)
@@ -992,23 +996,26 @@ class ResultScreen(Screen):
         self.l_pass.addStretch(1)
 
     def set_intake(self, st):
-        """Номер заявки появляется только после имени и телефона (киоск опрашивает сервер):
-        до этого QR ведёт на страницу данных, после — на отдельную страницу фото/видео.
-        Смена состояния анимируется один раз: номер «подскакивает», QR всплывает."""
+        """Номер заявки появляется, когда сотрудник в кассе записал имя и телефон клиента
+        (киоск опрашивает сервер); клиент сам ничего не вводит. QR всегда ведёт на отчёт
+        о проверке. Появление номера анимируется один раз, QR всплывает при первом показе."""
         num = st.get("номер")
+        url = st.get("ссылка_отчёта")
         if num and not st.get("локально"):
-            mode, url, caption, text = "media", st.get("ссылка_медиа") or st.get("ссылка_данных"), "ФОТО · ВИДЕО", self.TEXT_MEDIA
-            status, colour, blink = "имя и телефон получены", C["ok"], False
+            mode, text = "number", self.TEXT_NUMBER
+            status, colour, blink = "заявка оформлена", C["ok"], False
         elif num:                                         # автономно, без сервера — только номер
-            mode, url, caption, text = "local", None, "", self.TEXT_LOCAL
+            mode, text = "local", self.TEXT_LOCAL
             status, colour, blink = "номер выдан", C["ok"], False
         else:
-            mode, url, caption, text = "data", st.get("ссылка_данных"), "ДАННЫЕ", self.TEXT_DATA
-            status, colour, blink = "ожидаем имя и телефон", C["brand"], True
-        changed = mode != self._mode
+            mode, text = "wait", self.TEXT_WAIT
+            status, colour, blink = "ожидаем оформление у сотрудника", C["brand"], True
+        changed, first = mode != self._mode, self._mode is None
         self._mode = mode
         self.number.set_text(str(num) if num else "—", number=bool(num), pop=changed and bool(num))
-        self.qr.set(qr_pixmap(url, 200) if url else None, caption, rise=changed and mode == "media")
+        if url != self._qr_url or first:
+            self._qr_url = url
+            self.qr.set(qr_pixmap(url, 200) if url else None, "ОТЧЁТ", rise=first)
         self.qr_text.setText(text)
         self.status.setText(status)
         self.status.setStyleSheet(f"color: {colour};")

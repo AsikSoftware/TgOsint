@@ -111,10 +111,11 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
     body = {"client_id": "c-1", "report": rep, "snapshot": snap}
     r1 = k.post("/api/kiosk/evaluations", json=body, headers=H).json()
     assert r1["номер"] is None and r1["создана"] is True and r1["ссылка_отчёта"].startswith("http://testserver/r/")
-    # номер заявки выдаётся только после имени и телефона клиента (страница /u на сервере)
-    tok = r1["ссылка_данных"].rsplit("/u/", 1)[1]
-    TestClient(app).post(f"/u/{tok}", data={"client_name": "Айгерим", "client_phone": "+77001112233"})
-    assert k.get(f"/api/kiosk/evaluations/{r1['id']}/intake", headers=H).json()["номер"] == 1
+    assert "ссылка_данных" not in r1                                 # клиент сам ничего не вводит
+    # номер заявки выдаётся, когда сотрудник в кассе записал имя и телефон клиента
+    assert admin.post(f"/deal/{r1['id']}/client", data={"client_name": "Айгерим", "client_phone": "+77001112233"}).status_code == 303
+    st = k.get(f"/api/kiosk/evaluations/{r1['id']}/intake", headers=H).json()
+    assert st["номер"] == 1 and st["ссылка_отчёта"].startswith("http://testserver/r/")
     r2 = k.post("/api/kiosk/evaluations", json=body, headers=H).json()
     assert r2["id"] == r1["id"] and r2["создана"] is False
     r3 = k.post("/api/kiosk/evaluations", json={**body, "client_id": "c-2"}, headers=H).json()
@@ -200,9 +201,10 @@ def test_employees_create_update_and_revoke(app):
     assert "доступ отключён" in page and "Неудачная попытка" in page
 
 
-def test_kiosk_intake_server_entry_media_and_import(app, monkeypatch):
-    """Новый флоу: номер заявки — только после имени и телефона (страница /u),
-    фото/видео — по отдельной временной ссылке /m, затем импорт в Оценку."""
+def test_kiosk_intake_staff_entry_media_and_import(app, monkeypatch):
+    """Данные клиента и фото/видео вносит сотрудник в кассе: номер заявки — только после имени
+    и телефона; фото — с компьютера кассы или с телефона сотрудника по временной ссылке /m;
+    затем импорт в Оценку."""
     admin = client_for(app, "admin", "admin123")
     admin.post("/settings/points", data={"name": "Интейк-город", "city": "Алматы"})
     r = admin.post("/settings/kiosks", data={"name": "Интейк-киоск", "point_id": ""})
@@ -214,34 +216,42 @@ def test_kiosk_intake_server_entry_media_and_import(app, monkeypatch):
     resp = k.post("/api/kiosk/evaluations", json={"client_id": "intake-1", "report": rep, "snapshot": snap},
                   headers=H).json()
     ev_id = resp["id"]
-    assert resp["номер"] is None                                    # номера ещё нет
-    assert "/u/" in resp["ссылка_данных"] and "/m/" in resp["ссылка_медиа"]
-    up_token = resp["ссылка_данных"].rsplit("/u/", 1)[1]
-    m_token = resp["ссылка_медиа"].rsplit("/m/", 1)[1]
+    assert resp["номер"] is None and "ссылка_данных" not in resp and "ссылка_медиа" not in resp
+    assert TestClient(app).get("/u/whatever").status_code == 404        # страницы клиента больше нет
+    assert k.patch(f"/api/kiosk/evaluations/{ev_id}/details", json={"client_name": "x"}, headers=H).status_code in (404, 405)
 
-    pub = TestClient(app)
-    assert "iPhone 12" in pub.get(f"/u/{up_token}").text
+    # карточка сделки: форма клиента, загрузка с компьютера и QR для телефона сотрудника
+    page = admin.get(f"/deal/{ev_id}").text
+    assert f'action="/deal/{ev_id}/client"' in page and f"/deal/{ev_id}/media_qr.svg" in page and "/m/" in page
+    svg = admin.get(f"/deal/{ev_id}/media_qr.svg")
+    assert svg.status_code == 200 and svg.headers["content-type"].startswith("image/svg+xml") and b"<path" in svg.content
+    assert TestClient(app, follow_redirects=False).get(f"/deal/{ev_id}/media_qr.svg").status_code in (303, 401, 403)
+
     # без имени и телефона номер не выдаётся
-    r = pub.post(f"/u/{up_token}", data={"has_box": "yes"})
-    assert r.status_code in (200, 303)
+    admin.post(f"/deal/{ev_id}/client", data={"client_name": "", "client_phone": "", "has_box": "yes"})
     assert k.get(f"/api/kiosk/evaluations/{ev_id}/intake", headers=H).json()["номер"] is None
-    # с именем и телефоном — номер выдан, страница данных ведёт на фото/видео
-    pub.post(f"/u/{up_token}", data={"client_name": "Иван", "client_phone": "+77001234567", "has_cord": "no"})
+    # с именем и телефоном — номер выдан, киоск его видит
+    r = admin.post(f"/deal/{ev_id}/client", data={"client_name": "Иван", "client_phone": "+77001234567", "has_cord": "no"})
+    assert r.status_code == 303 and "№1" in loc(r)
     st = k.get(f"/api/kiosk/evaluations/{ev_id}/intake", headers=H).json()
-    assert st["номер"] == 1 and st["готово"] is True and "/m/" in st["ссылка_медиа"]
-    assert f"/m/{m_token}" in pub.get(f"/u/{up_token}").text
+    assert st["номер"] == 1 and st["готово"] is True and "/r/" in st["ссылка_отчёта"]
 
-    # фото/видео — по отдельной временной ссылке
+    # фото: с компьютера кассы и с телефона сотрудника по временной ссылке /m
     png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
-    r = pub.post(f"/m/{m_token}", files={"files": ("phone.jpg", png, "image/jpeg")})
-    assert r.status_code in (200, 303)
-
-    db = SessionLocal(); ev = db.get(Evaluation, ev_id)
+    r = admin.post(f"/deal/{ev_id}/media", files={"files": ("phone.jpg", png, "image/jpeg")})
+    assert r.status_code == 303 and "Загружено" in loc(r)
+    db = SessionLocal(); ev = db.get(Evaluation, ev_id); m_token = ev.media_token
     assert ev.number == 1 and ev.client_name == "Иван" and ev.client_phone == "+77001234567"
     assert ev.has_box is True and ev.has_cord is False
     db.close()
+    pub = TestClient(app)
+    assert "Иван" in pub.get(f"/m/{m_token}").text
+    r = pub.post(f"/m/{m_token}", files={"files": ("video.mp4", b"\x00" * 100, "video/mp4")})
+    assert r.status_code in (200, 303)
     media = k.get(f"/api/kiosk/evaluations/{ev_id}/media", headers=H).json()["медиа"]
-    assert len(media) == 1 and media[0]["вид"] == "photo"
+    assert [m["вид"] for m in media] == ["photo", "video"]
+    logs = [l.text for l in SessionLocal().scalars(select(AuditLog).where(AuditLog.entity_id == ev_id, AuditLog.entity == "evaluation")).all()]
+    assert any("Данные клиента по заявке №1" in t for t in logs) and any("С телефона сотрудника" in t for t in logs)
 
     # импорт выключен (нет PINTEL_OCENKA_DB_URL) → понятная 400
     assert k.post(f"/api/kiosk/evaluations/{ev_id}/import", headers=H).status_code == 400
@@ -264,12 +274,9 @@ def test_cashier_sees_client_data_media_and_import_button(app):
     rep, snap = real_report()
     resp = k.post("/api/kiosk/evaluations", json={"client_id": "cash-1", "report": rep, "snapshot": snap}, headers=H).json()
     ev_id = resp["id"]
-    up_token = resp["ссылка_данных"].rsplit("/u/", 1)[1]
-    m_token = resp["ссылка_медиа"].rsplit("/m/", 1)[1]
-    pub = TestClient(app)
-    pub.post(f"/u/{up_token}", data={"client_name": "Пётр", "client_phone": "+77009998877"})
+    admin.post(f"/deal/{ev_id}/client", data={"client_name": "Пётр", "client_phone": "+77009998877"})
     png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
-    pub.post(f"/m/{m_token}", files={"files": ("p.jpg", png, "image/jpeg")})
+    admin.post(f"/deal/{ev_id}/media", files={"files": ("p.jpg", png, "image/jpeg")})
 
     page = admin.get(f"/deal/{ev_id}").text
     assert "Пётр" in page and "Отправить в Оценку" in page and 'src="/media/' in page

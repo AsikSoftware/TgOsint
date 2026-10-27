@@ -144,7 +144,7 @@ class Client:
                          json={"report": report, "snapshot_patch": snapshot_patch}, timeout=60)
 
     def intake(self, ev_id):
-        """Состояние заявки: номер появляется только после имени и телефона клиента; ссылки для QR."""
+        """Состояние заявки: номер выдаёт сотрудник в кассе (после имени и телефона клиента); ссылка на отчёт для QR."""
         return self._req("GET", f"/api/kiosk/evaluations/{ev_id}/intake", timeout=15)
 
     def decision(self, ev_id, kind):

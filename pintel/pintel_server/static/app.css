@@ -83,6 +83,11 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
 .aside{flex:1 1 320px;max-width:380px;position:sticky;top:20px}
 .deal{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
 .deal .main{flex:999 1 560px;min-width:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}
+.q{font-size:14px;font-weight:600;color:var(--body)}
+.mediawrap{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.mediawrap>div:first-child{flex:1 1 320px;min-width:0}
+.qrtile{display:flex;gap:12px;align-items:center;background:var(--bg);border-radius:14px;padding:12px;max-width:380px;flex:0 1 380px}
+.qrtile img{width:124px;height:124px;border-radius:10px;background:#fff;border:1px solid var(--border);flex:none}
 .media{display:flex;gap:12px;flex-wrap:wrap}
 .media a{display:block}
 .media img{width:120px;height:120px;object-fit:cover;border-radius:12px;border:1px solid var(--border);background:var(--thumb);display:block}

@@ -5,7 +5,7 @@
 <main class="client">
   <div class="brand"><img src="/static/logo.png" alt="Pintel"></div>
   <div><h1>Фото и видео телефона</h1>
-    <div class="sub">{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.number %} · заявка №{{ ev.number }}{% endif %}</div></div>
+    <div class="sub">{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.number %} · заявка №{{ ev.number }}{% endif %}{% if ev.client_name %} · {{ ev.client_name }}{% endif %}</div></div>
 
   {% if imported %}
     <div class="okbar">Сделка уже оформлена — загрузка закрыта. Спасибо!</div>
@@ -21,7 +21,7 @@
         <div class="note" id="n" style="margin-top:6px"></div>
       </label>
       <button class="bigbtn" type="submit">Загрузить</button>
-      <div class="note foot">До {{ max_files }} файлов, каждый до {{ max_mb }} МБ.</div>
+      <div class="note foot">До {{ max_files }} файлов, каждый до {{ max_mb }} МБ. Файлы сразу появятся в карточке сделки в кассе.</div>
     </form>
   {% endif %}
 

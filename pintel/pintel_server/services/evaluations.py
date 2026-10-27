@@ -91,7 +91,6 @@ def create_from_kiosk(db, kiosk, payload: dict) -> tuple[Evaluation, bool]:
         price_column=price.get("основание"), apple_summary=apple_summary(rep)[:120],
         locks_summary=locks_summary(rep)[:120], status=ST_NEW, report=rep,
         snapshot=payload.get("snapshot"), public_token=secrets.token_urlsafe(12),
-        upload_token=secrets.token_urlsafe(12)[:32],
         media_token=secrets.token_urlsafe(12)[:32],
     )
     db.add(ev)
@@ -176,11 +175,14 @@ def decide(db, user, ev: Evaluation, kind: str, final_price, note: str = "", ins
     db.commit()
 
 
-def set_client_details(db, kiosk, ev: Evaluation, *, name=None, phone=None,
+def _yn(v):
+    return "да" if v else ("нет" if v is False else "—")
+
+
+def set_client_details(db, user, ev: Evaluation, *, name=None, phone=None,
                        box=None, cord=None, panic=None) -> Evaluation:
-    """Киоск дослал ручные данные: имя/телефон клиента, коробка/шнур/panic."""
-    if ev.kiosk_id != kiosk.id:
-        raise PermissionError("оценка другого киоска")
+    """Сотрудник в кассе записывает имя/телефон клиента, коробку/шнур/panic.
+    Номер заявки выдаётся только когда есть имя и телефон; клиент сам ничего не вводит."""
     if name is not None:
         ev.client_name = (name.strip()[:120] or None)
     if phone is not None:
@@ -192,26 +194,25 @@ def set_client_details(db, kiosk, ev: Evaluation, *, name=None, phone=None,
     if panic is not None:
         ev.panic_full = panic
     db.commit()
-    assign_number(db, ev)
+    assign_number(db, ev)                      # сначала номер (если есть имя и телефон), потом запись в журнал
+    audit.log(db, user, "evaluation.client_data",
+              f"Данные клиента по заявке {label(ev)}: {ev.client_name or '—'}, {ev.client_phone or '—'}; "
+              f"коробка: {_yn(ev.has_box)}, шнур: {_yn(ev.has_cord)}",
+              entity="evaluation", entity_id=ev.id)
+    db.commit()
     return ev
 
 
-def ensure_upload_token(db, ev: Evaluation) -> str:
-    """Токены двух временных ссылок: данные клиента (/u/) и фото/видео (/m/). Создаём лениво."""
-    changed = False
-    if not ev.upload_token:
-        ev.upload_token = secrets.token_urlsafe(12)[:32]
-        changed = True
+def ensure_media_token(db, ev: Evaluation) -> str:
+    """Токен временной ссылки /m/ (фото/видео с телефона сотрудника). Создаём лениво."""
     if not ev.media_token:
         ev.media_token = secrets.token_urlsafe(12)[:32]
-        changed = True
-    if changed:
         db.commit()
-    return ev.upload_token
+    return ev.media_token
 
 
-def upload_url(ev: Evaluation) -> str | None:
-    return f"{settings.public_url}/u/{ev.upload_token}" if ev.upload_token else None
+def report_url(ev: Evaluation) -> str:
+    return f"{settings.public_url}/r/{ev.public_token}"
 
 
 def media_url(ev: Evaluation) -> str | None:
@@ -231,9 +232,9 @@ def assign_number(db, ev: Evaluation):
 
 
 def intake_state(ev: Evaluation) -> dict:
-    """Что киоск спрашивает у сервера, пока показан результат."""
-    return {"id": ev.id, "номер": ev.number,
-            "ссылка_данных": upload_url(ev), "ссылка_медиа": media_url(ev),
+    """Что киоск спрашивает у сервера, пока показан результат: номер заявки (его выдаёт
+    сотрудник в кассе, записав имя и телефон клиента), ссылка на отчёт для QR, медиа."""
+    return {"id": ev.id, "номер": ev.number, "ссылка_отчёта": report_url(ev),
             "клиент": {"имя": ev.client_name, "телефон": ev.client_phone,
                        "коробка": ev.has_box, "шнур": ev.has_cord},
             "медиа": media_list(ev), "готово": bool(ev.client_name and ev.client_phone),

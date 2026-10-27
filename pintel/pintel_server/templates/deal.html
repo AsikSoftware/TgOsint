@@ -20,18 +20,47 @@
 <div class="deal">
   <div class="main">
     <section class="sec span2">
-      <h2>Данные клиента и медиа</h2>
+      <h2>Клиент и фото телефона</h2>
+      {% if ev.ocenka_device_id %}
       <div class="grid2" style="gap:10px 28px">
         <div class="kv"><span>Имя</span><span>{{ ev.client_name or '—' }}</span></div>
         <div class="kv"><span>Телефон</span><span>{{ ev.client_phone or '—' }}</span></div>
         <div class="kv"><span>Коробка</span><span>{{ 'да' if ev.has_box else ('нет' if ev.has_box is false else '—') }}</span></div>
         <div class="kv"><span>Шнур</span><span>{{ 'да' if ev.has_cord else ('нет' if ev.has_cord is false else '—') }}</span></div>
       </div>
-      {% if ev.media %}
-      <div class="media">
-        {% for m in ev.media %}{% if m.kind == 'photo' %}<a href="/media/{{ m.id }}" target="_blank"><img src="/media/{{ m.id }}" alt="фото"></a>{% else %}<a class="video" href="/media/{{ m.id }}" target="_blank">▶ видео</a>{% endif %}{% endfor %}
+      {% else %}
+      <form method="post" action="/deal/{{ ev.id }}/client" class="grid2" style="gap:12px 16px">
+        <label class="f">Имя клиента<input type="text" name="client_name" value="{{ ev.client_name or '' }}" placeholder="Иван" required autocomplete="off"></label>
+        <label class="f">Телефон клиента<input type="tel" name="client_phone" value="{{ ev.client_phone or '' }}" placeholder="+7 777 123 45 67" required autocomplete="off"></label>
+        <div class="fld"><span class="q">Коробка</span><div class="seg">
+          <label><input type="radio" name="has_box" value="yes" {{ 'checked' if ev.has_box is true }}><span>Да</span></label>
+          <label><input type="radio" name="has_box" value="no" {{ 'checked' if ev.has_box is false }}><span>Нет</span></label></div></div>
+        <div class="fld"><span class="q">Шнур</span><div class="seg">
+          <label><input type="radio" name="has_cord" value="yes" {{ 'checked' if ev.has_cord is true }}><span>Да</span></label>
+          <label><input type="radio" name="has_cord" value="no" {{ 'checked' if ev.has_cord is false }}><span>Нет</span></label></div></div>
+        <div class="row span2"><button class="btn primary" type="submit">{{ 'Сохранить' if ev.number else 'Сохранить и выдать номер заявки' }}</button>
+          <span class="note">{% if ev.number %}Заявка №{{ ev.number }} выдана, клиент видит номер на киоске.{% else %}Номер заявки появится у клиента на киоске сразу после сохранения имени и телефона.{% endif %}</span></div>
+      </form>
+      {% endif %}
+      <div class="mediawrap">
+        <div>
+          {% if ev.media %}
+          <div class="media">
+            {% for m in ev.media %}{% if m.kind == 'photo' %}<a href="/media/{{ m.id }}" target="_blank"><img src="/media/{{ m.id }}" alt="фото"></a>{% else %}<a class="video" href="/media/{{ m.id }}" target="_blank">▶ видео</a>{% endif %}{% endfor %}
+          </div>
+          {% else %}<div class="note">Фото и видео телефона пока нет.</div>{% endif %}
+          {% if not ev.ocenka_device_id %}
+          <form method="post" action="/deal/{{ ev.id }}/media" enctype="multipart/form-data" class="row" style="margin-top:10px">
+            <input type="file" name="files" multiple accept="image/*,video/*" style="width:auto;flex:1 1 220px">
+            <button class="btn sm" type="submit">Загрузить с компьютера</button>
+          </form>
+          {% endif %}
+        </div>
+        {% if not ev.ocenka_device_id %}
+        <div class="qrtile"><img src="/deal/{{ ev.id }}/media_qr.svg" alt="QR для телефона сотрудника">
+          <div class="note">Снять на телефон: отсканируйте, откроется страница загрузки фото и видео этой заявки. Файлы появятся здесь.<br><a href="{{ media_link }}" target="_blank">Открыть ссылку</a></div></div>
+        {% endif %}
       </div>
-      {% else %}<div class="note">Клиент ещё не прислал фото/видео и данные. Ссылки для клиента: <a href="/u/{{ ev.upload_token }}" target="_blank">данные</a> · <a href="/m/{{ ev.media_token }}" target="_blank">фото/видео</a> (те же, что по QR на киоске). Номер заявки выдаётся после имени и телефона.</div>{% endif %}
     </section>
     <section class="sec span2">
       {% set pv = rep.get('детали_вердикт') or {} %}

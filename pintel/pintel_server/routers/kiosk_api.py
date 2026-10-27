@@ -38,14 +38,6 @@ class UpdateIn(BaseModel):
     snapshot_patch: dict | None = None
 
 
-class DetailsIn(BaseModel):
-    client_name: str | None = None
-    client_phone: str | None = None
-    has_box: bool | None = None
-    has_cord: bool | None = None
-    panic_full: bool | None = None
-
-
 class HeartbeatIn(BaseModel):
     version: str | None = None
     status: dict | None = None
@@ -94,8 +86,7 @@ def sickw(body: SickwIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = 
 def create_evaluation(body: EvaluationIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
     ev, created = ev_service.create_from_kiosk(db, kiosk, body.model_dump())
     return {"id": ev.id, "номер": ev.number, "день": ev.day, "создана": created,
-            "статус": ev.status, "ссылка_отчёта": f"{settings.public_url}/r/{ev.public_token}",
-            "ссылка_данных": ev_service.upload_url(ev), "ссылка_медиа": ev_service.media_url(ev),
+            "статус": ev.status, "ссылка_отчёта": ev_service.report_url(ev),
             "уже_приносили": bool(ev.device and ev.device.evaluations_count > 1)}
 
 
@@ -119,29 +110,17 @@ def client_decision(ev_id: int, body: DecisionIn, kiosk: Kiosk = Depends(current
     return {"статус": ev.status}
 
 
-@router.patch("/evaluations/{ev_id}/details")
-def set_details(ev_id: int, body: DetailsIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
-    """Ручные данные с киоска: имя/телефон клиента, коробка/шнур/panic. Плюс ссылка на загрузку фото."""
-    ev = _own(db, kiosk, ev_id)
-    ev_service.set_client_details(db, kiosk, ev, name=body.client_name, phone=body.client_phone,
-                                  box=body.has_box, cord=body.has_cord, panic=body.panic_full)
-    ev_service.ensure_upload_token(db, ev)
-    return {**ev_service.intake_state(ev), "ссылка_загрузки": ev_service.upload_url(ev),
-            "токен_загрузки": ev.upload_token}
-
-
 @router.get("/evaluations/{ev_id}/media")
 def list_media(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
-    """Список загруженного клиентом по QR — киоск опрашивает, чтобы показать в меню."""
+    """Список фото/видео, загруженных сотрудником в кассе (данные клиента и медиа вносятся там)."""
     ev = _own(db, kiosk, ev_id)
-    return {**ev_service.intake_state(ev), "ссылка_загрузки": ev_service.upload_url(ev)}
+    return ev_service.intake_state(ev)
 
 
 @router.get("/evaluations/{ev_id}/intake")
 def intake(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
-    """Состояние заявки для киоска: номер (только после имени и телефона), ссылки на страницы, медиа."""
+    """Состояние заявки для киоска: номер (выдаёт сотрудник в кассе), ссылка на отчёт, медиа."""
     ev = _own(db, kiosk, ev_id)
-    ev_service.ensure_upload_token(db, ev)
     return ev_service.intake_state(ev)
 
 

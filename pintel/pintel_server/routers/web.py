@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session as DbSession
@@ -130,8 +130,10 @@ def deal(request: Request, ev_id: int, user: User = Depends(require_staff), db: 
                          .order_by(desc(Evaluation.created_at))).all() if ev.serial else []
     log = db.scalars(select(AuditLog).where(AuditLog.entity == "evaluation", AuditLog.entity_id == ev.id)
                      .order_by(desc(AuditLog.at))).all()
+    ev_service.ensure_media_token(db, ev)
     return render(request, "deal.html", user, ev=ev, rep=ev.report or {}, history=history, log=log,
-                  ocenka_staff=ocenka_import.staff_list(), error=request.query_params.get("e"))
+                  ocenka_staff=ocenka_import.staff_list(), media_link=ev_service.media_url(ev),
+                  error=request.query_params.get("e"))
 
 
 @router.post("/deal/{ev_id}/take")
@@ -142,7 +144,7 @@ def deal_take(ev_id: int, user: User = Depends(require_staff), db: DbSession = D
 
 @router.get("/media/{media_id}")
 def media_file(media_id: int, user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
-    """Отдать загруженное клиентом фото/видео сотруднику в кассе."""
+    """Отдать загруженное фото/видео сотруднику в кассе."""
     m = db.get(EvaluationMedia, media_id)
     if not m:
         raise HTTPException(404, "файл не найден")
@@ -171,6 +173,7 @@ def deal_import_ocenka(ev_id: int, panic_full: Optional[str] = Form(None),
     audit.log(db, user, "evaluation.ocenka_import",
               f"Оценка {ev_service.label(ev)} → сделка Оценки №{res.get('device_id')}",
               entity="evaluation", entity_id=ev.id, details=res)
+    db.commit()                                              # audit.log только добавляет запись
     return RedirectResponse(f"/deal/{ev_id}?m=Отправлено в Оценку №{res.get('device_id')}", 303)
 
 
@@ -200,7 +203,7 @@ def public_report(request: Request, token: str, db: DbSession = Depends(get_db))
     return render(request, "public_report.html", None, ev=ev, rep=ev.report or {})
 
 
-# ---------- загрузка фото/видео клиентом (QR с киоска) ----------
+# ---------- данные клиента и фото/видео: вносит сотрудник в кассе ----------
 
 _PHOTO_EXT = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".gif")
 _VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".3gp")
@@ -216,46 +219,91 @@ def _media_kind(content_type: str | None, filename: str) -> str | None:
     return None
 
 
-@router.get("/u/{token}", response_class=HTMLResponse)
-def data_page(request: Request, token: str, db: DbSession = Depends(get_db)):
-    """Страница данных клиента: имя, телефон, коробка/шнур. Номер заявки — только после имени и телефона."""
-    ev = db.scalar(select(Evaluation).where(Evaluation.upload_token == token))
-    if not ev:
-        raise HTTPException(404, "ссылка недействительна")
-    ev_service.ensure_upload_token(db, ev)
-    return render(request, "upload.html", None, ev=ev, imported=bool(ev.ocenka_device_id),
-                  media_link=f"/m/{ev.media_token}")
-
-
 def _tri(v):
     return True if v == "yes" else (False if v == "no" else None)
 
 
-@router.post("/u/{token}")
-def data_receive(request: Request, token: str, db: DbSession = Depends(get_db),
-                 client_name: Optional[str] = Form(None), client_phone: Optional[str] = Form(None),
-                 has_box: Optional[str] = Form(None), has_cord: Optional[str] = Form(None)):
-    ev = db.scalar(select(Evaluation).where(Evaluation.upload_token == token))
-    if not ev:
-        raise HTTPException(404, "ссылка недействительна")
-    if ev.ocenka_device_id:                                    # сделка уже ушла в Оценку — не принимаем
-        return RedirectResponse(f"/u/{token}?m=imported", 303)
-    if client_name is not None and client_name.strip():
-        ev.client_name = client_name.strip()[:120]
-    if client_phone is not None and client_phone.strip():
-        ev.client_phone = client_phone.strip()[:20]
-    if _tri(has_box) is not None:
-        ev.has_box = _tri(has_box)
-    if _tri(has_cord) is not None:
-        ev.has_cord = _tri(has_cord)
-    db.commit()
-    ev_service.assign_number(db, ev)          # номер заявки выдаётся здесь — только с именем и телефоном
-    return RedirectResponse(f"/u/{token}?m=" + ("ok" if ev.number else "need"), 303)
+async def _store_media(db, ev: Evaluation, files: list[UploadFile]) -> int:
+    """Сохранить присланные фото/видео в media_dir с учётом лимитов. → сколько принято."""
+    os.makedirs(settings.media_dir, exist_ok=True)
+    limit = settings.media_max_mb * 1024 * 1024
+    have, taken = len(ev.media), 0
+    for up in files:
+        if have >= settings.media_max_files:
+            break
+        kind = _media_kind(up.content_type, up.filename or "")
+        if not kind:
+            continue
+        data = await up.read()
+        if not data or len(data) > limit:
+            continue
+        ext = os.path.splitext(up.filename or "")[1].lower()[:8] or (".mp4" if kind == MEDIA_VIDEO else ".jpg")
+        fname = f"{ev.id}_{secrets.token_hex(8)}{ext}"
+        with open(os.path.join(settings.media_dir, fname), "wb") as fh:
+            fh.write(data)
+        ev_service.add_media(db, ev, kind, fname, up.content_type, len(data))
+        have += 1
+        taken += 1
+    return taken
 
+
+def _qr_svg(text: str, module: int = 6) -> str:
+    """QR-код как SVG: сотрудник сканирует его своим телефоном прямо с экрана кассы."""
+    import qrcode
+    q = qrcode.QRCode(border=2, box_size=1)
+    q.add_data(text)
+    q.make(fit=True)
+    m = q.get_matrix()
+    size = len(m) * module
+    d = "".join(f"M{x * module} {y * module}h{module}v{module}h-{module}z"
+                for y, row in enumerate(m) for x, v in enumerate(row) if v)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" width="{size}" height="{size}" '
+            f'shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><path d="{d}" fill="#0C1A2E"/></svg>')
+
+
+@router.post("/deal/{ev_id}/client")
+def deal_client(ev_id: int, client_name: str = Form(""), client_phone: str = Form(""),
+                has_box: Optional[str] = Form(None), has_cord: Optional[str] = Form(None),
+                user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """Сотрудник записывает имя и телефон клиента, коробку/шнур. Номер заявки выдаётся здесь —
+    только когда есть имя и телефон; киоск показывает его клиенту сам."""
+    ev = _get_eval(db, ev_id)
+    if ev.ocenka_device_id:
+        return RedirectResponse(f"/deal/{ev_id}?e=Сделка уже отправлена в Оценку — данные не меняем", 303)
+    ev_service.set_client_details(db, user, ev, name=client_name, phone=client_phone,
+                                  box=_tri(has_box), cord=_tri(has_cord))
+    msg = (f"Данные клиента сохранены, заявке присвоен №{ev.number}" if ev.number
+           else "Данные сохранены. Номер заявки будет выдан, когда указаны имя и телефон клиента")
+    return RedirectResponse(f"/deal/{ev_id}?m={msg}", 303)
+
+
+@router.post("/deal/{ev_id}/media")
+async def deal_media(ev_id: int, files: list[UploadFile] = File(default=[]),
+                     user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """Фото/видео телефона с компьютера кассы."""
+    ev = _get_eval(db, ev_id)
+    if ev.ocenka_device_id:
+        return RedirectResponse(f"/deal/{ev_id}?e=Сделка уже отправлена в Оценку — файлы не принимаем", 303)
+    n = await _store_media(db, ev, files)
+    audit.log(db, user, "evaluation.media", f"Загружено файлов к заявке {ev_service.label(ev)}: {n}",
+              entity="evaluation", entity_id=ev.id)
+    db.commit()
+    return RedirectResponse(f"/deal/{ev_id}?m=Загружено файлов: {n}", 303)
+
+
+@router.get("/deal/{ev_id}/media_qr.svg")
+def deal_media_qr(ev_id: int, user: User = Depends(require_staff), db: DbSession = Depends(get_db)):
+    """QR на временную ссылку /m/<код>: сотрудник сканирует своим телефоном и снимает фото/видео."""
+    ev = _get_eval(db, ev_id)
+    ev_service.ensure_media_token(db, ev)
+    return Response(_qr_svg(ev_service.media_url(ev)), media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
+
+
+# ---------- временная ссылка для телефона сотрудника: снять фото/видео ----------
 
 @router.get("/m/{token}", response_class=HTMLResponse)
 def media_page(request: Request, token: str, db: DbSession = Depends(get_db)):
-    """Отдельная временная ссылка для фото/видео телефона."""
     ev = db.scalar(select(Evaluation).where(Evaluation.media_token == token))
     if not ev:
         raise HTTPException(404, "ссылка недействительна")
@@ -272,25 +320,11 @@ async def media_receive(request: Request, token: str, db: DbSession = Depends(ge
         raise HTTPException(404, "ссылка недействительна")
     if ev.ocenka_device_id:
         return RedirectResponse(f"/m/{token}?m=imported", 303)
-
-    os.makedirs(settings.media_dir, exist_ok=True)
-    limit = settings.media_max_mb * 1024 * 1024
-    have = len(ev.media)
-    for up in files:
-        if have >= settings.media_max_files:
-            break
-        kind = _media_kind(up.content_type, up.filename or "")
-        if not kind:
-            continue
-        data = await up.read()
-        if not data or len(data) > limit:
-            continue
-        ext = os.path.splitext(up.filename or "")[1].lower()[:8] or (".mp4" if kind == MEDIA_VIDEO else ".jpg")
-        fname = f"{ev.id}_{secrets.token_hex(8)}{ext}"
-        with open(os.path.join(settings.media_dir, fname), "wb") as fh:
-            fh.write(data)
-        ev_service.add_media(db, ev, kind, fname, up.content_type, len(data))
-        have += 1
+    n = await _store_media(db, ev, files)
+    audit.log(db, None, "evaluation.media",
+              f"С телефона сотрудника загружено файлов к заявке {ev_service.label(ev)}: {n}",
+              entity="evaluation", entity_id=ev.id)
+    db.commit()
     return RedirectResponse(f"/m/{token}?m=ok", 303)
 
 

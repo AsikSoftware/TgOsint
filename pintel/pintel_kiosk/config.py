@@ -29,7 +29,7 @@ def app_dir():
 def data_dir():
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     d = os.path.join(base, "PintelKiosk")
-    for sub in ("queue", "cache", "out", "logs"):
+    for sub in ("queue", "cache", "out", "logs", "эталоны"):
         os.makedirs(os.path.join(d, sub), exist_ok=True)
     return d
 

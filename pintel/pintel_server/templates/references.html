@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% set active = 'references' %}
+{% block title %}Эталоны{% endblock %}
+{% block content %}
+<h1>Эталоны — на чём учится проверка</h1>
+
+{% if flash_ %}<div class="tile warn"><b>{{ flash_ }}</b></div>{% endif %}
+
+<div class="sec">
+  <h2>Что это</h2>
+  <div class="note">Каждый проверенный телефон уже лежит на сервере целиком: слепок по кабелю,
+    сырой журнал Apple и наш вердикт. Если сотрудник сверил экран телефона — это правда,
+    с которой вердикт можно сличить. Ничего дополнительно снимать не нужно: нажмите
+    «Скачать новое» и отправьте файл разработчику. Серийники, IMEI и MAC в файле заменены
+    на выдуманные; если после замены хоть один вывод отчёта поменялся, аппарат в выгрузку не попадёт.</div>
+  <div class="grid4" style="margin-top:10px">
+    <div class="sig"><span>Аппаратов в потоке</span><span>{{ rows|length }}</span></div>
+    <div class="sig"><span>Ещё не выгружали</span><span class="{{ 'warn' if новых else 'ok' }}">{{ новых }}</span></div>
+    <div class="sig"><span>Поедет в выгрузке</span><span>{{ готово }}</span></div>
+    <div class="sig"><span>Со сверкой сотрудника</span><span>{{ rows|selectattr('правда')|list|length }}</span></div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <form method="post" action="/эталоны/выгрузка"><button class="btn primary" type="submit">Скачать новое</button></form>
+    <form method="post" action="/эталоны/выгрузка"><input type="hidden" name="all" value="1">
+      <button class="btn" type="submit">Скачать всё заново</button></form>
+    <span class="note">Обычные аппараты берутся по паре на «модель + iOS + формат» — сотня одинаковых
+      телефонов разбору ничего не даёт, а один с нераспознанным журналом закрывает дыру.</span>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>Поток</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Заявка</th><th>Аппарат</th><th>iOS</th><th>Формат журнала</th><th>Строк</th>
+      <th>Apple</th><th>Сверка</th><th>Ценность</th><th>Выгружен</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><a href="/deal/{{ r.id }}">{{ r.номер or r.id }}</a><div class="note">{{ r.когда.strftime('%d.%m %H:%M') if r.когда else '' }}</div></td>
+        <td>{{ r.модель }}</td>
+        <td>{{ r.ios }}</td>
+        <td>{{ r.формат }}</td>
+        <td>{{ r.строк or '—' }}</td>
+        <td><span class="{{ 'ok' if r.подтверждено else 'warn' }}">{{ 'подтвердила' if r.подтверждено else 'нет' }}</span></td>
+        <td>{{ 'есть' if r.правда else '—' }}</td>
+        <td><b>{{ r.важность }}</b> — {{ важность.get(r.важность, '') }}<div class="note">{{ r.почему }}</div></td>
+        <td>{{ r.выгружен.strftime('%d.%m %H:%M') if r.выгружен else '—' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="note">Пока ни один телефон не проверяли.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}

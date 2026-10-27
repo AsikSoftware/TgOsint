@@ -141,3 +141,38 @@ def test_client_standalone_sickw_price_and_numbers(monkeypatch, tmp_path):
     assert c.price()["база"]["iPhone13,2"]["64"] == 80000
     assert [c.local_number(), c.local_number()] == [1, 2]
     assert c.upload({"client_id": "x1", "report": {}}) is None and c.queued() == 1
+
+
+def test_pipeline_saves_reference_for_every_phone(fake_core):
+    """Эталон собирается сам с КАЖДОГО телефона: на нём учится разбор журнала Apple.
+    В файле — обезличенный слепок, сырой журнал и наш вердикт; выводы отчёта от
+    обезличивания не меняются, иначе эталон не пишется вовсе."""
+    import glob, zipfile
+    from pintel_kiosk.config import data_dir
+
+    папка = os.path.join(data_dir(), "эталоны")
+    os.makedirs(папка, exist_ok=True)
+    for p in glob.glob(os.path.join(папка, "*.zip")):
+        os.remove(p)
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": True}, FakeClient(), None)
+    итог, loop = {}, QEventLoop()
+    p.done.connect(lambda r: итог.update(r))
+    p.history.connect(lambda r: (итог.update(r), loop.quit()))     # вердикт пришёл позже — эталон перезапишется
+    p.failed.connect(lambda t: (итог.update({"failed": t}), loop.quit()))
+    QTimer.singleShot(15000, loop.quit)
+    p.start()
+    loop.exec()
+    p.wait(3000)
+
+    assert "failed" not in итог, итог
+    files = glob.glob(os.path.join(папка, "эталон_*.zip"))
+    assert files, os.listdir(папка)
+    z = zipfile.ZipFile(files[0])
+    assert set(z.namelist()) >= {"snapshot.json", "report.json", "правда.json", "apple_raw.txt", "расхождения.txt"}
+    rep = json.loads(z.read("report.json").decode("utf-8"))
+    assert len(files) == 1, files                                  # один прогон — один файл, а не два
+    assert rep["итог"]["вердикт"] == итог["report"]["итог"]["вердикт"]     # выводы те же
+    assert list(rep["apple_история"]) == ["Display"]                # поздняя история попала в эталон
+    assert json.loads(z.read("правда.json").decode("utf-8"))["кто"] == "автосбор"

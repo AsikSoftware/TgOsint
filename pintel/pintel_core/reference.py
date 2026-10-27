@@ -18,6 +18,7 @@
 сверяется с исходным: если хоть один вывод изменился — обезличивание отменяется.
 """
 import hashlib
+import io
 import json
 import os
 import random
@@ -210,16 +211,40 @@ def bundle_name(rep, when=None):
     return f"эталон_{model}_iOS{ios}_{(when or datetime.now()):%Y%m%d_%H%M%S}.zip"
 
 
+def _fill(z, snap, rep, truth, raw, mismatches, dumps):
+    z.writestr("snapshot.json", dumps(snap))
+    z.writestr("report.json", json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+    z.writestr("правда.json", json.dumps(truth, ensure_ascii=False, indent=1))
+    z.writestr("apple_raw.txt", raw or (snap.get("repair_history_raw") or ""))
+    z.writestr("расхождения.txt", "\n".join(mismatches) or "расхождений нет")
+
+
 def save_bundle(path, snap, rep, truth, raw="", mismatches=(), dumps=json.dumps):
     """Собрать один файл: слепок, отчёт, сырой журнал Apple, правда, расхождения."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("snapshot.json", dumps(snap))
-        z.writestr("report.json", json.dumps(rep, ensure_ascii=False, indent=1, default=str))
-        z.writestr("правда.json", json.dumps(truth, ensure_ascii=False, indent=1))
-        z.writestr("apple_raw.txt", raw or (snap.get("repair_history_raw") or ""))
-        z.writestr("расхождения.txt", "\n".join(mismatches) or "расхождений нет")
+        _fill(z, snap, rep, truth, raw, mismatches, dumps)
     return path
+
+
+def bundle_bytes(snap, rep, truth, raw="", mismatches=(), dumps=json.dumps):
+    """Тот же эталон, но в память: сервер складывает десятки таких в одну выгрузку."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        _fill(z, snap, rep, truth, raw, mismatches, dumps)
+    return buf.getvalue()
+
+
+def auto_truth(staff=None, раздел_открывали=None):
+    """Правда для эталона, собранного автоматически, из отметок сотрудника на кассе:
+    он смотрит на тот же экран телефона, что и опрос в докторе, поэтому это та же правда.
+    Отметок нет — правды нет, но аппарат всё равно ценен форматом журнала."""
+    s = dict(staff or {})
+    return truth_template(детали={k: v for k, v in s.items() if v in STATES},
+                          примечание=str(s.get("примечание") or ""),
+                          раздел_открывали=раздел_открывали,
+                          кто=str(s.get("кто") or "автосбор"),
+                          когда=str(s.get("когда") or datetime.now().isoformat()))
 
 
 # Запись журнала = строка, начинающаяся с метки времени; внутри записи бывают переводы строк

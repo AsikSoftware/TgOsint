@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 from datetime import timedelta
+from urllib.parse import quote
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -23,6 +24,7 @@ from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_ADMIN, ROLE_CASHIER, ROLES,
 from ..services import evaluations as ev_service
 from ..services import ocenka_import
 from ..services import price as price_service
+from ..services import references as ref_service
 from ..services import sickw_service
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates"))
@@ -370,6 +372,33 @@ def settings_page(request: Request, user: User = Depends(require_senior), db: Db
                   sickw_key_set=bool(settings.sickw_key), gservice_set=os.path.isfile(settings.gservice_json),
                   error=request.query_params.get("e"), new_token=request.query_params.get("t"),
                   balance=request.query_params.get("b"), now=now())
+
+
+# ---------- эталоны: учим проверку на живых аппаратах ----------
+
+@router.get("/эталоны", response_class=HTMLResponse)
+def references_page(request: Request, user: User = Depends(require_senior), db: DbSession = Depends(get_db)):
+    """Каждый проверенный телефон — готовый эталон: слепок с сырым журналом Apple уже
+    на сервере, сверка сотрудника — правда с экрана. Здесь видно, что из этого ценно."""
+    rows = ref_service.rows(db)
+    новых = len([r for r in rows if not r["выгружен"]])
+    return render(request, "references.html", user, rows=rows, новых=новых,
+                  готово=len(ref_service.pick(db)), важность=ref_service.ВАЖНОСТЬ,
+                  flash_=request.query_params.get("m"))
+
+
+@router.post("/эталоны/выгрузка")
+def references_export(user: User = Depends(require_senior), db: DbSession = Depends(get_db),
+                      all_: str = Form("", alias="all")):
+    """Один файл со всеми отобранными эталонами и сводкой — его и отправляют разработчику."""
+    name, data, взято = ref_service.export(db, user, only_new=not all_)
+    if not взято:
+        return RedirectResponse("/эталоны?m=Новых аппаратов для выгрузки нет", 303)
+    # имя файла русское: в заголовке только ASCII, настоящее имя — по RFC 5987
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=\"pintel-references.zip\"; "
+                                                    "filename*=UTF-8''" + quote(name),
+                             "Cache-Control": "no-store"})
 
 
 @router.post("/settings/price/refresh")

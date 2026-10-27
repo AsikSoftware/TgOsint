@@ -15,6 +15,7 @@
     <a href="/queue" class="item {{ 'active' if active == 'queue' else '' }}">Очередь</a>
     <a href="/queue?period=all" class="item {{ 'active' if active == 'deals' else '' }}">Сделки</a>
     {% if user and user.role in ('admin', 'senior') %}<a href="/settings" class="item {{ 'active' if active == 'settings' else '' }}">Настройки</a>{% endif %}
+    {% if user and user.role in ('admin', 'senior') %}<a href="/эталоны" class="item {{ 'active' if active == 'references' else '' }}">Эталоны</a>{% endif %}
     {% if user and user.role == 'admin' %}<a href="/employees" class="item {{ 'active' if active == 'employees' else '' }}">Сотрудники</a>{% endif %}
     <div class="status">
       {% block sidestatus %}{% endblock %}

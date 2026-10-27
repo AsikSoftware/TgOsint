@@ -5,6 +5,7 @@
 кабеле, и если клиент открыл раздел позже — приходит `history`, карточка и
 сервер обновляются. Всё на pintel_core, ничего не дублируем."""
 import asyncio
+import glob
 import json
 import os
 import threading
@@ -15,6 +16,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QThread, Signal
 
+from pintel_core import reference
 from pintel_core.analysis import report as report_mod
 from pintel_core.devicelink import connect, repair_history, snapshot
 from pintel_core.devicelink.connect import READY
@@ -46,6 +48,7 @@ class Pipeline(QThread):
         self.skip_apple = threading.Event()
         self.cancel = threading.Event()
         self.serial = None
+        self.started = datetime.now()                 # имя эталона за этот прогон — одно на все перезаписи
 
     def run(self):
         try:
@@ -180,6 +183,7 @@ class Pipeline(QThread):
             self._step("upload", "done", "отправлено")
         result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial, "out": out}
         self.done.emit(result)
+        self._reference(snap, rep)                    # эталон с каждого телефона, уже после результата
         if self.cancel.is_set() or not hist_ok:
             return
 
@@ -199,6 +203,7 @@ class Pipeline(QThread):
             rep = report_mod.build(snap)
             rep["цена"] = self._price(rep)
             self._save(out, snap, rep)
+            self._reference(snap, rep)                # вердикт пришёл позже — перезаписываем эталон
             log_line(f"история Apple обновилась через {waited} с: {len(items)} записей")
             if server and server.get("id") and not server.get("локально") and self.client.enabled:
                 try:
@@ -218,6 +223,36 @@ class Pipeline(QThread):
                                     bat.get("здоровье_%"), bat.get("циклы"), self.cfg.get("currency", "₸"))
         return {"валюта": self.cfg.get("currency", "₸"), "цена": None, "основание": "прайс не загружен",
                 "нехватка": ["нет прайса"]}
+
+    def _reference(self, snap, rep):
+        """Эталон с КАЖДОГО телефона: обезличенный слепок, сырой журнал Apple и наш вердикт.
+        На этом учится разбор: новая iOS пишет вердикт по-своему, и угадывать нечего — нужен
+        живой аппарат. Пишем после результата, чтобы не задержать экран; если вердикт пришёл
+        позже, файл за тот же прогон перезаписывается.
+
+        Обезличиваем здесь же: наружу (и даже в папку на точке) серийники и IMEI не уходят.
+        Замена не удалась или изменила выводы — эталон не пишем вовсе."""
+        try:
+            clean, ok, why = reference.pseudonymize(snap, report_mod.build)
+            if not ok:
+                log_line(f"эталон не сохранён (обезличивание): {why}")
+                return
+            clean_rep = report_mod.build(clean)
+            path = os.path.join(data_dir(), "эталоны", reference.bundle_name(clean_rep, self.started))
+            reference.save_bundle(
+                path, clean, clean_rep,
+                reference.auto_truth(раздел_открывали=bool((snap.get("repair_history_meta") or {}).get("раздел_открыт"))),
+                raw=clean.get("repair_history_raw") or "", dumps=snapshot.dumps)
+            keep = int(self.cfg.get("reference_keep") or 500)
+            старые = sorted(glob.glob(os.path.join(data_dir(), "эталоны", "эталон_*.zip")),
+                            key=os.path.getmtime, reverse=True)[keep:]
+            for p in старые:                           # диск на точке не резиновый
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        except Exception as exc:                       # noqa: BLE001 — эталон не имеет права сорвать приём
+            log_line(f"эталон не сохранён: {type(exc).__name__}: {exc}")
 
     @staticmethod
     def _save(out, snap, rep):

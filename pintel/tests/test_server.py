@@ -19,6 +19,7 @@ from pintel_server.db import SessionLocal, init_db
 from pintel_server.models import AuditLog, Device, Evaluation, Kiosk, LoginEvent, User, ROLE_ADMIN, ROLE_CASHIER, ROLE_SENIOR
 from pintel_server.auth import hash_password
 from pintel_server.services import price as price_service
+from pintel_server.services import references
 from pintel_core.devicelink import snapshot
 from pintel_core.analysis import report as report_mod
 from pintel_core.external import sickw
@@ -342,3 +343,65 @@ def test_ocenka_import_field_mapping():
     assert imeis[0][0] == "353915105357912" and imeis[0][2] is True   # основной IMEI первым
     assert "Киоск №7" in oi._comment_ocenka(ev)
     assert oi.staff_list() == []   # Оценка выключена в тестах → список сотрудников пуст
+
+
+def test_references_collect_themselves_from_every_phone(app):
+    """Эталон собирается сам с каждого телефона: киоск уже прислал слепок с сырым журналом
+    Apple, а сверка сотрудника — та же правда с экрана. Выгрузка обезличена, ценное идёт
+    первым, одно и то же второй раз не едет."""
+    import io
+    import zipfile
+
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/kiosks", data={"name": "Эталон-киоск", "point_id": ""})
+    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+
+    snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
+                               encoding="utf-8").read())
+    snap["root"]["SerialNumber"] = "ZZTESTSERIAL9"            # его не должно быть в выгрузке
+    snap["repair_history"], snap["repair_history_meta"] = {}, {"раздел_открыт": True, "формат": None}
+    snap["repair_history_raw"] = ("Oct 27 19:35:24 iPhone mobilerepaird(CoreRepairCore)[212] <Notice>: "
+                                  "совершенно новая строка этой iOS\n")
+    rep = report_mod.build(snap)
+    rep["цена"] = {"валюта": "₸", "цена": 70000, "основание": "тест", "нехватка": []}
+    ev_id = TestClient(app).post("/api/kiosk/evaluations",
+                                 json={"client_id": "ref-auto-1", "report": json.loads(snapshot.dumps(rep)),
+                                       "snapshot": json.loads(snapshot.dumps(snap))}, headers=H).json()["id"]
+
+    page = admin.get("/эталоны").text
+    assert "журнал пришёл" in page and "не распознан" in page   # самый ценный материал виден сразу
+
+    r = admin.post("/эталоны/выгрузка")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    names = z.namelist()
+    assert "сводка.md" in names and any(n.startswith("эталоны/эталон_") for n in names)
+    assert "не распознан" in z.read("сводка.md").decode("utf-8")
+    assert b"ZZTESTSERIAL9" not in r.content                       # обезличено: серийника нет нигде
+    наш = None                                                     # в выгрузке и другие аппараты — ищем свой
+    for n in [x for x in names if x.endswith(".zip")]:
+        b = zipfile.ZipFile(io.BytesIO(z.read(n)))
+        if "совершенно новая строка" in b.read("apple_raw.txt").decode("utf-8"):
+            наш = b
+    assert наш is not None, names                                  # сырые строки новой iOS доехали
+    assert json.loads(наш.read("правда.json"))["раздел_открывали"] is True
+
+    assert loc(admin.post("/эталоны/выгрузка")).startswith("/эталоны?m=")   # второй раз то же не едет
+
+    # сотрудник сверил экран: телефон показывает «Неизвестно» — появилась правда, и аппарат
+    # снова становится материалом для разбора, уже с эталонным ответом
+    admin.post(f"/deal/{ev_id}/parts", data={"Display": "unknown", "note": "экран неоригинал"})
+    page = admin.get("/эталоны").text
+    assert "есть" in page                              # сверка сотрудника видна в таблице
+    db = SessionLocal()
+    try:
+        row = {x["id"]: x for x in references.rows(db)}[ev_id]
+        _, data, _ = references.bundle(db.get(Evaluation, ev_id))
+    finally:
+        db.close()
+    # телефон показал «Неизвестно», а мы такого не сказали — это главный материал для разбора
+    assert row["правда"] is True and row["важность"] == 3 and "расхождение" in row["почему"]
+    внутри = zipfile.ZipFile(io.BytesIO(data))
+    правда = json.loads(внутри.read("правда.json"))
+    assert правда["детали"] == {"Display": "unknown"} and правда["кто"] == "Администратор"
+    assert "Неизвестная запасная часть" in внутри.read("расхождения.txt").decode("utf-8")

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% set active = 'queue' %}
-{% block title %}Оценка №{{ ev.number }}{% endblock %}
+{% block title %}Оценка {{ '№' ~ ev.number if ev.number else 'без номера' }}{% endblock %}
 {% set pas = rep.get('паспорт') or {} %}{% set bat = rep.get('батарея') or {} %}{% set leg = rep.get('правовой') or {} %}
 {% set sk = rep.get('sickw') or {} %}{% set sig = rep.get('сигналы') or {} %}{% set hist = rep.get('apple_история') or {} %}
 {% set sto = rep.get('память') or {} %}{% set price = rep.get('цена') or {} %}{% set itog = rep.get('итог') or {} %}
 {% block content %}
 <div class="head">
-  <div class="mont" style="font-size:44px;font-weight:800;color:var(--primary)">№{{ ev.number }}</div>
+  <div class="mont" style="font-size:44px;font-weight:800;color:var(--primary)">{{ '№' ~ ev.number if ev.number else '—' }}</div>
   <div>
     <h1 style="font-size:24px">{{ ev.model_name or '?' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.colour %} · {{ ev.colour }}{% endif %}</h1>
     <div class="sub" style="font-size:14px;margin-top:4px">Оценён на киоске {{ ev.created_at|dt }}{% if ev.kiosk %} ({{ ev.kiosk.name }}){% endif %} · серийный {{ ev.serial or '?' }} · IMEI {{ ev.imei or '?' }} · iOS {{ ev.ios or '?' }}</div>
@@ -16,7 +16,7 @@
 </div>
 {% if itog.get('вердикт') == 'ПРОБЛЕМНЫЙ' %}<div class="flash err">ПРОБЛЕМНЫЙ: {{ itog.get('почему') }}</div>
 {% elif itog.get('вердикт') == 'ПРОВЕРКА НЕПОЛНАЯ' %}<div class="flash err" style="background:var(--warn-bg);color:var(--warn)">Проверка неполная: {{ itog.get('почему') }}</div>{% endif %}
-{% if history %}<div class="flash" style="background:var(--primary-light);color:var(--primary)">Этот телефон уже приносили: {% for h in history %}<a href="/deal/{{ h.id }}">№{{ h.number }} от {{ h.created_at|dt('%d.%m.%Y') }} ({{ h.status_label }}{% if h.final_price %}, {{ h.final_price|money }}{% endif %})</a>{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
+{% if history %}<div class="flash" style="background:var(--primary-light);color:var(--primary)">Этот телефон уже приносили: {% for h in history %}<a href="/deal/{{ h.id }}">{{ '№' ~ h.number if h.number else 'б/н' }} от {{ h.created_at|dt('%d.%m.%Y') }} ({{ h.status_label }}{% if h.final_price %}, {{ h.final_price|money }}{% endif %})</a>{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
 <div class="deal">
   <div class="main">
     <section class="sec span2">
@@ -31,7 +31,7 @@
       <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
         {% for m in ev.media %}{% if m.kind == 'photo' %}<a href="/media/{{ m.id }}" target="_blank"><img src="/media/{{ m.id }}" alt="фото" style="height:120px;border-radius:10px;border:1px solid var(--border)"></a>{% else %}<a class="btn sm" href="/media/{{ m.id }}" target="_blank">🎬 видео</a>{% endif %}{% endfor %}
       </div>
-      {% else %}<div class="note">Клиент ещё не прислал фото/видео и данные. Ссылка для клиента: <a href="/u/{{ ev.upload_token }}" target="_blank">страница данных</a> (та же, что по QR на киоске).</div>{% endif %}
+      {% else %}<div class="note">Клиент ещё не прислал фото/видео и данные. Ссылки для клиента: <a href="/u/{{ ev.upload_token }}" target="_blank">данные</a> · <a href="/m/{{ ev.media_token }}" target="_blank">фото/видео</a> (те же, что по QR на киоске). Номер заявки выдаётся после имени и телефона.</div>{% endif %}
     </section>
     <section class="sec span2">
       {% set pv = rep.get('детали_вердикт') or {} %}

@@ -107,7 +107,7 @@ def _comment_ocenka(ev: Evaluation) -> str:
         parts.append(f"Apple: {ev.apple_summary}")
     if ev.locks_summary and ev.locks_summary != "чисто":
         parts.append(f"Замки: {ev.locks_summary}")
-    parts.append(f"Киоск №{ev.number} от {ev.day}")
+    parts.append(f"Киоск {('№' + str(ev.number)) if ev.number else 'без номера'} от {ev.day}")
     return " · ".join(parts)[:4000]
 
 
@@ -159,6 +159,9 @@ def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> d
         raise ImportError_("не определён объём памяти — импорт невозможен")
     if not (ev.client_name and ev.client_phone):
         raise ImportError_("не заполнены имя и телефон клиента")
+    if ev.number is None:                                       # номер заявки — только с именем и телефоном
+        from .evaluations import assign_number
+        assign_number(db, ev)
 
     photos, videos = _media_file_ids(db, ev)
     eng = _ocenka_engine()

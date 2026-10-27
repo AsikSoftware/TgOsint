@@ -33,7 +33,7 @@
   <tbody>
   {% for r in rows %}
   <tr class="{{ 'hot' if r.status == 'at_counter' else '' }}">
-    <td class="num">{{ r.number }}</td>
+    <td class="num">{{ r.number or '—' }}</td>
     <td class="muted">{{ r.created_at|time }}{% if period != 'today' %}<br><small>{{ r.day }}</small>{% endif %}</td>
     <td><b>{{ r.model_name or '?' }}{% if r.capacity_gb %} · {{ r.capacity_gb }}{% endif %}</b>{% if r.device and r.device.evaluations_count > 1 %} <span class="pill gray">уже приносили</span>{% endif %}</td>
     <td class="{{ 'ok' if r.battery_health and r.battery_health >= 85 else 'warn' }}">{{ r.battery_health if r.battery_health is not none else '?' }} % · {{ r.battery_cycles or '?' }} ц.</td>

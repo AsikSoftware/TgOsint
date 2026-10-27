@@ -126,7 +126,7 @@ class Evaluation(Base):
                       Index("ix_eval_day_point", "day", "point_id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64))         # идемпотентность с киоска
-    number: Mapped[int] = mapped_column(Integer)               # номер талона в этот день на точке
+    number: Mapped[Optional[int]] = mapped_column(Integer)     # номер заявки: выдаётся после имени и телефона клиента
     day: Mapped[str] = mapped_column(String(10))               # YYYY-MM-DD по местному времени
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=now, index=True)
     kiosk_id: Mapped[Optional[int]] = mapped_column(ForeignKey("kiosks.id"))
@@ -165,6 +165,7 @@ class Evaluation(Base):
     panic_full: Mapped[Optional[bool]] = mapped_column(Boolean)
     # загрузка фото/видео клиентом по QR
     upload_token: Mapped[Optional[str]] = mapped_column(String(32), unique=True)
+    media_token: Mapped[Optional[str]] = mapped_column(String(32), unique=True)    # отдельная временная ссылка для фото/видео
     # результат импорта в Pintel Оценка
     ocenka_device_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
     ocenka_imported_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime)

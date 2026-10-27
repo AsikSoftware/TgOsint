@@ -169,7 +169,7 @@ def deal_import_ocenka(ev_id: int, panic_full: Optional[str] = Form(None),
     except Exception as e:                                       # noqa: BLE001
         return RedirectResponse(f"/deal/{ev_id}?e=Оценка: {e}", 303)
     audit.log(db, user, "evaluation.ocenka_import",
-              f"Оценка №{ev.number} → сделка Оценки №{res.get('device_id')}",
+              f"Оценка {ev_service.label(ev)} → сделка Оценки №{res.get('device_id')}",
               entity="evaluation", entity_id=ev.id, details=res)
     return RedirectResponse(f"/deal/{ev_id}?m=Отправлено в Оценку №{res.get('device_id')}", 303)
 
@@ -217,13 +217,14 @@ def _media_kind(content_type: str | None, filename: str) -> str | None:
 
 
 @router.get("/u/{token}", response_class=HTMLResponse)
-def upload_page(request: Request, token: str, db: DbSession = Depends(get_db)):
+def data_page(request: Request, token: str, db: DbSession = Depends(get_db)):
+    """Страница данных клиента: имя, телефон, коробка/шнур. Номер заявки — только после имени и телефона."""
     ev = db.scalar(select(Evaluation).where(Evaluation.upload_token == token))
     if not ev:
         raise HTTPException(404, "ссылка недействительна")
-    return render(request, "upload.html", None, ev=ev, media=ev_service.media_list(ev),
-                  imported=bool(ev.ocenka_device_id), max_files=settings.media_max_files,
-                  max_mb=settings.media_max_mb)
+    ev_service.ensure_upload_token(db, ev)
+    return render(request, "upload.html", None, ev=ev, imported=bool(ev.ocenka_device_id),
+                  media_link=f"/m/{ev.media_token}")
 
 
 def _tri(v):
@@ -231,17 +232,14 @@ def _tri(v):
 
 
 @router.post("/u/{token}")
-async def upload_receive(request: Request, token: str, db: DbSession = Depends(get_db),
-                         client_name: Optional[str] = Form(None), client_phone: Optional[str] = Form(None),
-                         has_box: Optional[str] = Form(None), has_cord: Optional[str] = Form(None),
-                         files: list[UploadFile] = File(default=[])):
+def data_receive(request: Request, token: str, db: DbSession = Depends(get_db),
+                 client_name: Optional[str] = Form(None), client_phone: Optional[str] = Form(None),
+                 has_box: Optional[str] = Form(None), has_cord: Optional[str] = Form(None)):
     ev = db.scalar(select(Evaluation).where(Evaluation.upload_token == token))
     if not ev:
         raise HTTPException(404, "ссылка недействительна")
     if ev.ocenka_device_id:                                    # сделка уже ушла в Оценку — не принимаем
         return RedirectResponse(f"/u/{token}?m=imported", 303)
-
-    # имя/телефон/коробка/шнур — вводятся здесь, на сервере (не в киоске)
     if client_name is not None and client_name.strip():
         ev.client_name = client_name.strip()[:120]
     if client_phone is not None and client_phone.strip():
@@ -251,6 +249,29 @@ async def upload_receive(request: Request, token: str, db: DbSession = Depends(g
     if _tri(has_cord) is not None:
         ev.has_cord = _tri(has_cord)
     db.commit()
+    ev_service.assign_number(db, ev)          # номер заявки выдаётся здесь — только с именем и телефоном
+    return RedirectResponse(f"/u/{token}?m=" + ("ok" if ev.number else "need"), 303)
+
+
+@router.get("/m/{token}", response_class=HTMLResponse)
+def media_page(request: Request, token: str, db: DbSession = Depends(get_db)):
+    """Отдельная временная ссылка для фото/видео телефона."""
+    ev = db.scalar(select(Evaluation).where(Evaluation.media_token == token))
+    if not ev:
+        raise HTTPException(404, "ссылка недействительна")
+    return render(request, "media.html", None, ev=ev, media=ev_service.media_list(ev),
+                  imported=bool(ev.ocenka_device_id), max_files=settings.media_max_files,
+                  max_mb=settings.media_max_mb)
+
+
+@router.post("/m/{token}")
+async def media_receive(request: Request, token: str, db: DbSession = Depends(get_db),
+                        files: list[UploadFile] = File(default=[])):
+    ev = db.scalar(select(Evaluation).where(Evaluation.media_token == token))
+    if not ev:
+        raise HTTPException(404, "ссылка недействительна")
+    if ev.ocenka_device_id:
+        return RedirectResponse(f"/m/{token}?m=imported", 303)
 
     os.makedirs(settings.media_dir, exist_ok=True)
     limit = settings.media_max_mb * 1024 * 1024
@@ -270,7 +291,7 @@ async def upload_receive(request: Request, token: str, db: DbSession = Depends(g
             fh.write(data)
         ev_service.add_media(db, ev, kind, fname, up.content_type, len(data))
         have += 1
-    return RedirectResponse(f"/u/{token}?m=ok", 303)
+    return RedirectResponse(f"/m/{token}?m=ok", 303)
 
 
 # ---------- настройки ----------

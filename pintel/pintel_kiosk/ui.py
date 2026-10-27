@@ -463,6 +463,10 @@ def clear_layout(lay):
 class ResultScreen(Screen):
     sell = Signal()
     just_looking = Signal()
+    TEXT_DATA = ("Отсканируйте телефоном и введите имя и номер телефона — после этого появится номер заявки. "
+                 "Цену назовёт сотрудник после осмотра.")
+    TEXT_MEDIA = ("Номер выдан. Теперь отсканируйте и приложите фото и видео телефона. "
+                  "Цену назовёт сотрудник после осмотра.")
 
     def __init__(self, currency="₸"):
         super().__init__(gray=True)
@@ -494,8 +498,8 @@ class ResultScreen(Screen):
         self.qr.setStyleSheet("background:white; border:1px solid %s; border-radius:16px;" % C["border"])
         self.qr.setAlignment(Qt.AlignCenter)
         qrow.addWidget(self.qr, 0)
-        qrow.addWidget(label("Отсканируйте телефоном: заполните имя и телефон, приложите фото. "
-                             "Цену назовёт сотрудник после осмотра.", "pricenote", wrap=True), 1)
+        self.qr_text = label(self.TEXT_DATA, "pricenote", wrap=True)
+        qrow.addWidget(self.qr_text, 1)
         pl.addLayout(qrow)
         pl.addStretch(1)
         self.btn_done = QPushButton("Готово")
@@ -539,15 +543,7 @@ class ResultScreen(Screen):
             self.chip.setObjectName("chip_warn")
             self.chip.setText("Нужен осмотр сотрудника")
         self.chip.setStyleSheet(self.chip.styleSheet())
-        srv = server or {}
-        self.ticket_num.setText(str(srv.get("номер") or "—"))
-        url = srv.get("ссылка_данных") or srv.get("ссылка_отчёта")
-        pm = qr_pixmap(url, 190) if url else None
-        if pm:
-            self.qr.setPixmap(pm.scaled(190, 190, Qt.KeepAspectRatio, Qt.FastTransformation))
-            self.qr.setVisible(True)
-        else:
-            self.qr.setVisible(False)
+        self.set_intake(server or {})
         # батарея
         clear_layout(self.l_bat)
         self.l_bat.addWidget(label("БАТАРЕЯ", "kicker"))
@@ -643,6 +639,28 @@ class ResultScreen(Screen):
         self.l_pass.addLayout(kv("Память", f"{sto.get('объём_гб') or '?'} ГБ, свободно {int(sto.get('свободно_гб') or 0)}"))
         self.l_pass.addLayout(kv("Куплен (по базе)", sk.get("дата_покупки") or "—"))
         self.l_pass.addLayout(kv("Уже приносили", "да" if (server or {}).get("уже_приносили") else "нет"))
+
+    def set_intake(self, st):
+        """Номер заявки появляется только после имени и телефона (киоск опрашивает сервер):
+        до этого QR ведёт на страницу данных, после — на отдельную страницу фото/видео."""
+        num = st.get("номер")
+        if num and not st.get("локально"):
+            self.ticket_num.setText(str(num))
+            self.qr_text.setText(self.TEXT_MEDIA)
+            url = st.get("ссылка_медиа") or st.get("ссылка_данных")
+        elif num:                                         # автономно, без сервера — только номер
+            self.ticket_num.setText(str(num))
+            url = None
+        else:
+            self.ticket_num.setText("—")
+            self.qr_text.setText(self.TEXT_DATA)
+            url = st.get("ссылка_данных")
+        pm = qr_pixmap(url, 190) if url else None
+        if pm:
+            self.qr.setPixmap(pm.scaled(190, 190, Qt.KeepAspectRatio, Qt.FastTransformation))
+            self.qr.setVisible(True)
+        else:
+            self.qr.setVisible(False)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

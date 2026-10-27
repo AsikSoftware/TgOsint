@@ -22,6 +22,11 @@ def local_time(dt) -> str:
     return dt.astimezone(ZoneInfo(settings.tz)).strftime("%H:%M") if dt else ""
 
 
+def label(ev) -> str:
+    """«№12» или «без номера»: номер заявки выдаётся только после имени и телефона клиента."""
+    return f"№{ev.number}" if ev.number else "без номера"
+
+
 def next_number(db, point_id, day) -> int:
     q = select(func.max(Evaluation.number)).where(Evaluation.day == day)
     q = q.where(Evaluation.point_id == point_id) if point_id else q.where(Evaluation.point_id.is_(None))
@@ -77,7 +82,7 @@ def create_from_kiosk(db, kiosk, payload: dict) -> tuple[Evaluation, bool]:
         device.evaluations_count = (device.evaluations_count or 0) + 1
         device.imei = device.imei or pas.get("imei")
     ev = Evaluation(
-        client_id=cid or secrets.token_hex(8), number=next_number(db, kiosk.point_id, day), day=day,
+        client_id=cid or secrets.token_hex(8), number=None, day=day,
         kiosk_id=kiosk.id, point_id=kiosk.point_id, device_id=device.id if device else None,
         serial=serial, imei=(pas.get("imei") or None), model_name=pas.get("модель"),
         model_code=pas.get("код_модели"), capacity_gb=sto.get("объём_гб"), colour=pas.get("цвет"),
@@ -87,11 +92,12 @@ def create_from_kiosk(db, kiosk, payload: dict) -> tuple[Evaluation, bool]:
         locks_summary=locks_summary(rep)[:120], status=ST_NEW, report=rep,
         snapshot=payload.get("snapshot"), public_token=secrets.token_urlsafe(12),
         upload_token=secrets.token_urlsafe(12)[:32],
+        media_token=secrets.token_urlsafe(12)[:32],
     )
     db.add(ev)
     db.flush()
     audit.log(db, None, "evaluation.create",
-              f"Оценка №{ev.number}: {ev.model_name or '?'} {ev.capacity_gb or '?'} ГБ, "
+              f"Оценка {label(ev)}: {ev.model_name or '?'} {ev.capacity_gb or '?'} ГБ, "
               f"батарея {ev.battery_health or '?'} %, цена {ev.price_offer or '—'}",
               entity="evaluation", entity_id=ev.id, kiosk=kiosk,
               details={"серийник": serial, "вердикт": ev.verdict, "повторно": bool(device and device.evaluations_count > 1)})
@@ -117,7 +123,7 @@ def update_from_kiosk(db, kiosk, ev: Evaluation, report: dict, snapshot_patch: d
     if price.get("цена") and ev.status not in (ST_BOUGHT, ST_DECLINED):
         ev.price_offer = price.get("цена")
         ev.price_column = price.get("основание")
-    audit.log(db, None, "evaluation.update", f"Оценка №{ev.number}: данные обновлены с киоска ({ev.apple_summary})",
+    audit.log(db, None, "evaluation.update", f"Оценка {label(ev)}: данные обновлены с киоска ({ev.apple_summary})",
               entity="evaluation", entity_id=ev.id, kiosk=kiosk)
     db.commit()
     return ev
@@ -126,7 +132,7 @@ def update_from_kiosk(db, kiosk, ev: Evaluation, report: dict, snapshot_patch: d
 def client_decision(db, kiosk, ev: Evaluation, decision: str):
     ev.status = ST_AT_COUNTER if decision == "sell" else ST_VIEWED
     audit.log(db, None, "evaluation.client",
-              f"Оценка №{ev.number}: клиент {'идёт к кассе' if decision == 'sell' else 'просто смотрел'}",
+              f"Оценка {label(ev)}: клиент {'идёт к кассе' if decision == 'sell' else 'просто смотрел'}",
               entity="evaluation", entity_id=ev.id, kiosk=kiosk)
     db.commit()
 
@@ -135,7 +141,7 @@ def take(db, user, ev: Evaluation):
     ev.assigned_user_id = user.id
     if ev.status in (ST_NEW, ST_AT_COUNTER, ST_VIEWED):
         ev.status = ST_IN_WORK
-    audit.log(db, user, "evaluation.take", f"Взял(а) в работу оценку №{ev.number}", entity="evaluation", entity_id=ev.id)
+    audit.log(db, user, "evaluation.take", f"Взял(а) в работу оценку {label(ev)}", entity="evaluation", entity_id=ev.id)
     db.commit()
 
 
@@ -161,8 +167,8 @@ def decide(db, user, ev: Evaluation, kind: str, final_price, note: str = "", ins
     ev.decided_at = now()
     ev.decided_by_id = user.id
     ev.assigned_user_id = ev.assigned_user_id or user.id
-    what = (f"Оформил(а) выкуп №{ev.number} {ev.model_name or ''} за {final_price} {settings.currency}"
-            if kind == ST_BOUGHT else f"Отказ по №{ev.number}: {note or 'без причины'}")
+    what = (f"Оформил(а) выкуп {label(ev)} {ev.model_name or ''} за {final_price} {settings.currency}"
+            if kind == ST_BOUGHT else f"Отказ по {label(ev)}: {note or 'без причины'}")
     if kind == ST_BOUGHT and ev.price_offer and final_price != ev.price_offer:
         what += f" (прайс {ev.price_offer})"
     audit.log(db, user, "evaluation." + kind, what, entity="evaluation", entity_id=ev.id,
@@ -186,19 +192,52 @@ def set_client_details(db, kiosk, ev: Evaluation, *, name=None, phone=None,
     if panic is not None:
         ev.panic_full = panic
     db.commit()
+    assign_number(db, ev)
     return ev
 
 
 def ensure_upload_token(db, ev: Evaluation) -> str:
-    """Токен для временной ссылки загрузки фото/видео (QR). Создаём лениво."""
+    """Токены двух временных ссылок: данные клиента (/u/) и фото/видео (/m/). Создаём лениво."""
+    changed = False
     if not ev.upload_token:
         ev.upload_token = secrets.token_urlsafe(12)[:32]
+        changed = True
+    if not ev.media_token:
+        ev.media_token = secrets.token_urlsafe(12)[:32]
+        changed = True
+    if changed:
         db.commit()
     return ev.upload_token
 
 
 def upload_url(ev: Evaluation) -> str | None:
     return f"{settings.public_url}/u/{ev.upload_token}" if ev.upload_token else None
+
+
+def media_url(ev: Evaluation) -> str | None:
+    return f"{settings.public_url}/m/{ev.media_token}" if ev.media_token else None
+
+
+def assign_number(db, ev: Evaluation):
+    """Номер заявки выдаётся только когда есть имя и телефон клиента. Идемпотентно."""
+    if ev.number or not (ev.client_name and ev.client_phone):
+        return ev.number
+    ev.number = next_number(db, ev.point_id, ev.day)
+    audit.log(db, None, "evaluation.number",
+              f"Заявке присвоен №{ev.number} ({ev.client_name}, {ev.client_phone})",
+              entity="evaluation", entity_id=ev.id)
+    db.commit()
+    return ev.number
+
+
+def intake_state(ev: Evaluation) -> dict:
+    """Что киоск спрашивает у сервера, пока показан результат."""
+    return {"id": ev.id, "номер": ev.number,
+            "ссылка_данных": upload_url(ev), "ссылка_медиа": media_url(ev),
+            "клиент": {"имя": ev.client_name, "телефон": ev.client_phone,
+                       "коробка": ev.has_box, "шнур": ev.has_cord},
+            "медиа": media_list(ev), "готово": bool(ev.client_name and ev.client_phone),
+            "импортирована": bool(ev.ocenka_device_id), "номер_сделки": ev.ocenka_device_id}
 
 
 def media_list(ev: Evaluation) -> list[dict]:

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Фото и видео · Pintel</title><link rel="stylesheet" href="/static/app.css">
+<style>
+  .drop{border:2px dashed #cbd5e1;border-radius:14px;padding:18px;text-align:center;background:#fff}
+  .big{display:block;width:100%;padding:16px;font-size:18px;border-radius:14px;border:0;background:#2563eb;color:#fff;font-weight:700}
+  .thumbs{display:flex;flex-wrap:wrap;gap:8px}
+  .thumb{background:#f1f5f9;border-radius:10px;padding:6px 10px;font-size:14px}
+  .okbar{background:#dcfce7;color:#166534;border-radius:10px;padding:10px 12px}
+  .warnbar{background:#fef9c3;color:#854d0e;border-radius:10px;padding:10px 12px}
+</style></head>
+<body>
+<main style="max-width:560px;margin:0 auto;padding:24px 16px;gap:16px;display:flex;flex-direction:column">
+  <img src="/static/logo.png" alt="Pintel" style="height:34px;width:auto;align-self:flex-start">
+  <h1 style="margin:0">Фото и видео телефона</h1>
+  <div class="muted">{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}{% if ev.number %} · заявка №{{ ev.number }}{% endif %}</div>
+
+  {% if imported %}
+    <div class="okbar">Сделка уже оформлена — загрузка закрыта. Спасибо!</div>
+  {% else %}
+    {% if flash == 'ok' %}<div class="okbar">Загружено. Можно добавить ещё или закрыть страницу.</div>{% endif %}
+    {% if flash == 'imported' %}<div class="warnbar">Сделка уже оформлена, новые файлы не принимаются.</div>{% endif %}
+    <form method="post" enctype="multipart/form-data" style="display:flex;flex-direction:column;gap:14px">
+      <label class="drop">
+        <input type="file" name="files" multiple accept="image/*,video/*" style="display:none"
+               onchange="document.getElementById('n').textContent = this.files.length + ' выбрано'">
+        <div style="font-weight:600">Нажмите, чтобы снять или выбрать</div>
+        <div class="muted">Телефон со всех сторон и экран с IMEI. Можно видео.</div>
+        <div class="muted" id="n" style="margin-top:6px"></div>
+      </label>
+      <button class="big" type="submit">Загрузить</button>
+      <div class="note">До {{ max_files }} файлов, каждый до {{ max_mb }} МБ.</div>
+    </form>
+  {% endif %}
+
+  <section class="sec"><h2>Загружено: {{ media|length }}</h2>
+    {% if media %}<div class="thumbs">{% for m in media %}<span class="thumb">{{ 'видео' if m['вид'] == 'video' else 'фото' }} · {{ m['загружено'] }}</span>{% endfor %}</div>
+    {% else %}<div class="note">Пока ничего не загружено.</div>{% endif %}
+  </section>
+</main></body></html>

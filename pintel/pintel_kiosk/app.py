@@ -102,6 +102,31 @@ class Task(QThread):
             pass
 
 
+class IntakePoller(QThread):
+    """Пока показан результат: раз в 2,5 с спрашиваем сервер, выдан ли номер заявки
+    (он появляется только после имени и телефона клиента)."""
+    state = Signal(dict)
+
+    def __init__(self, client, ev_id, parent=None):
+        super().__init__(parent)
+        self.client, self.ev_id = client, ev_id
+        self._stop = False
+
+    def run(self):
+        while not self._stop:
+            try:
+                self.state.emit(self.client.intake(self.ev_id))
+            except Exception:                                    # noqa: BLE001 — нет связи: попробуем ещё
+                pass
+            for _ in range(25):
+                if self._stop:
+                    return
+                time.sleep(0.1)
+
+    def stop(self):
+        self._stop = True
+
+
 DESIGN_W, DESIGN_H = 1920, 1080
 
 
@@ -152,6 +177,8 @@ class KioskWindow(QMainWindow):
         self.state = "idle"
         self.wait_unplug = False
         self.pipeline = None
+        self.intake = None
+        self.last_intake = None
         self.last = None
         self.tasks = []
         self.setWindowTitle("Pintel Kiosk")
@@ -213,6 +240,19 @@ class KioskWindow(QMainWindow):
         self.tasks = [x for x in self.tasks if x.isRunning()] + [t]
         t.start()
 
+    def _stop_intake(self):
+        if self.intake is not None:
+            self.intake.stop()
+            self.intake.wait(2000)
+            self.intake = None
+        self.last_intake = None
+
+    def on_intake(self, state):
+        """Сервер сообщил состояние заявки (номер после имени и телефона, ссылка на фото/видео)."""
+        self.last_intake = state
+        if self.state == "result":
+            self.s_result.set_intake(state)
+
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()
@@ -224,7 +264,9 @@ class KioskWindow(QMainWindow):
         self.net.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()
-        for t in (self.poller, self.net, self.pipeline, *self.tasks):
+        if self.intake is not None:
+            self.intake.stop()
+        for t in (self.poller, self.net, self.pipeline, self.intake, *self.tasks):
             if t is not None and t.isRunning():
                 t.wait(3000)                     # иначе Qt ругается «Destroyed while thread is still running»
         super().closeEvent(e)
@@ -284,6 +326,8 @@ class KioskWindow(QMainWindow):
             self.last = result
             if self.state in ("result", "ticket"):
                 self.s_result.fill(result["report"], result.get("server"))
+                if self.last_intake:                       # не сбрасывать уже выданный номер
+                    self.s_result.set_intake(self.last_intake)
 
     def on_link_status(self, state, human):
         if state != READY:
@@ -304,6 +348,13 @@ class KioskWindow(QMainWindow):
         self.show_screen(self.s_result)
         self.state = "result"
         self.return_timer.start(int(self.cfg.get("return_seconds", 60)) * 3000)
+        # номер заявки сервер выдаст, когда клиент введёт имя и телефон — опрашиваем
+        self._stop_intake()
+        srv = result.get("server") or {}
+        if srv.get("id") and not srv.get("локально") and self.client.enabled:
+            self.intake = IntakePoller(self.client, srv["id"], self)
+            self.intake.state.connect(self.on_intake)
+            self.intake.start()
 
     def on_failed(self, text):
         if self.state != "scanning":
@@ -315,6 +366,7 @@ class KioskWindow(QMainWindow):
 
     def go_home(self):
         self.return_timer.stop()
+        self._stop_intake()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
         self.state = "idle"

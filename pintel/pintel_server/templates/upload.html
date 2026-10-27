@@ -1,40 +1,44 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Данные телефона · Pintel</title><link rel="stylesheet" href="/static/app.css">
+<title>Данные клиента · Pintel</title><link rel="stylesheet" href="/static/app.css">
 <style>
   .fld{display:flex;flex-direction:column;gap:6px}
   .fld input[type=text],.fld input[type=tel]{padding:14px;font-size:17px;border:1px solid #cbd5e1;border-radius:12px;width:100%;box-sizing:border-box}
   .seg{display:flex;gap:8px}
   .seg label{flex:1;text-align:center;padding:12px;border:1px solid #cbd5e1;border-radius:12px;font-weight:600}
   .seg input{display:none}
-  .seg input:checked + span{color:#1d4ed8}
-  .seg label:has(input:checked){border-color:#2563eb;background:#eff6ff}
-  .drop{border:2px dashed #cbd5e1;border-radius:14px;padding:18px;text-align:center}
-  .big{display:block;width:100%;padding:16px;font-size:18px;border-radius:14px;border:0;background:#2563eb;color:#fff;font-weight:700}
-  .thumbs{display:flex;flex-wrap:wrap;gap:8px}
-  .thumb{background:#f1f5f9;border-radius:10px;padding:6px 10px;font-size:14px}
-  .okbar{background:#dcfce7;color:#166534;border-radius:10px;padding:10px 12px}
+  .seg label:has(input:checked){border-color:#2563eb;background:#eff6ff;color:#1d4ed8}
+  .big{display:block;width:100%;padding:16px;font-size:18px;border-radius:14px;border:0;background:#2563eb;color:#fff;font-weight:700;text-align:center;text-decoration:none;box-sizing:border-box}
+  .okbar{background:#dcfce7;color:#166534;border-radius:10px;padding:12px 14px}
   .warnbar{background:#fef9c3;color:#854d0e;border-radius:10px;padding:10px 12px}
+  .numbox{background:#eff6ff;border:1px solid #bfdbfe;border-radius:14px;padding:16px;text-align:center}
+  .numbox b{font-size:44px;display:block;color:#1d4ed8;line-height:1.1}
   label.q{font-weight:600;font-size:15px}
 </style></head>
 <body>
 <main style="max-width:560px;margin:0 auto;padding:24px 16px;gap:16px;display:flex;flex-direction:column">
   <img src="/static/logo.png" alt="Pintel" style="height:34px;width:auto;align-self:flex-start">
-  <h1 style="margin:0">Данные телефона</h1>
-  <div class="muted">{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %} · оценка №{{ ev.number }}</div>
+  <h1 style="margin:0">Данные клиента</h1>
+  <div class="muted">{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}</div>
 
   {% if imported %}
     <div class="okbar">Сделка уже оформлена — страница закрыта. Спасибо!</div>
   {% else %}
-    {% if flash == 'ok' %}<div class="okbar">Сохранено. Можно добавить ещё фото или закрыть страницу.</div>{% endif %}
+    {% if ev.number %}
+      <div class="numbox"><span class="muted">Ваш номер заявки</span><b>{{ ev.number }}</b><span class="muted">назовите его сотруднику</span></div>
+      <a class="big" href="{{ media_link }}">Приложить фото и видео телефона →</a>
+      {% if flash == 'ok' %}<div class="okbar">Сохранено.</div>{% endif %}
+    {% else %}
+      {% if flash == 'need' %}<div class="warnbar">Укажите имя и телефон — после этого выдадим номер заявки.</div>
+      {% else %}<div class="note">Номер заявки появится после ввода имени и телефона.</div>{% endif %}
+    {% endif %}
     {% if flash == 'imported' %}<div class="warnbar">Сделка уже оформлена, изменения не принимаются.</div>{% endif %}
 
-    <form method="post" enctype="multipart/form-data" style="display:flex;flex-direction:column;gap:16px">
+    <form method="post" style="display:flex;flex-direction:column;gap:16px">
       <div class="fld"><label class="q">Ваше имя</label>
-        <input type="text" name="client_name" value="{{ ev.client_name or '' }}" placeholder="Как к вам обращаться" autocomplete="name"></div>
+        <input type="text" name="client_name" value="{{ ev.client_name or '' }}" placeholder="Как к вам обращаться" autocomplete="name" required></div>
       <div class="fld"><label class="q">Телефон</label>
-        <input type="tel" name="client_phone" value="{{ ev.client_phone or '' }}" placeholder="+7 ___ ___ __ __" autocomplete="tel"></div>
-
+        <input type="tel" name="client_phone" value="{{ ev.client_phone or '' }}" placeholder="+7 ___ ___ __ __" autocomplete="tel" required></div>
       <div class="fld"><label class="q">Есть коробка?</label>
         <div class="seg">
           <label><input type="radio" name="has_box" value="yes" {{ 'checked' if ev.has_box is true }}><span>Да</span></label>
@@ -45,24 +49,8 @@
           <label><input type="radio" name="has_cord" value="yes" {{ 'checked' if ev.has_cord is true }}><span>Да</span></label>
           <label><input type="radio" name="has_cord" value="no" {{ 'checked' if ev.has_cord is false }}><span>Нет</span></label>
         </div></div>
-
-      <div class="fld"><label class="q">Фото и видео телефона</label>
-        <label class="drop">
-          <input type="file" name="files" multiple accept="image/*,video/*" style="display:none"
-                 onchange="document.getElementById('n').textContent = this.files.length + ' выбрано'">
-          <div style="font-weight:600">Нажмите, чтобы снять или выбрать</div>
-          <div class="muted">Телефон со всех сторон и экран с IMEI. Можно видео.</div>
-          <div class="muted" id="n" style="margin-top:6px"></div>
-        </label>
-      </div>
-
-      <button class="big" type="submit">Сохранить</button>
-      <div class="note">До {{ max_files }} файлов, каждый до {{ max_mb }} МБ. Данные увидит сотрудник при оформлении.</div>
+      <button class="big" type="submit">{{ 'Сохранить' if ev.number else 'Получить номер заявки' }}</button>
+      <div class="note">Данные увидит сотрудник при оформлении. Цену назовёт сотрудник.</div>
     </form>
   {% endif %}
-
-  <section class="sec"><h2>Загружено фото/видео: {{ media|length }}</h2>
-    {% if media %}<div class="thumbs">{% for m in media %}<span class="thumb">{{ '🎬' if m['вид'] == 'video' else '🖼️' }} {{ m['загружено'] }}</span>{% endfor %}</div>
-    {% else %}<div class="note">Пока ничего не загружено.</div>{% endif %}
-  </section>
 </main></body></html>

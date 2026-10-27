@@ -143,6 +143,10 @@ class Client:
         return self._req("PATCH", f"/api/kiosk/evaluations/{ev_id}",
                          json={"report": report, "snapshot_patch": snapshot_patch}, timeout=60)
 
+    def intake(self, ev_id):
+        """Состояние заявки: номер появляется только после имени и телефона клиента; ссылки для QR."""
+        return self._req("GET", f"/api/kiosk/evaluations/{ev_id}/intake", timeout=15)
+
     def decision(self, ev_id, kind):
         return self._req("POST", f"/api/kiosk/evaluations/{ev_id}/decision", json={"decision": kind})
 

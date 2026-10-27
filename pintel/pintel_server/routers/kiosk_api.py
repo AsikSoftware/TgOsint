@@ -95,7 +95,7 @@ def create_evaluation(body: EvaluationIn, kiosk: Kiosk = Depends(current_kiosk),
     ev, created = ev_service.create_from_kiosk(db, kiosk, body.model_dump())
     return {"id": ev.id, "номер": ev.number, "день": ev.day, "создана": created,
             "статус": ev.status, "ссылка_отчёта": f"{settings.public_url}/r/{ev.public_token}",
-            "ссылка_данных": ev_service.upload_url(ev),
+            "ссылка_данных": ev_service.upload_url(ev), "ссылка_медиа": ev_service.media_url(ev),
             "уже_приносили": bool(ev.device and ev.device.evaluations_count > 1)}
 
 
@@ -126,15 +126,23 @@ def set_details(ev_id: int, body: DetailsIn, kiosk: Kiosk = Depends(current_kios
     ev_service.set_client_details(db, kiosk, ev, name=body.client_name, phone=body.client_phone,
                                   box=body.has_box, cord=body.has_cord, panic=body.panic_full)
     ev_service.ensure_upload_token(db, ev)
-    return {"id": ev.id, "ссылка_загрузки": ev_service.upload_url(ev),
-            "токен_загрузки": ev.upload_token, "медиа": ev_service.media_list(ev)}
+    return {**ev_service.intake_state(ev), "ссылка_загрузки": ev_service.upload_url(ev),
+            "токен_загрузки": ev.upload_token}
 
 
 @router.get("/evaluations/{ev_id}/media")
 def list_media(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
     """Список загруженного клиентом по QR — киоск опрашивает, чтобы показать в меню."""
     ev = _own(db, kiosk, ev_id)
-    return {"id": ev.id, "ссылка_загрузки": ev_service.upload_url(ev), "медиа": ev_service.media_list(ev)}
+    return {**ev_service.intake_state(ev), "ссылка_загрузки": ev_service.upload_url(ev)}
+
+
+@router.get("/evaluations/{ev_id}/intake")
+def intake(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Состояние заявки для киоска: номер (только после имени и телефона), ссылки на страницы, медиа."""
+    ev = _own(db, kiosk, ev_id)
+    ev_service.ensure_upload_token(db, ev)
+    return ev_service.intake_state(ev)
 
 
 @router.post("/evaluations/{ev_id}/import")
@@ -148,7 +156,7 @@ def import_to_ocenka(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSe
     except Exception as e:                                       # noqa: BLE001
         raise HTTPException(502, f"импорт в Оценку не удался: {e}")
     audit.log(db, None, "evaluation.ocenka_import",
-              f"Оценка №{ev.number} → сделка Оценки №{res.get('device_id')}",
+              f"Оценка {ev_service.label(ev)} → сделка Оценки №{res.get('device_id')}",
               entity="evaluation", entity_id=ev.id, kiosk=kiosk, details=res)
     return {"id": ev.id, "номер_сделки": res.get("device_id"), **res}
 

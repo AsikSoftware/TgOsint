@@ -35,7 +35,7 @@
     нужны разбору в первую очередь.</div>
   <div class="grid4" style="margin-top:10px">
     {% for ios, fmt, n in срез %}
-      <div class="sig"><span>{{ ios }} · {{ fmt }}</span><span class="{{ 'warn' if fmt in ('—', 'не распознан') else 'ok' }}">{{ n }}</span></div>
+      <div class="sig"><span>{{ ios }} · {{ fmt }}</span><span class="{{ 'warn' if fmt == 'не распознан' else 'ok' }}">{{ n }}</span></div>
     {% else %}<div class="note">Пока пусто.</div>{% endfor %}
   </div>
 </div>

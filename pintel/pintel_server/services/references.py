@@ -82,7 +82,10 @@ def rows(db, limit=300):
         важн, почему = rank(ev)
         out.append({"id": ev.id, "номер": ev.number, "когда": ev.created_at,
                     "модель": ev.model_name or ev.model_code or "?", "ios": ev.ios or "?",
-                    "формат": _fmt(ev) or "—", "строк": len(_raw(ev).splitlines()),
+                    # «не распознан» и «нет журнала» — разные вещи: первое наша дыра в разборе,
+                    # второе значит, что клиент просто не открывал экран на телефоне
+                    "формат": _fmt(ev) or ("не распознан" if _raw(ev) else "нет журнала"),
+                    "строк": len(_raw(ev).splitlines()),
                     "подтверждено": bool(((ev.report or {}).get("детали_вердикт") or {}).get("apple_подтверждено")),
                     "правда": bool(_truth(ev)["детали"]), "важность": важн, "почему": почему,
                     "выгружен": ev.reference_at})

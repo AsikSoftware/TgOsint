@@ -81,6 +81,19 @@ REPAIRED_RE = re.compile(r"component: (\w+) isComponentRepairedUsing(\w+): (\d)"
 PREFLIGHT_RE = re.compile(r"\b(\w+)(?:\s+result:)?\s+failed preflight")
 AUTHCP_RE = re.compile(r"AuthCP Components: \((.*?)\n\)", re.S)
 BATTERY_STATE_RE = re.compile(r"Battery Health State\{(.*?)\n\}", re.S)
+# iOS 15 и 16 пишут доверие к модулю отдельной строкой, а не словарём AuthCP: в прошивках
+# есть «isTrustedForUI: %@», «isTrustedForUI failed» и ключи аналитики
+# com.apple.accessories.hwComponent.isTrustedForUI.failure.battery_/.display_ — то есть
+# на этих версиях отказ по детали приходит именно так. «missing» вердиктом НЕ считаем:
+# это внутреннее «ключа нет», а не «деталь не наша».
+TRUST_LINE_RE = re.compile(r"\b(\w+)\s+isTrustedForUI(?::\s*(\w+)|\s+(failed))")
+# iOS 16 пишет ремонт Apple одной записью на событие, а не по деталям:
+# «[CRRepairHistory: timeStr:…: repairDate:… repairCenter:…: dataClasses:…:»
+# timeStr содержит двоеточия времени, поэтому до «: repairDate:» идём нежадно
+CRHIST_RE = re.compile(r"CRRepairHistory: timeStr:(.*?): repairDate:(\S*) repairCenter:(.*?):")
+# «fetched RCHL successfully: (null) length = 0» (iOS 18) и «fetched RCHL successfully:%@»
+# (iOS 16) — во втором случае длины нет вовсе, но непустая выдача уже значит, что записи есть
+RCHL_ANY_RE = re.compile(r"fetched RCHL successfully:\s*(\S*)")
 _KV_RE = re.compile(r'^\s*"?([A-Za-z]\w*)"?\s*=\s*"?(-?\d+)"?\s*;', re.M)
 # Имена компонентов телефона → наши детали
 COMPONENT_ALIAS = {"CoverGlass": "Display", "TouchController": "Display", "RCamera": "Camera",
@@ -95,7 +108,7 @@ RELATED = ("repair", "CoreRepair", "mobilerepaird")
 OPENED = ("updateSpecifiersWithCompletionHandler", "corerepair.preflightControl", "Getting local sealing manifest",
           "fetched RCHL", "delta components", "No delta components found", "repairHistoryForUI",
           "Preferences(CoreRepair", "CoreRepairUI", "Unsealed:", "systemhealth", "isComponentRepairedUsing",
-          "failed preflight", "AuthCP Components")
+          "failed preflight", "AuthCP Components", "isTrustedForUI", "CRRepairHistory")
 # детали, которые показывает раздел на iOS 18 у всех моделей с Face ID
 BASE_COMPONENTS = ("Battery", "Display", "Camera", "FaceID")
 DELTA_RE = re.compile(r"delta components:\s*\{(.*?)\}\s*$", re.S)
@@ -142,7 +155,7 @@ def synthesize(meta):
     if delta is None and unsealed is None:
         return {}
     unknown = list(dict.fromkeys(list(delta or []) + list(unsealed or [])))
-    rchl = meta.get("rchl_байт")
+    rchl = meta.get("rchl_байт") or (1 if meta.get("rchl_непусто") else None)
     items = {}
     if rchl:
         items["RepairRecords"] = {"деталь": "Записи о ремонте Apple", "код": 0, "меняли": True, "бу": False,
@@ -243,6 +256,11 @@ def parse_components(text):
             nm = re.search(r"ComponentName\s*=\s*(\w+)", block)
             if nm:
                 out["доверие"][part(nm.group(1))] = {k: int(v) for k, v in kv.items()}
+    for name, val, fail in TRUST_LINE_RE.findall(text):
+        key = part(name)
+        if key in HEALTH_PARTS or name in HEALTH_PARTS:
+            плохо = bool(fail) or str(val).strip().lower() in ("0", "false", "no")
+            out["доверие"].setdefault(key, {})["isTrustedForUI"] = 0 if плохо else 1
     # Доверие к модулю — второй источник того же вердикта. Смысл подтверждён на двух эталонах:
     # у 15 Pro с «Неизвестно» на экране TouchController (это дисплей) пришёл с isTrusted = 0,
     # у чистого 14 Pro — с 1, при AuthPassed = 1 у обоих (значит дело не в самой проверке подписи).
@@ -342,12 +360,19 @@ class Listener:
             self.meta["раздел_открыт"] = True
             self.log("на телефоне открыт раздел «Об этом устройстве» / история обслуживания")
         if any(k in line for k in ("systemhealth", "isComponentRepairedUsing", "failed preflight",
-                                   "AuthCP Components", "Battery Health State")):
+                                   "AuthCP Components", "Battery Health State", "isTrustedForUI")):
             self.buf.append(line if line.endswith("\n") else line + "\n")
             self._apply_components()
         m = RCHL_RE.search(line)
         if m:
             self.meta["rchl_байт"] = int(m.group(1))
+        else:
+            m = RCHL_ANY_RE.search(line)
+            if m and m.group(1) and not m.group(1).startswith("(null)"):
+                self.meta["rchl_непусто"] = True        # длины нет (iOS 16), но выдача непустая
+        m = CRHIST_RE.search(line)
+        if m:
+            self._apply_repair_record(m.group(2).strip(), m.group(3).strip())
         m = SEAL_RE.search(line)
         if m and len(self.meta["печать"]) < 60:
             self.meta["печать"][m.group(2)] = m.group(1)[:120]
@@ -399,6 +424,24 @@ class Listener:
             плохие = [v["деталь"] for v in comp["детали"].values() if v.get("неизвестная")]
             self.log("проверка компонентов Apple: " + (", ".join(плохие) + " — не подтверждены" if плохие
                                                        else "замечаний нет"))
+
+    def _apply_repair_record(self, дата, центр):
+        """Запись о ремонте Apple из журнала iOS 16: событие с датой и сервисным центром,
+        без разбивки по деталям. Какие детали меняли, такая запись не говорит, поэтому
+        вердикт по ней один: у Apple есть записи — смотреть на экране телефона."""
+        self.items.setdefault("RepairRecords", {
+            "деталь": "Записи о ремонте Apple", "код": 0, "меняли": True, "бу": False,
+            "дата": дата if re.match(r"\d{4}-\d{2}-\d{2}", дата or "") else "",
+            "записи_без_деталей": True, "источник": "записи о ремонте",
+            "центр": центр[:40] if центр else ""})
+        self.meta["раздел_открыт"] = True
+        self.meta.setdefault("ремонт_apple", {"дата": дата, "центр": центр})
+        if not self.meta.get("формат"):
+            self.meta["формат"] = "записи о ремонте (iOS 16)"
+        self.last_related_at = time.monotonic()
+        if not self.found_at:
+            self.found_at = time.monotonic()
+            self.log(f"у Apple есть запись о ремонте{' от ' + дата if дата else ''}")
 
     def _apply_seal(self):
         """Детали, которых нет в заводской печати (delta/Unsealed), — «неизвестного происхождения»,

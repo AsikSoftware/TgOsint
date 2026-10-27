@@ -325,3 +325,57 @@ def test_preflight_refusal_is_caught_in_both_wordings(строка):
     comp = rh.parse_components(строка + "\n")
     assert comp["преflight"] == ["Display"]
     assert comp["детали"]["Display"]["неизвестная"]
+
+
+# ---------------------------------------------------------------- iOS 15 и 16
+# Разобрано по прошивкам 15.2.1 (iPhone 11) и 16.6.1 (iPhone 14 Pro). Там нет ни
+# «delta components», ни «CRRepairHistoryItem»: доверие к модулю приходит отдельной
+# строкой, а ремонт Apple — одной записью на событие.
+def test_trust_line_without_authcp_block():
+    """iOS 15/16: «Display isTrustedForUI: 0» — отказ по детали без словаря AuthCP."""
+    comp = rh.parse_components(
+        "Oct 27 10:00:01 iPhone mobilerepaird(CoreRepairCore)[1] <Notice>: Display isTrustedForUI: 0\n"
+        "Oct 27 10:00:01 iPhone mobilerepaird(CoreRepairCore)[1] <Notice>: Battery isTrustedForUI: 1\n")
+    assert comp["детали"]["Display"]["неизвестная"] and comp["детали"]["Display"]["меняли"]
+    assert "Battery" not in comp["детали"]              # доверенный модуль проблемой не становится
+
+
+def test_trust_line_failed_wording():
+    comp = rh.parse_components("Oct 27 10:00:01 iPhone mobilerepaird[1] <Notice>: "
+                               "Display isTrustedForUI failed\n")
+    assert comp["детали"]["Display"]["неизвестная"]
+
+
+def test_trust_line_missing_is_not_a_verdict():
+    """«missing» — это «ключа нет», а не «деталь не наша». Ложный СТОП недопустим."""
+    comp = rh.parse_components("Oct 27 10:00:01 iPhone mobilerepaird[1] <Notice>: "
+                               "Display isTrustedForUI missing\n")
+    assert not comp.get("детали"), comp
+
+
+def test_ios16_repair_record_is_read():
+    """iOS 16 пишет ремонт одной записью на событие, без разбивки по деталям:
+    вердикт по ней один — у Apple есть записи, смотреть на экране телефона."""
+    lst = _прогнать(["Oct 27 10:00:01 iPhone Preferences(CoreRepairUI)[1] <Notice>: "
+                     "[CRRepairHistory: timeStr:2024-03-01 10:00:00: repairDate:2024-03-01 "
+                     "repairCenter:AASP-Almaty: dataClasses:(Battery):]\n"])
+    зап = lst.items["RepairRecords"]
+    assert зап["меняли"] and зап["записи_без_деталей"] and зап["дата"] == "2024-03-01"
+    assert зап["центр"] == "AASP-Almaty" and lst.meta["формат"].startswith("записи о ремонте")
+
+
+def test_rchl_without_length_still_means_records_exist():
+    """iOS 18 пишет «length = 0», iOS 16 — «fetched RCHL successfully:<данные>» без длины.
+    Непустая выдача уже значит, что записи о ремонте есть, и «всё родное» выдавать нельзя."""
+    ПРЕФИКС = "Oct 27 10:00:01 iPhone corerepaird(CoreRepairCore)[1] <Notice>: "
+    lst = _прогнать([ПРЕФИКС + "fetched RCHL successfully:<CRFDRSeal: 0x1047a2b10>\n",
+                     ПРЕФИКС + "Unsealed: {\n}\n"])
+    assert lst.meta.get("rchl_непусто") is True          # длины нет, но выдача непустая
+    assert lst.items["RepairRecords"]["записи_без_деталей"]
+    assert "Battery" not in lst.items                   # «не меняли» по базовым деталям не выдаём
+
+    # а где длина есть, читаем её как раньше, и пустая выдача остаётся пустой
+    чистый = _прогнать([ПРЕФИКС + "fetched RCHL successfully: (null) length = 0\n",
+                        ПРЕФИКС + "Unsealed: {\n}\n"])
+    assert чистый.meta["rchl_байт"] == 0 and not чистый.meta.get("rchl_непусто")
+    assert not чистый.items["Battery"]["меняли"] and "RepairRecords" not in чистый.items

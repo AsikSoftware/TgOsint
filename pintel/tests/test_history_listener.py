@@ -487,3 +487,26 @@ def test_snapshot_does_not_change_under_the_caller():
     lst._feed(СЛОВАРЬ_ПЛОХОЙ)
     assert not снято["Display"].get("неизвестная")     # раннее состояние осталось прежним
     assert lst.items["Display"]["неизвестная"]         # а у слушателя вердикт обновился
+
+
+ЗАПИСЬ_С_ЗАМЕНОЙ = ('Oct 27 06:59:05 iPhone Preferences(CoreRepairCore)[1] <Notice>: repairHistoryForUI:{\n'
+                    '    Battery = "[CRRepairHistoryItem: componentName:Battery: componentType:1024: '
+                    'isRepaired:0: isUsed:0: repairDate:(null):]";\n'
+                    '    Display = "[CRRepairHistoryItem: componentName:Display: componentType:1025: '
+                    'isRepaired:1: isUsed:0: repairDate:2026-02-02:]";\n')
+СЛОВАРЬ_ЧИСТЫЙ = ('Oct 27 06:59:05 iPhone Preferences(CoreRepairKit)[1] <Notice>: systemhealth {\n'
+                  '    Battery = 1;\n    Display = 1;\n    Camera = 1;\n    FaceID = 1;\n}\n')
+
+
+def test_repair_is_visible_on_ios26_0_without_component_lines():
+    """В прошивке 26.0.1 нет строк isComponentRepairedUsing — они приходят только к 26.6.
+    Но замена на таком телефоне всё равно видна: её несут сами записи (isRepaired с датой),
+    а подтверждение даёт словарь состояния. Ждать отсутствующий формат не нужно, и никакая
+    правка не имеет права сделать его обязательным."""
+    from pintel_core.analysis import parts as parts_mod
+    lst = _прогнать([СЛОВАРЬ_ЧИСТЫЙ, ЗАПИСЬ_С_ЗАМЕНОЙ])
+    assert lst.items["Display"]["меняли"] and lst.items["Display"]["дата"] == "2026-02-02"
+    v = parts_mod.verdict({}, {}, lst.items, None, None, hist_meta=lst.meta, apple_supported=True)
+    assert v["итог"] == "ремонт" and v["apple_подтверждено"] is True
+    экран = [d for d in v["детали"] if d["ключ"] == "Display"][0]
+    assert экран["статус"] == "repaired" and "2026-02-02" in экран["почему"]

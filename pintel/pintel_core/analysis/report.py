@@ -2,6 +2,7 @@
 """Слепок → отчёт. Главный принцип: отсутствие данных НЕ превращается в вердикт."""
 from . import battery, legal, pairing, parts as parts_mod, passport, serials, storage
 from ..devicelink import jailbreak, nand
+from ..devicelink import panic as panic_mod
 from ..devicelink.nodes import ENCLOSURE_COLOURS, num
 from ..external import sickw as sickw_mod
 
@@ -51,6 +52,7 @@ def build(snap):
     if not pas["цвет"] and pas["цвет_по_коду"]:
         pas["цвет"] = pas["цвет_по_коду"]
     jb = snap.get("jailbreak")
+    pan = snap.get("panic") or {}
     # Единый вердикт по деталям: кабель (привязка + печать Apple) — основа, журнал — обогащение.
     parts_v = parts_mod.verdict(snap, sig, hist, bat, seal, snap.get("repair_history_meta") or {},
                                 apple_supported=hist_ok)
@@ -160,6 +162,12 @@ def build(snap):
             warn.append("Sickw: аппарат выдан Apple по замене (Replaced Device)")
     if jb and jb.get("проверено") and jb.get("признаки"):
         warn.append("джейлбрейк: " + jailbreak.verdict(jb) + " — сбросить до заводских перед выкупом")
+    # Panic full — отчёт о панике ядра: на выкупе это признак проблемы платы, и спрашивают
+    # о нём отдельным вопросом. Не стоп: решает оценщик, но знать он должен.
+    if pan.get("panic_full"):
+        warn.append(panic_mod.словами(pan) + " — обычно это плата, проверьте внимательнее")
+    elif pan and not pan.get("проверено"):
+        unknown.append("panic full: " + str(pan.get("ошибка") or "не прочитано"))
 
     if stop:
         verdict = ("ПРОБЛЕМНЫЙ", "; ".join(stop[:3]))
@@ -181,6 +189,7 @@ def build(snap):
         "детали_вердикт": parts_v,
         "sickw": sk,
         "джейлбрейк": jailbreak.verdict(jb),
+        "паника": pan,
         "apple_подтверждение_возможно": bool(hist_ok and подтверждение_возможно),
         "mobilegestalt": ("недоступен" if "недоступен" in mg else ("есть" if mg else "не запрашивался")),
         "mobilegestalt_канал": mg.get("_канал"),

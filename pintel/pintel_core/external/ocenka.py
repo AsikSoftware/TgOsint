@@ -159,6 +159,10 @@ def комментарий_оценщика(rep: dict, сверка: str = "", �
     если_замки = замки(rep)
     if если_замки:
         куски.append("Замки: " + ", ".join(если_замки))
+    пан = rep.get("паника") or {}
+    if пан.get("panic_full"):
+        from ..devicelink import panic as panic_mod
+        куски.append(panic_mod.словами(пан).upper())
     бат = rep.get("батарея") or {}
     if бат.get("циклы"):
         куски.append(f"Батарея: {бат.get('здоровье_%') or '?'}%, {бат['циклы']} циклов")

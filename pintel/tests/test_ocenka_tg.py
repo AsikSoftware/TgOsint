@@ -66,6 +66,9 @@ def test_card_shows_what_will_be_written():
     assert "250 000 ₸" in текст                                  # цена читается, а не слипается
     assert "Не был в ремонте" in текст and "⚠ Найти iPhone вкл." in текст
     assert "Зама" in текст and "+77058837953" in текст
+    assert "panic full" not in текст                             # паники нет — и строки нет
+    с_паникой = ocenka_tg.карточка(ocenka.посылка({**ДАННЫЕ, "panic_full": True}, "7KQ4M"))
+    assert "⚠ panic full" in с_паникой
     assert "коробка" in текст and "шнур" not in текст.split("SIM:")[1].split("\n")[0]
 
 

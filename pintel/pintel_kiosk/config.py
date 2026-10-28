@@ -30,6 +30,10 @@ DEFAULTS = {
     # Архив слепков: своего сервера нет, поэтому файлы уходят в закрытый чат Telegram
     "archive_chat_id": "",        # чат для слепков (пусто — не выгружать)
     "archive_snapshots": False,   # True — слать и полные слепки, в них серийники и IMEI
+    # Обновление по интернету: сборки лежат в релизах GitHub
+    "update_repo": "AsikSoftware/TgOsint",
+    "update_token": "",           # токен только на чтение релизов (пусто — не проверять)
+    "update_asset": "pintel-kiosk_Windows_x64.zip",
 }
 
 

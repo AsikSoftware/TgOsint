@@ -97,6 +97,10 @@ jobs:
       - name: Сборка киоска
         run: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
 
+      - name: Метка сборки
+        # по ней программа понимает, что вышла новая версия, и предлагает обновиться
+        run: python -c "import json; json.dump({'тег': 'doctor-${{ github.run_number }}'}, open('dist/pintel-kiosk/build_info.json', 'w', encoding='utf-8'), ensure_ascii=False)"
+
       - name: Дымовой тест киоска (импорт без экрана)
         shell: pwsh
         run: |

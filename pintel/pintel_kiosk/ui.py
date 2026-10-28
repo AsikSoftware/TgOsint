@@ -65,6 +65,9 @@ QLabel#chip_warn { background: %(warnbg)s; color: %(warntext)s; border-radius: 2
 QLabel#chip_bad { background: %(badbg)s; color: %(badtext)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
 QPushButton#primary { background: %(action)s; color: white; border-radius: 20px; font-size: 28px; font-weight: 700; min-height: 80px; border: none; }
 QPushButton#primary:pressed { background: %(action_dark)s; }
+QPushButton#update { background: %(tint)s; color: %(brand)s; border: 2px solid %(tint_border)s;
+    border-radius: 14px; font-size: 20px; font-weight: 700; min-height: 54px; padding: 0 24px; }
+QPushButton#update:pressed { background: %(tint_border)s; }
 QLabel#footer { font-size: 18px; font-weight: 500; color: %(muted)s; }
 """ % C
 
@@ -518,6 +521,10 @@ class Screen(QWidget):
 # ---------- 1. Ожидание ----------
 
 class MainScreen(Screen):
+    """Экран ожидания. Отсюда же ставится обновление: ездить по точкам с флешкой незачем."""
+
+    обновить = Signal()
+
     начать = Signal()
 
     def __init__(self, point=""):
@@ -537,8 +544,8 @@ class MainScreen(Screen):
         lead.setMaximumWidth(760)
         left.addWidget(lead)
         left.addSpacing(48)
-        steps = ("Нажмите «Начать оценку»", "Запишем имя и телефон клиента",
-                 "Подключим iPhone и прочитаем его")
+        steps = ("Нажмите «Начать оценку»", "Подключите iPhone кабелем",
+                 "Заполним сделку и отправим в Оценку")
         for i, t in enumerate(steps, 1):
             r = QHBoxLayout()
             r.setSpacing(22)
@@ -557,6 +564,13 @@ class MainScreen(Screen):
         self.b_начать.setMinimumWidth(420)
         self.b_начать.clicked.connect(self.начать.emit)
         left.addWidget(self.b_начать, 0, Qt.AlignLeft)
+        left.addSpacing(18)
+        self.b_обновить = QPushButton("Обновить программу")
+        self.b_обновить.setObjectName("update")
+        self.b_обновить.setCursor(Qt.PointingHandCursor)
+        self.b_обновить.clicked.connect(self.обновить.emit)
+        self.b_обновить.setVisible(False)
+        left.addWidget(self.b_обновить, 0, Qt.AlignLeft)
         left.addStretch(1)
         body.addLayout(left, 1)
         self.card = ConnectCard()
@@ -574,6 +588,13 @@ class MainScreen(Screen):
     def set_device(self, state):
         """wait | found | nodriver — состояние правой карточки."""
         self.card.set_state(state)
+
+    def показать_обновление(self, текст="", занято=False):
+        """Новая версия найдена — кнопка появляется. Пусто — прячем."""
+        self.b_обновить.setVisible(bool(текст))
+        self.b_обновить.setEnabled(not занято)
+        if текст:
+            self.b_обновить.setText(текст)
 
 
 class ConnectCard(QFrame):

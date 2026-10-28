@@ -176,6 +176,8 @@ class KioskWindow(QMainWindow):
         for s in (self.s_main, self.s_work):
             self.stack.addWidget(s)
         self.s_main.начать.connect(self.начать_сделку)
+        self.s_main.обновить.connect(self.обновиться)
+        self.обновление = None
         self.s_work.отправить.connect(self.отправить_в_оценку)
         self.s_work.заново.connect(self.go_home)
         self.s_work.печать.connect(self.напечатать_чек)
@@ -213,6 +215,7 @@ class KioskWindow(QMainWindow):
         self._try_server_config()
         self._убрать_старое()
         self._выгрузить_архив()
+        self._проверить_обновление()
 
     # ---------- служебное ----------
     def show_screen(self, w):
@@ -256,6 +259,57 @@ class KioskWindow(QMainWindow):
                          + (f", {итог['ошибка']}" if итог["ошибка"] else ""))
             return итог
         self._run(job)
+
+    def _проверить_обновление(self):
+        """Есть ли свежая сборка. Нашлась — показываем кнопку на экране ожидания; сами
+        посреди работы ничего не подменяем."""
+        from . import updater
+        cfg = self.cfg
+        if not (cfg.get("update_repo") and cfg.get("update_token")):
+            return
+        t = self._run(lambda: updater.проверить(cfg["update_repo"], cfg["update_token"],
+                                                cfg.get("update_asset") or ""))
+        t.ok.connect(self._обновление_найдено)
+
+    def _обновление_найдено(self, итог):
+        self.обновление = итог if (итог or {}).get("есть") else None
+        if self.обновление:
+            log_line("обновление: доступно " + str(итог.get("тег")))
+            self.s_main.показать_обновление(f"Обновить программу · {итог.get('тег')}")
+        elif (итог or {}).get("почему"):
+            log_line("обновление: " + str(итог["почему"]))
+
+    def обновиться(self):
+        """Скачать и подменить папку. Программа после этого закрывается — её запустит
+        обратно сам сценарий подмены."""
+        from . import updater
+        if not self.обновление or self.state != "idle":
+            return
+        тег, cfg = self.обновление["тег"], self.cfg
+        self.s_main.показать_обновление("Скачиваем…", занято=True)
+
+        def job():
+            архив = os.path.join(data_dir(), "update", f"{тег}.zip")
+            updater.скачать(self.обновление["url"], cfg["update_token"], архив)
+            новая = updater.распаковать(архив, os.path.join(data_dir(), "update", тег))
+            установлена = config.app_dir()
+            exe = sys.executable if getattr(sys, "frozen", False) else os.path.join(
+                установлена, "pintel-kiosk.exe")
+            return updater.применить(новая, установлена, exe, os.path.join(data_dir(), "update"))
+
+        t = self._run(job)
+        t.ok.connect(self._обновление_готово)
+        t.err.connect(self._обновление_сорвалось)
+
+    def _обновление_готово(self, путь):
+        log_line("обновление: запущен сценарий подмены " + str(путь))
+        self.s_main.показать_обновление("Перезапуск…", занято=True)
+        QTimer.singleShot(1200, self.close)        # дать сценарию стартовать
+
+    def _обновление_сорвалось(self, текст):
+        log_line("обновление не удалось: " + текст)
+        self.s_main.показать_обновление("Обновление не удалось — попробуйте позже")
+        self.s_main.b_обновить.setEnabled(True)
 
     def _try_server_config(self):
         def job():

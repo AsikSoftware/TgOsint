@@ -459,8 +459,7 @@ class KioskWindow(QMainWindow):
                 "imei": пас.get("imei"), "imei_все": [пас.get("imei2")],
                 "замки": ocenka.замки(rep),
             }
-            посылка = ocenka.посылка(данные, код, литера=cfg.get("ocenka_shop_litera") or "",
-                                     точка=cfg.get("point") or "")
+            посылка = ocenka.посылка(данные, код, точка=cfg.get("point") or "")
             return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка,
                                        валюта=cfg.get("currency", "₸"))
 

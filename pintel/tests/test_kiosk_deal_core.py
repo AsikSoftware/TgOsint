@@ -24,7 +24,7 @@ def ядро():
 
 
 def посылка(**замены):
-    п = {"версия": 1, "код": "7KQ4M", "точка": "16/38", "литера": "16/38",
+    п = {"версия": 1, "код": "7KQ4M", "точка": "16/38",
          "клиент": {"имя": "Зама", "телефон": "+77058837953"},
          "imei": ["350585886690250", "350585881725184"], "imei_проверен": True,
          "сделка": {"model": "iPhone 14 Pro", "code_name": "iPhone15,2", "ddr": 256,
@@ -57,9 +57,26 @@ def test_payload_reads_from_bytes(ядро):
 def test_video_is_required_before_the_deal_is_created(ядро):
     """Карточку Оценка открывает через InputMediaVideo(video_phone) без проверки на пусто:
     сделка без видео не открывается вовсе. Знает об этом только бот — он видит медиа."""
-    нет = ядро.проверить(посылка(), {"video": None, "photos": None})
+    нет = ядро.проверить(посылка(), {"video": None, "photos": None, "shop_id": 7})
     assert нет and "видео" in нет[0]
-    assert ядро.проверить(посылка(), {"video": "BAACAgIAAx0", "photos": None}) == []
+    assert ядро.проверить(посылка(), {"video": "BAACAgIAAx0", "shop_id": 7}) == []
+
+
+@pytest.mark.parametrize("staff_id,shop_id,ждём", [
+    (2, 7, 7),          # продавец закреплён за точкой — она и есть точка сделки
+    (2, None, None),    # продавец без точки: догадываться нельзя, спросим
+    (1, 7, None),       # администратор ездит по точкам — выбирает сам после медиа
+    (1, None, None),
+    (3, 7, None),       # клиент вообще не оценщик
+])
+def test_shop_comes_from_who_sent_the_media(ядро, staff_id, shop_id, ждём):
+    assert ядро.точка_сотрудника(staff_id, shop_id) == ждём
+
+
+def test_deal_without_a_shop_is_refused(ядро):
+    """Сделка без магазина теряется в отчётах — лучше не создать её вовсе."""
+    нет = ядро.проверить(посылка(), {"video": "v", "shop_id": None})
+    assert нет == ["точка: выберите её в боте"]
 
 
 def test_check_names_everything_missing_at_once(ядро):

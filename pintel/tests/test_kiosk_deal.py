@@ -157,7 +157,7 @@ def test_export_sends_the_payload_to_the_bot(окно, monkeypatch):
     """Что уходит боту: посылка с кодом, ценой и клиентом — и ничего про медиа."""
     import httpx
     окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
-                     "ocenka_chat_id": "-1001", "ocenka_shop_litera": "16/38"})
+                     "ocenka_chat_id": "-1001"})
     окно.last = {"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip")}
     окно.клиент = {"имя": "Зама", "телефон": "+77058837953"}
     окно.новый_код_медиа()
@@ -173,7 +173,7 @@ def test_export_sends_the_payload_to_the_bot(окно, monkeypatch):
     окно.tasks[-1].wait(5000)                      # отправка идёт в отдельном потоке
     assert ушло, "посылка не ушла"
     посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
-    assert посылка["код"] == окно.код_медиа and посылка["литера"] == "16/38"
+    assert посылка["код"] == окно.код_медиа and посылка["точка"] == "16/38"
     assert посылка["сделка"]["model"] == "iPhone 14 Pro"
     assert посылка["сделка"]["price_grade_auto"] == 250000
     assert посылка["клиент"]["телефон"] == "+77058837953"

@@ -49,7 +49,7 @@ router_kiosk_media = Router()
 # переходов на бота. Фильтруем по тексту, а не параметрами CommandStart: так обработчик
 # работает в любой версии aiogram 3 и наверняка не перехватит чужой /start.
 СТАРТ = re.compile(r"^/start(?:@\w+)?\s+p([A-Z0-9]{4,12})\b")
-ОЦЕНЩИКИ = (1, 2)                      # staff_id в Оценке: 1 — админ, 2 — продавец, 3 — клиент
+ТОЧКА = re.compile(r"^kmedia_shop_([A-Z0-9]{4,12})_(\d+)$")
 
 
 class KioskMediaState(StatesGroup):
@@ -66,7 +66,7 @@ async def _сотрудник(chat_id: int):
     """Кто это. Не сотрудник Pintel — не оценщик, и медиа от него не принимаем."""
     from database.database import AsyncOrm
     user = await AsyncOrm.get_user_chat_id(chat_id=chat_id)
-    return user if (user and user.staff_id in ОЦЕНЩИКИ) else None
+    return user if (user and user.staff_id in kiosk_core.ОЦЕНЩИКИ) else None
 
 
 def _имя(user) -> str:
@@ -78,20 +78,75 @@ def _имя(user) -> str:
 async def _строка(код: str):
     async with async_session_factory() as session:
         res = await session.execute(text(
-            "SELECT id, video, photos, done, device_id, user_id FROM kiosk_media WHERE code = :c"),
-            {"c": код})
+            "SELECT id, video, photos, done, device_id, user_id, shop_id "
+            "FROM kiosk_media WHERE code = :c"), {"c": код})
         return res.mappings().first()
 
 
-async def _завести(код: str, user_id, chat_id: int) -> None:
+async def _завести(код: str, user_id, chat_id: int, shop_id=None) -> None:
     """Строку обмена создаёт бот: с точки в базу хода нет. Код самодостаточен — проверять
     его не у кого, поэтому на первое открытие ссылки просто заводим строку."""
     async with async_session_factory() as session:
         await session.execute(text(
-            "INSERT INTO kiosk_media (code, user_id, chat_id) VALUES (:c, :u, :ch) "
-            "ON CONFLICT (code) DO UPDATE SET user_id = :u, chat_id = :ch"),
-            {"c": код, "u": user_id, "ch": chat_id})
+            "INSERT INTO kiosk_media (code, user_id, chat_id, shop_id) VALUES (:c, :u, :ch, :s) "
+            # COALESCE: админ мог уже выбрать точку, а потом пересканировать QR —
+            # повторное открытие ссылки не должно стирать его выбор
+            "ON CONFLICT (code) DO UPDATE SET user_id = :u, chat_id = :ch, "
+            "shop_id = COALESCE(:s, kiosk_media.shop_id)"),
+            {"c": код, "u": user_id, "ch": chat_id, "s": shop_id})
         await session.commit()
+
+
+async def _магазины() -> list:
+    async with async_session_factory() as session:
+        res = await session.execute(text(
+            "SELECT id, litera, shop_name FROM shops ORDER BY shop_name"))
+        return [dict(r) for r in res.mappings()]
+
+
+async def _последняя_точка(user_id):
+    """Где этот человек оформлял прошлый раз. Админ ездит по точкам, но подряд обычно
+    работает на одной — пусть она будет первой кнопкой, а не одной из двух десятков."""
+    if not user_id:
+        return None
+    async with async_session_factory() as session:
+        return (await session.execute(text(
+            "SELECT shop_id FROM kiosk_media WHERE user_id = :u AND shop_id IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1"), {"u": user_id})).scalar()
+
+
+async def _поставить_точку(код: str, shop_id: int) -> None:
+    async with async_session_factory() as session:
+        await session.execute(text("UPDATE kiosk_media SET shop_id = :s WHERE code = :c"),
+                              {"s": shop_id, "c": код})
+        await session.commit()
+
+
+async def _имя_точки(shop_id):
+    if not shop_id:
+        return ""
+    async with async_session_factory() as session:
+        return (await session.execute(text("SELECT shop_name FROM shops WHERE id = :i"),
+                                      {"i": shop_id})).scalar() or ""
+
+
+async def _кнопки_точек(код: str, user_id=None):
+    """Список магазинов Оценки. Прошлая точка этого человека — первой строкой."""
+    магазины = await _магазины()
+    прошлая = await _последняя_точка(user_id)
+    kb = InlineKeyboardBuilder()
+    первая = next((м for м in магазины if м["id"] == прошлая), None)
+    if первая:
+        kb.button(text="⭐ " + первая["shop_name"], callback_data=f"kmedia_shop_{код}_{первая['id']}")
+    for м in магазины:
+        if первая and м["id"] == первая["id"]:
+            continue
+        kb.button(text=м["shop_name"], callback_data=f"kmedia_shop_{код}_{м['id']}")
+    if первая:
+        kb.adjust(1, 2)                    # прошлая точка — своей строкой, остальные по две
+    else:
+        kb.adjust(2)
+    return kb.as_markup()
 
 
 async def _добавить(код: str, file_id: str, видео: bool) -> None:
@@ -126,11 +181,15 @@ async def открыть_приём(message: Message, state: FSMContext):
         await message.answer(f"По этому коду сделка № {строка['device_id']} уже создана.")
         return
 
-    await _завести(код, сотрудник.id, message.chat.id)
+    shop_id = kiosk_core.точка_сотрудника(сотрудник.staff_id, сотрудник.shop_id)
+    await _завести(код, сотрудник.id, message.chat.id, shop_id)
     await state.set_state(KioskMediaState.приём)
     await state.update_data(kmedia_code=код)
+    точка = (f"Точка: <b>{await _имя_точки(shop_id)}</b> — ваша.\n" if shop_id
+             else "Точку выберете кнопкой, когда пришлёте медиа.\n")
     await message.answer(
-        f"Принимаю медиа для сделки, {сотрудник.first_name or 'коллега'}.\n\n"
+        f"Принимаю медиа для сделки, {сотрудник.first_name or 'коллега'}.\n"
+        f"{точка}\n"
         "Пришлите <b>видео телефона</b> — без него сделка не открывается, — и фото.\n"
         "Потом вернитесь к программе и отправьте оценку.",
         reply_markup=_кнопка_готово(код),
@@ -145,20 +204,29 @@ async def принять(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    if message.video or message.video_note:
-        file_id = (message.video or message.video_note).file_id
-        await _добавить(код, file_id, видео=True)
-        await message.answer("Видео принято.", reply_markup=_кнопка_готово(код))
-        return
-    if message.photo:
+    видео = bool(message.video or message.video_note)
+    if видео:
+        await _добавить(код, (message.video or message.video_note).file_id, видео=True)
+        текст = "Видео принято."
+    elif message.photo:
         await _добавить(код, message.photo[-1].file_id, видео=False)
-        await message.answer("Фото принято.", reply_markup=_кнопка_готово(код))
+        текст = "Фото принято."
+    else:
+        # документом присылают, когда отправляют «без сжатия» — это те же фото и видео
+        mime = (message.document.mime_type or "") if message.document else ""
+        if not mime.startswith(("image/", "video/")):
+            return
+        видео = mime.startswith("video/")
+        await _добавить(код, message.document.file_id, видео=видео)
+        текст = "Принято."
+
+    строка = await _строка(код)
+    # спрашиваем точку ровно один раз — когда пришло видео; на каждое фото список не шлём
+    if видео and строка and not строка["shop_id"]:
+        await message.answer(текст + "\n\nВыберите точку, где идёт оценка:",
+                             reply_markup=await _кнопки_точек(код, строка["user_id"]))
         return
-    # документом присылают, когда отправляют «без сжатия» — это те же фото и видео
-    mime = (message.document.mime_type or "") if message.document else ""
-    if mime.startswith(("image/", "video/")):
-        await _добавить(код, message.document.file_id, видео=mime.startswith("video/"))
-        await message.answer("Принято.", reply_markup=_кнопка_готово(код))
+    await message.answer(текст, reply_markup=_кнопка_готово(код))
 
 
 @router_kiosk_media.callback_query(F.data.startswith("kmedia_done_"))
@@ -174,9 +242,46 @@ async def что_принято(call: CallbackQuery):
         await call.answer("Видео телефона ещё не пришло — без него сделка не откроется",
                           show_alert=True)
         return
+    if not строка["shop_id"]:
+        await call.answer()
+        await call.message.answer("Осталось выбрать точку, где идёт оценка:",
+                                  reply_markup=await _кнопки_точек(код, строка["user_id"]))
+        return
     await call.answer()
-    await call.message.answer(f"Принято: видео есть, фото {фото}. "
-                              "Отправьте оценку из программы — сделку создам по этому коду.")
+    await call.message.answer(
+        f"Принято: видео есть, фото {фото}. Точка: <b>{await _имя_точки(строка['shop_id'])}</b>.\n"
+        "Отправьте оценку из программы — сделку создам по этому коду.")
+
+
+@router_kiosk_media.callback_query(F.data.startswith("kmedia_shop_"))
+async def выбрать_точку(call: CallbackQuery):
+    """Админ работает на разных точках, поэтому выбирает сам. Продавца не спрашиваем —
+    у него точка одна, она проставилась сама."""
+    совпало = ТОЧКА.match(call.data or "")
+    if not совпало:
+        await call.answer()
+        return
+    код, shop_id = совпало.group(1), int(совпало.group(2))
+    if await _сотрудник(call.from_user.id) is None:
+        await call.answer("Точку выбирают сотрудники Pintel", show_alert=True)
+        return
+    строка = await _строка(код)
+    if строка is None:
+        await call.answer("Код не найден", show_alert=True)
+        return
+    if строка["device_id"]:
+        await call.answer(f"По этому коду сделка № {строка['device_id']} уже создана",
+                          show_alert=True)
+        return
+    await _поставить_точку(код, shop_id)
+    имя = await _имя_точки(shop_id)
+    await call.answer(f"Точка: {имя}")
+    хвост = ("Отправьте оценку из программы — сделку создам по этому коду."
+             if строка["video"] else "Осталось прислать видео телефона.")
+    try:                                   # правим то же сообщение: список точек больше не нужен
+        await call.message.edit_text(f"Точка: <b>{имя}</b>.\n{хвост}")
+    except Exception:                      # noqa: BLE001 — не вышло править, просто ответим
+        await call.message.answer(f"Точка: <b>{имя}</b>.\n{хвост}")
 
 
 # ---------------------------------------------------------------- сама сделка
@@ -226,10 +331,10 @@ async def создать_сделку(call: CallbackQuery, bot: Bot):
 
     await call.answer(f"Сделка № {сделка['id']} создана")
     шапка = (call.message.caption or "").split("\n\n")[0]
-    хвост = (f"✅ Сделка № {сделка['id']} · оценил {сделка['оценщик']}"
-             if сделка["статус"] == kiosk_core.СТАТУС_АВТО else
-             f"✅ Сделка № {сделка['id']} · оценил {сделка['оценщик']}\n"
-             "⚠️ Без автоцены — ушла администратору на ручную оценку, предупредите его")
+    итог = (f"✅ Сделка № {сделка['id']} · оценил {сделка['оценщик']}"
+            + (f" · {сделка['точка']}" if сделка.get("точка") else ""))
+    хвост = (итог if сделка["статус"] == kiosk_core.СТАТУС_АВТО else
+             итог + "\n⚠️ Без автоцены — ушла администратору на ручную оценку, предупредите его")
     try:
         await call.message.edit_caption(caption=f"{шапка}\n\n{хвост}")
     except Exception:                                            # noqa: BLE001 — подпись не главное
@@ -239,17 +344,10 @@ async def создать_сделку(call: CallbackQuery, bot: Bot):
 async def _вставить(посылка: dict, медиа, нажал=None) -> dict:
     """Клиент, сделка и IMEI — одной транзакцией, ровно теми колонками, что пишет бот."""
     from database.database import AsyncOrm
-    литера = str(посылка.get("литера") or "").strip()
     клиент = посылка.get("клиент") or {}
     телефон = str(клиент.get("телефон") or "").strip()[:13]
 
     async with async_session_factory() as session:
-        shop_id = None
-        if литера:
-            shop_id = (await session.execute(
-                text("SELECT id FROM shops WHERE litera = :l"), {"l": литера})).scalar()
-            if shop_id is None:
-                raise kiosk_core.ОшибкаПосылки(f"в Оценке нет магазина с литерой «{литера}»")
         client_id = (await session.execute(
             text("SELECT id FROM users WHERE phone = :ph"), {"ph": телефон})).scalar()
 
@@ -261,6 +359,7 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
 
     # оценщик — тот, кто снимал видео; если строку завели без него, пусть будет нажавший
     оценщик_id = медиа["user_id"] or (нажал.id if нажал else None)
+    shop_id = медиа["shop_id"]                 # у продавца своя точка, админ выбрал её в боте
     фото = [x for x in str(медиа["photos"] or "").split("||") if x]
     поля = kiosk_core.колонки(посылка)
     поля.update({
@@ -295,7 +394,7 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     имя = " ".join(x for x in ((оценщик or {}).get("first_name"),
                                (оценщик or {}).get("last_name")) if x)
     return {"id": int(device_id), "статус": поля["status_id"],
-            "оценщик": имя or _имя(нажал)}
+            "оценщик": имя or _имя(нажал), "точка": await _имя_точки(shop_id)}
 
 
 # ---------------------------------------------------------------- наладка

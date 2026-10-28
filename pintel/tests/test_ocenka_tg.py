@@ -37,7 +37,7 @@ def ядро():
 
 def test_payload_speaks_in_her_column_names():
     """Бот кладёт «сделку» в devices как есть — значит имена здесь её, а не наши."""
-    п = ocenka.посылка(ДАННЫЕ, "7KQ4M", литера="16/38", точка="16/38 Pintel")
+    п = ocenka.посылка(ДАННЫЕ, "7KQ4M", точка="16/38 Pintel")
     assert п["версия"] == ocenka.ВЕРСИЯ_ПОСЫЛКИ and п["код"] == "7KQ4M"
     сд = п["сделка"]
     assert сд["model"] == "iPhone 14 Pro" and сд["ddr"] == 256
@@ -47,6 +47,7 @@ def test_payload_speaks_in_her_column_names():
     assert п["клиент"] == {"имя": "Зама", "телефон": "+77058837953"}
     assert п["imei"] == ["350585886690250", "350585881725184"]   # без пустых и без повторов
     assert "видео" not in json.dumps(п, ensure_ascii=False)      # медиа добавляет бот, не мы
+    assert "литера" not in п                                     # точку бот знает по оценщику
 
 
 def test_payload_refuses_before_it_leaves_the_point():

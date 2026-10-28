@@ -212,9 +212,6 @@ class KioskWindow(QMainWindow):
         self.s_eval.назад.connect(self.go_home)
         self.s_eval.новый_код.connect(self.новый_код_медиа)
         self.код_медиа = ""
-        self.опрос_медиа = QTimer(self)
-        self.опрос_медиа.setInterval(3000)
-        self.опрос_медиа.timeout.connect(self.проверить_медиа)
         self.s_done.печать.connect(self.напечатать_чек)
         self.s_done.заново.connect(self.go_home)
         self.клиент, self.сделка, self.кабель = {}, {}, NO_DEVICE
@@ -426,17 +423,19 @@ class KioskWindow(QMainWindow):
             self.start_check()
 
     def отправить_в_оценку(self, поля):
-        """Залить медиа и создать сделку — в отдельном потоке, окно не морозим."""
-        from pintel_core.external import ocenka, ocenka_media
+        """Сделку отправляем боту Оценки — создаёт её он. Сеть в отдельном потоке."""
+        from pintel_core.external import ocenka, ocenka_tg
         rep = (self.last or {}).get("report") or {}
         пас, cfg = rep.get("паспорт") or {}, self.cfg
-        if not cfg.get("ocenka_db_url"):
-            self.s_eval.ошибка.setText("В kiosk.toml не задан ocenka_db_url — отправлять некуда")
+        if not (cfg.get("ocenka_bot_token") and cfg.get("ocenka_chat_id")):
+            self.s_eval.ошибка.setText("В kiosk.toml не заданы ocenka_bot_token и "
+                                       "ocenka_chat_id — отправлять некуда")
             return
-        клиент = dict(self.клиент)
+        if not self.код_медиа:
+            self.s_eval.ошибка.setText("Нет кода для медиа — нажмите «Другой код»")
+            return
+        клиент, код = dict(self.клиент), self.код_медиа
         self.s_eval.занято("Отправляем…")
-
-        код = self.код_медиа
 
         def job():
             данные = {
@@ -445,64 +444,40 @@ class KioskWindow(QMainWindow):
                 "акб": (rep.get("батарея") or {}).get("здоровье_%"),
                 "цвет": пас.get("цвет"), "sim": поля["sim"],
                 "коробка": поля["коробка"], "шнур": поля["шнур"],
-                "panic_full": (rep.get("джейлбрейк") or {}).get("panic_full"),
+                # panic_full у Оценки — «есть ли ошибка Panic full»; это из crash-логов,
+                # которых мы пока не читаем. Пустое поле честнее, чем «нет» без проверки.
+                "panic_full": None,
                 "статус_ремонта": ocenka.статус_ремонта((rep.get("детали_вердикт") or {}).get("итог")),
                 "цена": поля["цена"], "комментарий": поля["комментарий"],
                 "комментарий_оценщика": ocenka.комментарий_оценщика(
                     rep, откуда=f"Киоск {cfg.get('point') or ''} от {datetime.now():%Y-%m-%d}"),
                 "имя_клиента": клиент.get("имя"), "телефон_клиента": клиент.get("телефон"),
                 "imei": пас.get("imei"), "imei_все": [пас.get("imei2")],
-                "фото": поля.get("фото") or [], "видео": поля.get("видео") or "",
+                "замки": ocenka.замки(rep),
             }
-            итог = ocenka.отправить(cfg["ocenka_db_url"], данные,
-                                    литера=cfg.get("ocenka_shop_litera") or "",
-                                    оценщик_id=поля.get("оценщик_id"))
-            if код:
-                ocenka_media.закрыть(cfg["ocenka_db_url"], код, итог.get("id"))
-            return итог
+            посылка = ocenka.посылка(данные, код, литера=cfg.get("ocenka_shop_litera") or "",
+                                     точка=cfg.get("point") or "")
+            return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка,
+                                       валюта=cfg.get("currency", "₸"))
 
         t = self._run(job)
         t.ok.connect(self.сделка_ушла)
         t.err.connect(self.отправка_не_удалась)
 
     def новый_код_медиа(self):
-        """Завести код обмена и показать ссылку на бота Оценки."""
+        """Новый код обмена и ссылка на бота. Код придумываем на месте: в базу Оценки с
+        точки хода нет, строку по этому коду заведёт сам бот, когда сотрудник откроет
+        ссылку."""
         from pintel_core.external import ocenka_media
-        cfg = self.cfg
-        if not (cfg.get("ocenka_db_url") and cfg.get("ocenka_bot")):
+        if not self.cfg.get("ocenka_bot"):
+            self.код_медиа = ""
             self.s_eval.показать_код("—", "")
-            self.s_eval.медиа.setText("В kiosk.toml не заданы ocenka_db_url и ocenka_bot — "
-                                      "медиа принять не от кого")
+            self.s_eval.медиа.setText("В kiosk.toml не задан ocenka_bot — медиа принять не от кого")
             return
-        self.код_медиа = ""
-        self.s_eval.медиа.setText("Заводим код…")
-        t = self._run(lambda: ocenka_media.завести(cfg["ocenka_db_url"], cfg.get("point") or ""))
-        t.ok.connect(self.код_готов)
-        t.err.connect(lambda e: self.s_eval.медиа.setText("Код не завёлся: " + e))
-
-    def код_готов(self, код):
-        from pintel_core.external import ocenka_media
-        self.код_медиа = код
-        self.s_eval.показать_код(код, ocenka_media.ссылка(self.cfg.get("ocenka_bot"), код))
-        self.s_eval.медиа.setText("Ждём медиа от бота…")
-        self.опрос_медиа.start()
-
-    def проверить_медиа(self):
-        from pintel_core.external import ocenka_media
-        if self.state != "eval" or not self.код_медиа:
-            self.опрос_медиа.stop()
-            return
-        код, url = self.код_медиа, self.cfg["ocenka_db_url"]
-        t = self._run(lambda: ocenka_media.состояние(url, код))
-        t.ok.connect(self.медиа_пришли)
-
-    def медиа_пришли(self, состояние):
-        from pintel_core.external import ocenka_media
-        if self.state != "eval":
-            return
-        self.s_eval.медиа_от_бота(состояние, ocenka_media.описание(состояние))
-        if состояние.get("готово") and состояние.get("видео"):
-            self.опрос_медиа.stop()                    # всё прислали, больше спрашивать нечего
+        self.код_медиа = ocenka_media.новый_код()
+        self.s_eval.показать_код(self.код_медиа,
+                                 ocenka_media.ссылка(self.cfg["ocenka_bot"], self.код_медиа))
+        self.s_eval.медиа.setText("Видео обязательно — без него бот не создаст сделку.")
 
     def отправка_не_удалась(self, текст):
         self.s_eval.занято("")
@@ -511,14 +486,14 @@ class KioskWindow(QMainWindow):
     def сделка_ушла(self, итог):
         поля = self.s_eval.данные()
         self.s_eval.занято("")
-        self.сделка = {"номер": итог.get("id"), "цена": поля.get("цена"),
+        self.сделка = {"номер": итог.get("код") or self.код_медиа, "цена": поля.get("цена"),
                        "валюта": self.cfg.get("currency", "₸"),
                        "клиент": self.клиент.get("имя"), "телефон": self.клиент.get("телефон"),
                        "сотрудник": self.cfg.get("сотрудник") or "", "точка": self.cfg.get("point") or "",
                        "коробка": поля.get("коробка"), "шнур": поля.get("шнур")}
-        self.s_done.показать(итог.get("id"),
-                             "Клиенту видна цена сразу" if итог.get("статус") == 1
-                             else "Ушла оценщику на ручную оценку")
+        self.s_done.показать(итог.get("код") or self.код_медиа,
+                             "Оценка ушла в Telegram. Оценщик подтверждает её кнопкой — "
+                             "там же появится номер сделки в Оценке.")
         self.state = "done"
         self.show_screen(self.s_done)
 
@@ -546,7 +521,6 @@ class KioskWindow(QMainWindow):
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
         self.state = "idle"
         self.last = None
-        self.опрос_медиа.stop()
         self.клиент, self.сделка, self.код_медиа = {}, {}, ""
         self.s_main.set_device("wait")
         self.show_screen(self.s_main)

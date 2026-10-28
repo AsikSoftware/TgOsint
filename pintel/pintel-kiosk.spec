@@ -9,8 +9,7 @@ hidden = ['pymobiledevice3.remote.userspace_tunnel', 'pymobiledevice3.remote.cor
           'pymobiledevice3.services.diagnostics', 'pymobiledevice3.services.syslog', 'pymobiledevice3.services.afc',
           'pymobiledevice3.services.mobile_config', 'google.auth.transport.requests', 'requests', 'rsa',
           'pintel_core.external.gsheet', 'pintel_core.external.ocenka', 'pintel_core.receipt',
-          'pintel_kiosk.ui_deal', 'psycopg', 'sqlalchemy.dialects.postgresql',
-          'sqlalchemy.dialects.postgresql.psycopg',
+          'pintel_core.external.ocenka_tg', 'pintel_core.external.ocenka_media', 'pintel_kiosk.ui_deal',
           'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown', 'httpx', 'qrcode', 'pintel_kiosk.app']
 _pmd_datas, _pmd_bins, _pmd_hidden = collect_all('pmd_pytcp')
 _cd_datas, _cd_bins, _cd_hidden = collect_all('pymobiledevice3.remote')
@@ -34,7 +33,8 @@ datas = collect_data_files('pymobiledevice3') + _pmd_datas + _cd_datas + _tun_da
     ('pintel_kiosk/assets', 'pintel_kiosk/assets'),
 ]
 excludes = ['tkinter', 'matplotlib', 'av', 'jedi', 'IPython', 'parso', 'numpy', 'PIL', 'pillow', 'pandas', 'scipy',
-            # sqlalchemy и psycopg нужны: приложение само создаёт сделку в базе Оценки
+            # сделку создаёт бот Оценки, в её базу с точки хода нет — драйвер базы не нужен
+            'sqlalchemy', 'psycopg', 'psycopg2',
             'aiohttp', 'fastapi', 'uvicorn', 'starlette', 'alembic', 'pintel_server',
             'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineQuick', 'PySide6.QtQml',
             'PySide6.QtQuick', 'PySide6.QtQuickWidgets', 'PySide6.QtQuickControls2', 'PySide6.Qt3DCore',

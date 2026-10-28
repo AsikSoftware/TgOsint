@@ -4,6 +4,9 @@
 Разобрано по исходникам Оценки, а не на глаз: карточка печатает `device.sim` как есть,
 открытие сделки берёт `device.video_phone` без проверки на пусто, а статус зависит от
 «Ремонт статус» и наличия автоцены.
+
+Саму вставку делает бот (в базу Оценки с точки хода нет) — она проверяется в
+test_kiosk_deal_core.py, а отправка посылки боту — в test_ocenka_tg.py.
 """
 import pytest
 
@@ -53,16 +56,13 @@ def test_repair_status_matches_their_wording(итог, ждём):
     assert ocenka.статус_ремонта(итог) == ждём
 
 
-def test_export_refuses_without_video():
-    """Открытие сделки у Оценки делает InputMediaVideo(media=device.video_phone) без
-    проверки: сделка без видео не открывается вовсе. Честный отказ на точке лучше."""
+def test_readiness_checks_only_what_the_point_can_know():
+    """Видео здесь не требуем: приложение его не видит — медиа принимает бот, и он же
+    не даёт создать сделку без видео. Иначе на точке пришлось бы угадывать."""
     данные = {"модель": "iPhone 14 Pro", "память": 256, "имя_клиента": "Зама",
               "телефон_клиента": "+77058837953", "imei": "350585886690250"}
-    with pytest.raises(ocenka.ОшибкаЭкспорта) as e:
-        ocenka.проверить_готовность(данные)
-    assert "видео" in str(e.value)
-    данные["видео"] = "BAACAgIAAx..."
-    ocenka.проверить_готовность(данные)                 # с видео — проходит
+    ocenka.проверить_готовность(данные)                 # без видео — проходит
+    assert ocenka.посылка(данные, "7KQ4M")["код"] == "7KQ4M"
 
 
 def test_export_names_everything_missing_at_once():
@@ -70,8 +70,22 @@ def test_export_names_everything_missing_at_once():
     with pytest.raises(ocenka.ОшибкаЭкспорта) as e:
         ocenka.проверить_готовность({})
     текст = str(e.value)
-    for слово in ("модель", "объём памяти", "имя и телефон клиента", "видео", "IMEI"):
+    for слово in ("модель", "объём памяти", "имя и телефон клиента", "IMEI"):
         assert слово in текст, текст
+
+
+@pytest.mark.parametrize("отчёт,ждём", [
+    ({"sickw": {"в_чёрном_списке": True}}, ["ЧЁРНЫЙ СПИСОК"]),
+    ({"правовой": {"найти_iphone": "включён"}}, ["Найти iPhone вкл."]),
+    ({"sickw": {"fmi_включён": True}}, ["Найти iPhone вкл."]),
+    ({"правовой": {"mdm": True}}, ["MDM"]),
+    ({"правовой": {"найти_iphone": "выключен", "mdm": False}}, []),
+    ({}, []),
+])
+def test_locks_are_listed_once_for_comment_and_card(отчёт, ждём):
+    """Один список замков на два места: комментарий сделки и карточка, которую оценщик
+    подтверждает. Разъедутся — он подтвердит не то, что уйдёт в Оценку."""
+    assert ocenka.замки(отчёт) == ждём
 
 
 def test_grader_comment_is_short_and_names_the_locks():
@@ -102,12 +116,3 @@ def test_media_link_opens_the_bot_with_the_command():
         assert ocenka_media.ссылка(запись, "AB12").endswith("/pintel_bot?start=pAB12"), запись
 
 
-def test_media_state_reads_like_a_sentence():
-    """Строку на экране читает сотрудник, а не программист."""
-    from pintel_core.external import ocenka_media
-    assert ocenka_media.описание({"есть": False}) == "код не найден — заведите новый"
-    пусто = ocenka_media.описание({"есть": True, "видео": "", "фото": [], "оценщик": ""})
-    assert пусто == "видео: ждём"
-    полный = ocenka_media.описание({"есть": True, "видео": "v", "фото": ["a", "b"],
-                                    "оценщик": "Асылбек"})
-    assert полный == "оценщик: Асылбек · видео: есть · фото: 2"

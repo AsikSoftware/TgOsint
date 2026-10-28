@@ -1,0 +1,133 @@
+# -*- coding: utf-8 -*-
+"""Приём сделки от приложения на точке: разбор посылки, проверки, колонки devices.
+
+Чистая часть обработчика — без aiogram и без базы. Так её можно прогнать тестами
+(tests/test_kiosk_deal_core.py в репозитории приложения), и в самом обработчике не
+остаётся логики, которую нельзя проверить до установки на сервер.
+
+Посылка приходит JSON-файлом в чат: приложение не может писать в базу Оценки (порт
+Postgres закрыт наружу), поэтому единственный канал — сам бот. Из посылки берём только
+колонки из КОЛОНКИ: что бы в ней ни пришло, в devices попадёт лишь разрешённое, и имя
+колонки никогда не склеивается из чужого текста.
+"""
+import json
+import re
+
+ВЕРСИЯ = 1
+КОД = re.compile(r"^[A-Z0-9]{4,12}$")
+# та же строка, что кладёт в кнопку приложение (pintel_core/external/ocenka_tg.py):
+# разойдутся — нажатие не дойдёт ни до одного обработчика
+ПРЕФИКС_КНОПКИ = "kiosk_deal_"
+
+СТАТУС_ЧИСТЫЙ = "Не был в ремонте"
+# status_id в Оценке: 1 — автооценка показана клиенту, 2 — ждёт оценки администратора
+СТАТУС_АВТО, СТАТУС_АДМИН = 1, 2
+SIM_ВАРИАНТЫ = ("Dual sim", "E-sim", "Прочее", "Стандарт")
+
+# ровно те колонки devices, что заполняет бот Оценки при создании сделки
+КОЛОНКИ = ("model", "code_name", "ddr", "akb", "akb_exact", "color", "sim", "box", "cord",
+           "panic_full", "phone_status", "price_grade_auto", "comment", "comment_ocenka")
+# что добавляет сам обработчик, а не посылка
+СВОИ = ("status_id", "user_client", "user_grade", "shop_id_grade", "photo_phone", "video_phone")
+ЦЕЛЫЕ = ("ddr", "akb_exact", "price_grade_auto")
+ФЛАГИ = ("box", "cord", "panic_full")
+# длины — из models.py Оценки: обрезаем сами, иначе вставка падает на длинном тексте
+ПРЕДЕЛЫ = {"model": 50, "code_name": 50, "akb": 50, "color": 40, "sim": 20,
+           "phone_status": 100, "comment": 500, "comment_ocenka": 4000}
+
+
+class ОшибкаПосылки(ValueError):
+    """Человеческий текст, почему сделку создать нельзя."""
+
+
+def _целое(v):
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().replace(" ", "")
+    return int(s) if re.fullmatch(r"-?\d+", s) else None
+
+
+def разобрать(сырое) -> dict:
+    """Байты или текст файла → посылка. Всё непонятное — сразу отказ со словами."""
+    if isinstance(сырое, (bytes, bytearray)):
+        сырое = bytes(сырое).decode("utf-8", "replace")
+    if isinstance(сырое, str):
+        try:
+            сырое = json.loads(сырое)
+        except Exception as exc:                                 # noqa: BLE001
+            raise ОшибкаПосылки(f"файл не читается как JSON: {exc}") from None
+    if not isinstance(сырое, dict):
+        raise ОшибкаПосылки("в файле не объект JSON")
+    if _целое(сырое.get("версия")) != ВЕРСИЯ:
+        raise ОшибкаПосылки(
+            f"посылка версии {сырое.get('версия')!r}, а обработчик понимает {ВЕРСИЯ}: "
+            "обновите программу на точке или этот файл на сервере")
+    if not КОД.match(str(сырое.get("код") or "")):
+        raise ОшибкаПосылки("в посылке нет кода")
+    if not isinstance(сырое.get("сделка"), dict):
+        raise ОшибкаПосылки("в посылке нет полей сделки")
+    return сырое
+
+
+def проверить(посылка: dict, медиа) -> list:
+    """Чего не хватает, чтобы сделка открылась у оценщика. Пустой список — можно создавать."""
+    нет = []
+    сд = посылка.get("сделка") or {}
+    кл = посылка.get("клиент") or {}
+    if not (медиа or {}).get("video"):
+        # карточку Оценка открывает через InputMediaVideo(video_phone) без проверки на пусто
+        нет.append("видео телефона — без него Оценка не открывает карточку сделки")
+    if not сд.get("model"):
+        нет.append("модель")
+    if not _целое(сд.get("ddr")):
+        нет.append("объём памяти")
+    if not (кл.get("имя") and кл.get("телефон")):
+        нет.append("имя и телефон клиента")
+    if not [x for x in (посылка.get("imei") or []) if x]:
+        нет.append("IMEI")
+    return нет
+
+
+def колонки(посылка: dict) -> dict:
+    """Поля сделки → колонки devices. Лишнее из посылки не проходит вовсе."""
+    сд = посылка.get("сделка") or {}
+    поля = {}
+    for k in КОЛОНКИ:
+        v = сд.get(k)
+        if k in ЦЕЛЫЕ:
+            v = _целое(v)
+        elif k in ФЛАГИ:
+            v = None if v is None else bool(v)
+        elif isinstance(v, str):
+            v = v.strip()[:ПРЕДЕЛЫ.get(k, 200)] or None
+        elif v is not None:
+            v = str(v)[:ПРЕДЕЛЫ.get(k, 200)]
+        поля[k] = v
+    if поля.get("sim") not in SIM_ВАРИАНТЫ:
+        поля["sim"] = "Прочее"
+    return поля
+
+
+def статус_id(поля: dict) -> int:
+    """То же правило, что у бота Оценки: цену сразу показываем только чистому аппарату с
+    автоценой, иначе сделка уходит администратору на ручную оценку."""
+    чисто = поля.get("phone_status") == СТАТУС_ЧИСТЫЙ
+    return СТАТУС_АВТО if (чисто and поля.get("price_grade_auto")) else СТАТУС_АДМИН
+
+
+def имейки(посылка: dict) -> list:
+    """[(imei, первый?)] без повторов: первым идёт основной."""
+    список = [str(x).strip()[:20] for x in (посылка.get("imei") or []) if str(x or "").strip()]
+    return [(imei, n == 0) for n, imei in enumerate(dict.fromkeys(список))]
+
+
+def sql_devices(поля: dict) -> str:
+    """INSERT по именам колонок. Имена — только из белого списка, значения — через bind."""
+    лишние = set(поля) - set(КОЛОНКИ) - set(СВОИ)
+    if лишние:
+        raise ОшибкаПосылки("не наши колонки: " + ", ".join(sorted(лишние)))
+    имена = [k for k in list(КОЛОНКИ) + list(СВОИ) if k in поля]
+    return ("INSERT INTO devices (producer, online, " + ", ".join(имена) + ") "
+            "VALUES ('Apple', false, " + ", ".join(":" + k for k in имена) + ") RETURNING id")

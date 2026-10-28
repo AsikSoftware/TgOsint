@@ -5,9 +5,9 @@
 начале, оценку оформляет здесь же, отсюда же сделка уходит в Оценку и печатается чек.
 
 Поля экрана оценки — ровно те, что хранит Оценка: комплектность, SIM её словарём, цена,
-комментарий, фото и видео. Видео обязательно: без него Оценка не открывает сделку
-(её код берёт video_phone без проверки), и честнее сказать это здесь, чем создать
-карточку, которую оценщик не сможет развернуть.
+комментарий. Фото и видео приложение не видит вовсе: их принимает бот Оценки по коду с
+этого экрана, он же проверяет, что видео пришло (без него Оценка не открывает карточку —
+её код берёт `video_phone` без проверки), и он же создаёт сделку.
 """
 import os
 import re
@@ -136,8 +136,8 @@ class EvalScreen(Screen):
     def __init__(self, point=""):
         super().__init__(gray=True)
         self.setStyleSheet(QSS_DEAL)
-        # фото и видео приходят от бота как file_id Telegram — файлы мы не храним вовсе
-        self.фото, self.видео, self.rep, self.оценщик = [], "", {}, None
+        # фото и видео живут только у бота: он принимает их по коду и сам ставит в сделку
+        self.rep = {}
         self.root.addLayout(header(label(point_text(point), "muted")))
         self.root.addSpacing(24)
         self.root.addWidget(label("Оформление оценки", font_=font(FONT_HEAD, 56, W.Bold, -1.0)))
@@ -216,7 +216,7 @@ class EvalScreen(Screen):
         правее.addStretch(1)
         ряд.addLayout(правее, 1)
         кол.addLayout(ряд)
-        self.медиа = label("Ждём медиа от бота…", "muted", wrap=True)
+        self.медиа = label("Видео обязательно — без него бот не создаст сделку.", "muted", wrap=True)
         кол.addWidget(self.медиа)
         кол.addSpacing(18)
         кол.addWidget(kicker("ЧТО УВИДЕЛА ПРОВЕРКА"))
@@ -265,29 +265,17 @@ class EvalScreen(Screen):
         self.ссылка.setText(ссылка or "")
         self.qr.set(qr_pixmap(ссылка) if ссылка else None, "СКАНИРУЙТЕ", rise=False)
 
-    def медиа_от_бота(self, состояние, описание):
-        """Что бот уже принял. Пришло видео — можно отправлять сделку."""
-        self.видео = состояние.get("видео") or ""
-        self.фото = list(состояние.get("фото") or [])
-        self.оценщик = состояние.get("оценщик_id")
-        self.медиа.setText(описание)
-
     def данные(self):
         цена = re.sub(r"\D", "", self.цена.text())
         return {"коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
                 "sim": self.sim.currentText(), "цена": int(цена) if цена else None,
-                "комментарий": self.комментарий.toPlainText().strip(),
-                "фото": list(self.фото), "видео": self.видео, "оценщик_id": self.оценщик}
+                "комментарий": self.комментарий.toPlainText().strip()}
 
     def _отправить(self):
+        """Цену проверяем здесь, медиа — бот: он один знает, что ему прислали."""
         d = self.данные()
-        нет = []
-        if not d["видео"]:
-            нет.append("видео от бота (без него Оценка не откроет сделку)")
         if not d["цена"]:
-            нет.append("цена")
-        if нет:
-            self.ошибка.setText("Не хватает: " + ", ".join(нет))
+            self.ошибка.setText("Не хватает: цена")
             return
         self.ошибка.setText("")
         self.отправить.emit(d)
@@ -299,7 +287,12 @@ class EvalScreen(Screen):
 
 
 class DoneScreen(Screen):
-    """Сделка ушла: номер, печать чека, новая оценка."""
+    """Оценка ушла боту: код, печать чека, новая оценка.
+
+    Номер сделки присваивает Оценка в момент подтверждения, и обратного канала у нас нет
+    (с точки в её базу хода нет) — поэтому на экране и в чеке стоит наш код. По нему
+    сделку всегда видно в том же сообщении в Telegram.
+    """
 
     печать = Signal()
     заново = Signal()
@@ -308,7 +301,7 @@ class DoneScreen(Screen):
         super().__init__(gray=True)
         self.setStyleSheet(QSS_DEAL)
         self.root.addStretch(1)
-        self.заголовок = label("Сделка создана", font_=font(FONT_HEAD, 64, W.Bold, -1.0))
+        self.заголовок = label("Оценка отправлена", font_=font(FONT_HEAD, 64, W.Bold, -1.0))
         self.root.addWidget(self.заголовок, 0, Qt.AlignHCenter)
         self.root.addSpacing(10)
         self.номер = label("", font_=font(FONT_NUM, 120, W.Bold))
@@ -331,6 +324,8 @@ class DoneScreen(Screen):
         self.root.addLayout(ряд)
         self.root.addStretch(1)
 
-    def показать(self, номер, подпись=""):
-        self.номер.setText(f"№ {номер}" if номер else "")
+    def показать(self, код, подпись="", заголовок=""):
+        self.номер.setText(str(код or ""))
         self.подпись.setText(подпись)
+        if заголовок:
+            self.заголовок.setText(заголовок)

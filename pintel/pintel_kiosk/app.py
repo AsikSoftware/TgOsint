@@ -212,6 +212,7 @@ class KioskWindow(QMainWindow):
                 self.s_main.set_status("Нет сервера и ключей: заполните kiosk.toml", ok=False)
         self._try_server_config()
         self._убрать_старое()
+        self._выгрузить_архив()
 
     # ---------- служебное ----------
     def show_screen(self, w):
@@ -228,6 +229,32 @@ class KioskWindow(QMainWindow):
             if убрано:
                 log_line(f"уборка: удалено {убрано} старше {дней} дней")
             return убрано
+        self._run(job)
+
+    def _выгрузить_архив(self):
+        """Слепки — в закрытый чат Telegram: объезжать точки и собирать папки руками никто
+        не станет. Уходят эталоны (обезличенные), полные слепки — только если включили."""
+        from pintel_core.external import tg_upload
+        cfg = self.cfg
+        токен, чат = cfg.get("ocenka_bot_token"), cfg.get("archive_chat_id")
+        if not (токен and чат):
+            return
+        точка = cfg.get("point") or ""
+
+        def job():
+            итог = tg_upload.догнать(токен, чат, os.path.join(data_dir(), "эталоны"),
+                                     os.path.join(data_dir(), "cache", "архив_эталоны.json"),
+                                     "эталон_*.zip", подпись=точка)
+            if cfg.get("archive_snapshots"):
+                полные = tg_upload.догнать(токен, чат, os.path.join(data_dir(), "out"),
+                                           os.path.join(data_dir(), "cache", "архив_слепки.json"),
+                                           os.path.join("*", "snapshot.json"), подпись=точка)
+                итог["ушло"] += полные["ушло"]
+                итог["ошибка"] = итог["ошибка"] or полные["ошибка"]
+            if итог["ушло"] or итог["ошибка"]:
+                log_line(f"архив: ушло {итог['ушло']}, осталось {итог['осталось']}"
+                         + (f", {итог['ошибка']}" if итог["ошибка"] else ""))
+            return итог
         self._run(job)
 
     def _try_server_config(self):
@@ -341,6 +368,7 @@ class KioskWindow(QMainWindow):
         итог = (rep.get("детали_вердикт") or {}).get("итог")
         self.state = "work"
         self.s_work.показать(rep, (rep.get("цена") or {}).get("цена"))
+        self._выгрузить_архив()                    # свежий эталон уедет в архив сам
         if итог == "родные":
             self.новый_код_медиа()
             return

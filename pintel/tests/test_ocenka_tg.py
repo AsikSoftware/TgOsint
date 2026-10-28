@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ДАННЫЕ = {
     "модель": "iPhone 14 Pro", "код_модели": "iPhone15,2", "память": 256, "акб": 86,
     "цвет": "чёрный космос", "sim": "Dual sim", "коробка": True, "шнур": False,
-    "panic_full": False, "статус_ремонта": ocenka.СТАТУС_ЧИСТЫЙ, "цена": 250000,
+    "циклы": 1642, "panic_full": False, "статус_ремонта": ocenka.СТАТУС_ЧИСТЫЙ, "цена": 250000,
     "комментарий": "скол на рамке", "комментарий_оценщика": "Детали: родные",
     "имя_клиента": "Зама", "телефон_клиента": "+77058837953",
     "imei": "350585886690250", "imei_все": ["350585881725184", ""],
@@ -41,9 +41,9 @@ def test_payload_speaks_in_her_column_names():
     assert п["версия"] == ocenka.ВЕРСИЯ_ПОСЫЛКИ and п["код"] == "7KQ4M"
     сд = п["сделка"]
     assert сд["model"] == "iPhone 14 Pro" and сд["ddr"] == 256
-    assert сд["akb"] == "86%" and сд["akb_exact"] == 86          # строка для карточки и число для отчётов
+    assert сд["akb"] == "86-90" and сд["akb_exact"] == 86        # диапазон её словарём + точный процент
     assert сд["phone_status"] == "Не был в ремонте" and сд["price_grade_auto"] == 250000
-    assert сд["sim"] in ocenka.SIM_ВАРИАНТЫ and сд["color"] == "чёрный космос"
+    assert сд["sim"] in ocenka.SIM_ВАРИАНТЫ and сд["color"] == "BLACK"   # её словарь, не наш
     assert п["клиент"] == {"имя": "Зама", "телефон": "+77058837953"}
     assert п["imei"] == ["350585886690250", "350585881725184"]   # без пустых и без повторов
     assert "видео" not in json.dumps(п, ensure_ascii=False)      # медиа добавляет бот, не мы
@@ -61,8 +61,8 @@ def test_payload_refuses_before_it_leaves_the_point():
 def test_card_shows_what_will_be_written():
     """Карточка — это и есть подтверждение: в ней видно то, что уйдёт в сделку."""
     текст = ocenka_tg.карточка(ocenka.посылка(ДАННЫЕ, "7KQ4M", точка="16/38"))
-    assert "код 7KQ4M" in текст and "iPhone 14 Pro · 256 ГБ · чёрный космос" in текст
-    assert "350585886690250" in текст and "Аккумулятор 86%" in текст
+    assert "код 7KQ4M" in текст and "iPhone 14 Pro · 256 ГБ · BLACK" in текст
+    assert "350585886690250" in текст and "Аккумулятор 86-90 (86%)" in текст
     assert "250 000 ₸" in текст                                  # цена читается, а не слипается
     assert "Не был в ремонте" in текст and "⚠ Найти iPhone вкл." in текст
     assert "Зама" in текст and "+77058837953" in текст

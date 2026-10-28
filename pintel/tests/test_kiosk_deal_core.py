@@ -168,3 +168,31 @@ def test_handoff_doc_checksums_match_the_files():
         with open(os.path.join(папка, имя), "rb") as f:
             тело = f.read().replace(b"\r\n", b"\n")
         assert hashlib.sha256(тело).hexdigest() == сумма, f"{имя}: сумма в задании устарела"
+
+
+def test_handler_fills_only_columns_the_core_allows(ядро):
+    """Обработчик складывает свои поля (`поля.update({...})`) и отдаёт их в sql_devices,
+    а тот пускает только КОЛОНКИ + СВОИ. Разойдутся — вставка падает «не наши колонки» на
+    каждом нажатии, и это уже случалось трижды: на сервере правили руками, в репозитории
+    правка не появлялась. Читаем обработчик разбором исходника: запускать его здесь нечем
+    (нужны aiogram и база), а сверить списки можно и так."""
+    import ast
+    путь = os.path.join(HERE, "..", "deploy", "оценка_бот", "kiosk_media.py")
+    with open(путь, encoding="utf-8") as f:
+        дерево = ast.parse(f.read())
+    добавляет = set()
+    for узел in ast.walk(дерево):
+        вызов = getattr(узел, "value", узел)
+        if not isinstance(вызов, ast.Call) or not isinstance(вызов.func, ast.Attribute):
+            continue
+        if вызов.func.attr != "update" or not isinstance(вызов.func.value, ast.Name):
+            continue
+        if вызов.func.value.id != "поля":
+            continue
+        for аргумент in вызов.args:
+            if isinstance(аргумент, ast.Dict):
+                добавляет |= {k.value for k in аргумент.keys if isinstance(k, ast.Constant)}
+    assert добавляет, "в обработчике не нашлось поля.update({...}) — тест смотрит не туда"
+    лишние = добавляет - set(ядро.КОЛОНКИ) - set(ядро.СВОИ)
+    assert not лишние, "обработчик кладёт колонки, которых нет в СВОИ: " + ", ".join(sorted(лишние))
+    ядро.sql_devices({k: None for k in добавляет})          # и такой набор реально собирается

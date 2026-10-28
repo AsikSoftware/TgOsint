@@ -31,8 +31,11 @@ SIM_ВАРИАНТЫ = ("Dual sim", "E-sim", "Прочее", "Стандарт")
 # ровно те колонки devices, что заполняет бот Оценки при создании сделки
 КОЛОНКИ = ("model", "code_name", "ddr", "akb", "akb_exact", "color", "sim", "box", "cord",
            "panic_full", "phone_status", "price_grade_auto", "comment", "comment_ocenka")
-# что добавляет сам обработчик, а не посылка
-СВОИ = ("status_id", "user_client", "user_grade", "shop_id_grade", "photo_phone", "video_phone")
+# что добавляет сам обработчик, а не посылка. Список обязан совпадать с тем, что кладёт
+# `_вставить` в kiosk_media.py: иначе sql_devices отвечает «не наши колонки» на каждое
+# нажатие «Создать сделку». Сверяется тестом test_kiosk_deal_core.py.
+СВОИ = ("status_id", "user_client", "user_grade", "shop_id_grade", "photo_phone", "video_phone",
+        "active_user")
 ЦЕЛЫЕ = ("ddr", "akb_exact", "price_grade_auto")
 ФЛАГИ = ("box", "cord", "panic_full")
 # длины — из models.py Оценки: обрезаем сами, иначе вставка падает на длинном тексте

@@ -56,8 +56,9 @@ def карточка(п: dict, валюта: str = "₸") -> str:
     имеи = [x for x in (п.get("imei") or []) if x]
     if имеи:
         строки.append("IMEI " + " · ".join(имеи))
-    if сд.get("akb"):
-        строки.append("Аккумулятор " + str(сд["akb"]))
+    if сд.get("akb"):                                # «86-90 (86%)» — как в её карточке
+        строки.append("Аккумулятор " + str(сд["akb"])
+                      + (f" ({сд['akb_exact']}%)" if сд.get("akb_exact") else ""))
     if сд.get("phone_status"):
         строки.append("Детали: " + str(сд["phone_status"]))
     else:

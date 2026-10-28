@@ -330,11 +330,15 @@ async def создать_сделку(call: CallbackQuery, bot: Bot):
         return
 
     await call.answer(f"Сделка № {сделка['id']} создана")
+    try:
+        куда = await _позвать_дальше(bot, строка, сделка)
+    except Exception as exc:                                     # noqa: BLE001
+        # сделка уже создана, но без карточки её никто не увидит — говорим прямо
+        куда = f"⚠️ передать дальше не вышло: {type(exc).__name__}: {exc}"
     шапка = (call.message.caption or "").split("\n\n")[0]
     итог = (f"✅ Сделка № {сделка['id']} · оценил {сделка['оценщик']}"
             + (f" · {сделка['точка']}" if сделка.get("точка") else ""))
-    хвост = (итог if сделка["статус"] == kiosk_core.СТАТУС_АВТО else
-             итог + "\n⚠️ Без автоцены — ушла администратору на ручную оценку, предупредите его")
+    хвост = f"{итог}\n{куда}"
     try:
         await call.message.edit_caption(caption=f"{шапка}\n\n{хвост}")
     except Exception:                                            # noqa: BLE001 — подпись не главное
@@ -389,12 +393,47 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     if оценщик_id:
         async with async_session_factory() as session:
             оценщик = (await session.execute(text(
-                "SELECT first_name, last_name, phone FROM users WHERE id = :i"),
+                "SELECT first_name, last_name, phone, lang FROM users WHERE id = :i"),
                 {"i": оценщик_id})).mappings().first()
     имя = " ".join(x for x in ((оценщик or {}).get("first_name"),
                                (оценщик or {}).get("last_name")) if x)
     return {"id": int(device_id), "статус": поля["status_id"],
-            "оценщик": имя or _имя(нажал), "точка": await _имя_точки(shop_id)}
+            "оценщик": имя or _имя(нажал), "точка": await _имя_точки(shop_id),
+            "lang": (оценщик or {}).get("lang") or "ru"}
+
+
+async def _позвать_дальше(bot: Bot, медиа, сделка: dict) -> str:
+    """Сделку создали — теперь её должен кто-то увидеть. → куда она ушла, словами.
+
+    У бота после создания есть продолжение, без которого сделка повисает:
+
+    * статус «Оценен» (чистый аппарат с автоценой) — карточка с кнопками «Выкуп» и
+      «Закрыть» уходит оценщику в личку. В списках такой сделки нет вовсе, и без карточки
+      довести её до выкупа некому.
+    * статус «Ожидает оценку» — админам «❗Ждут оценку❗», сделка видна в «💸 Новая оценка».
+
+    Кнопки `vikup_buy_*` ловит post_grade.py без фильтра по состоянию FSM, поэтому слать
+    их можно и отсюда.
+    """
+    # импорты внутри функции: в utils.utils круговой импорт с keyboards
+    from aiogram.types import InputMediaPhoto, InputMediaVideo
+    from database.database import AsyncOrm
+    from keyboards import keyboards
+    from utils.utils import create_tex, send_admins_any
+
+    lang = сделка.get("lang") or "ru"
+    if сделка["статус"] == kiosk_core.СТАТУС_АВТО and медиа["chat_id"]:
+        группа = [InputMediaVideo(media=медиа["video"])]
+        группа += [InputMediaPhoto(media=p)
+                   for p in str(медиа["photos"] or "").split("||")[:9] if p]
+        await bot.send_media_group(chat_id=медиа["chat_id"], media=группа)
+        await bot.send_message(chat_id=медиа["chat_id"],
+                               text=await create_tex(device_id=сделка["id"], lang=lang),
+                               reply_markup=keyboards.user_vikup_kb(lang, сделка["id"]))
+        return "карточка у оценщика в личке"
+    await send_admins_any(text="❗Ждут оценку❗", bot=bot,
+                          admins=await AsyncOrm.get_active_admin_chat_ids())
+    return "ждёт админа в «💸 Новая оценка»"
 
 
 # ---------------------------------------------------------------- наладка

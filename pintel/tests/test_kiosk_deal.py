@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Поток сделки в приложении: начать → клиент → проверка → оценка → чек.
+"""Сделка в одном окне: начать → проверка идёт, поля заполняются → отправка → чек.
 
-Приложение работает без нашего сервера, поэтому путь сделки целиком здесь, и ворота
-тоже здесь: оформляем только телефоны, у которых Apple не нашла ни ремонта, ни замены.
-Остальные не оформляем, но слепок с них сохраняется — на них учится разбор.
+За окном работает сотрудник, поэтому всё в одном месте: пока читается телефон, он уже
+записывает имя клиента. Ворота те же: оформляем только телефоны, у которых Apple не нашла
+ни ремонта, ни замены; остальные не оформляем, но слепок с них сохраняется.
 
-Сделку создаёт бот Оценки: в её базу с точки хода нет. Приложение отдаёт ему посылку
-через Telegram, поэтому здесь проверяется только своя половина — экраны и то, что уходит.
+Сделку создаёт бот Оценки — в её базу с точки хода нет. Здесь проверяется своя половина:
+экран и то, что уходит боту.
 """
 import json
 import os
@@ -36,7 +36,8 @@ def окно(monkeypatch):
     QApplication.instance() or QApplication([])
     monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
     monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
-    w = kapp.KioskWindow({**kconfig.DEFAULTS, "point": "16/38", "_path": None, "staff_name": "Асылбек"})
+    w = kapp.KioskWindow({**kconfig.DEFAULTS, "point": "16/38", "_path": None,
+                          "staff_name": "Асылбек"})
     yield w
     # потоки гасим ДО закрытия окна: QThread, разрушенный на ходу, роняет весь прогон
     for поток in (w.poller, w.net):
@@ -54,6 +55,15 @@ def _отчёт(архив):
     return rep
 
 
+def _чистый(окно):
+    """Довести окно до состояния «телефон прочитан, аппарат чистый»."""
+    окно.cfg.setdefault("ocenka_bot", "")
+    окно.cfg["ocenka_bot"] = окно.cfg["ocenka_bot"] or "PintelOlxBot"
+    окно.начать_сделку()
+    окно.state = "scanning"
+    окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
+
+
 @pytest.mark.parametrize("вход,ждём", [
     ("8 705 883 79 53", "+77058837953"),
     ("+7 705 883 79 53", "+77058837953"),
@@ -68,89 +78,88 @@ def test_phone_is_normalised_before_the_deal(вход, ждём):
     assert ui_deal.нормальный_телефон(вход) == ждём
 
 
-def test_flow_starts_with_a_button_and_asks_for_the_client(окно):
-    """Первое окно — «Начать оценку», второе — имя и телефон. Без них проверка не идёт:
-    сделку в Оценку всё равно не создать, а телефон клиента держать у кассы незачем."""
+def test_everything_happens_in_one_window(окно):
+    """«Начать оценку» открывает рабочее окно, и больше экранов в сделке нет: проверка,
+    поля клиента и медиа — на одном месте."""
     assert окно.state == "idle" and окно.stack.currentWidget() is окно.s_main
     окно.начать_сделку()
-    assert окно.stack.currentWidget() is окно.s_client
-    assert not окно.s_client.b_дальше.isEnabled()           # пустая форма дальше не пускает
-    окно.s_client.имя.setText("Зама")
-    окно.s_client.телефон.setText("8 705 883 79 53")
-    assert окно.s_client.b_дальше.isEnabled()
-    окно.s_client._дальше()
-    assert окно.клиент == {"имя": "Зама", "телефон": "+77058837953"}
-    assert окно.stack.currentWidget() is окно.s_scan
+    assert окно.state == "work" and окно.stack.currentWidget() is окно.s_work
+    assert окно.stack.count() == 2, "экранов должно быть ровно два: ожидание и работа"
 
 
-def test_clean_phone_goes_to_the_evaluation_window(окно):
-    """Чистый аппарат: сразу окно оценки, цена подставлена, сводка заполнена."""
-    окно.клиент = {"имя": "Зама", "телефон": "+77058837953"}
+def test_client_can_be_typed_while_the_phone_is_read(окно):
+    """Главная экономия времени: имя пишут, пока идёт проверка. Но отправить до результата
+    нельзя — сделку не из чего собрать."""
+    окно.начать_сделку()
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("8 705 883 79 53")
+    окно.s_work.цена.setText("250000")
+    assert not окно.s_work.b_отправить.isEnabled()          # результата ещё нет
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
-    assert окно.state == "eval" and окно.stack.currentWidget() is окно.s_eval
-    assert окно.s_eval.данные()["цена"] == 250000
-    assert "iPhone 14 Pro" in окно.s_eval.сводка.text()
+    assert окно.s_work.b_отправить.isEnabled()
+    assert окно.s_work.данные()["телефон"] == "+77058837953"
+
+
+def test_clean_phone_fills_the_window(окно):
+    """Чистый аппарат: шапка с моделью, цена подставлена, SIM её словарём, код для медиа."""
+    _чистый(окно)
+    assert окно.state == "work"
+    assert "iPhone 14 Pro" in окно.s_work.аппарат.text()
+    assert окно.s_work.данные()["цена"] == 250000
+    assert окно.s_work.данные()["sim"] in ("Стандарт", "Dual sim", "E-sim", "Прочее")
+    assert окно.код_медиа and окно.s_work.код.text() == окно.код_медиа
 
 
 def test_repaired_phone_is_not_processed_but_kept(окно):
-    """Аппарат с заменой: сделку не оформляем и прямо говорим почему, слепок сохранён."""
-    окно.клиент = {"имя": "Зама", "телефон": "+77058837953"}
+    """Аппарат с заменой: отправку не даём и прямо говорим почему, слепок сохранён."""
+    окно.начать_сделку()
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-15-Pro_iOS26.6.1.zip"), "client_id": "x"})
-    assert окно.state == "result" and окно.stack.currentWidget() is окно.s_result
-    assert "не оформляется" in окно.s_result.note.text()
-    assert "деталь меняли" in окно.s_result.note.text() and "лепок сохранён" in окно.s_result.note.text()
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    окно.s_work.цена.setText("100000")
+    assert not окно.s_work.b_отправить.isEnabled()
+    текст = окно.s_work.ошибка.text()
+    assert "не оформляется" in текст and "деталь меняли" in текст and "лепок сохранён" in текст
 
 
-def test_evaluation_requires_a_price(окно):
-    """Без цены сделку не о чем показывать клиенту. Видео приложение не проверяет: оно
-    его не видит — медиа принимает бот, он и не создаст сделку без видео."""
-    окно.s_eval.показать(_отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), 250000)
-    отправлено = []
-    окно.s_eval.отправить.connect(отправлено.append)
-    окно.s_eval.цена.clear()
-    окно.s_eval._отправить()
-    assert not отправлено and "цена" in окно.s_eval.ошибка.text()
-    окно.s_eval.цена.setText("250000")
-    окно.s_eval._отправить()
-    assert отправлено, окно.s_eval.ошибка.text()
-    assert отправлено[0]["цена"] == 250000 and отправлено[0]["sim"] == "Dual sim"
+def test_send_needs_the_client_and_the_price(окно):
+    """Без имени, телефона или цены сделку не создать — кнопка должна быть недоступна,
+    а не выдавать ошибку после нажатия."""
+    _чистый(окно)
+    assert not окно.s_work.b_отправить.isEnabled()
+    окно.s_work.имя.setText("Зама")
+    assert not окно.s_work.b_отправить.isEnabled()
+    окно.s_work.телефон.setText("12345")                    # не телефон
+    assert not окно.s_work.b_отправить.isEnabled()
+    окно.s_work.телефон.setText("8 705 883 79 53")
+    assert окно.s_work.b_отправить.isEnabled()              # цена подставилась из прайса
+    окно.s_work.цена.clear()
+    assert not окно.s_work.b_отправить.isEnabled()
 
 
-def test_media_link_carries_a_ready_command(окно):
-    """Ссылка открывает бота Оценки с готовой командой и кодом: сотруднику остаётся
-    только прислать видео и фото."""
-    from pintel_core.external import ocenka_media
-    ссылка = ocenka_media.ссылка("pintel_ocenka_bot", "7KQ2M4")
-    assert ссылка == "https://t.me/pintel_ocenka_bot?start=p7KQ2M4"
-    assert ocenka_media.ссылка("@Бот", "A1") == "https://t.me/Бот?start=pA1"
-    окно.s_eval.показать_код("7KQ2M4", ссылка)
-    assert окно.s_eval.код.text() == "7KQ2M4" and ссылка in окно.s_eval.ссылка.text()
+def test_media_code_is_made_on_the_point(окно):
+    """Код придумываем на месте: в базу Оценки с точки хода нет, строку по нему заведёт
+    сам бот, когда сотрудник откроет ссылку."""
+    окно.cfg["ocenka_bot"] = "PintelOlxBot"
+    окно.новый_код_медиа()
+    assert окно.код_медиа and окно.s_work.код.text() == окно.код_медиа
+    assert f"?start=p{окно.код_медиа}" in окно.s_work.ссылка.text()
 
 
 def test_media_without_config_says_so(окно):
     """Не задан бот — сотрудник читает причину, а не смотрит на пустой QR."""
     окно.новый_код_медиа()
-    assert "ocenka_bot" in окно.s_eval.медиа.text() and окно.код_медиа == ""
-
-
-def test_media_code_is_made_on_the_point(окно):
-    """Код придумываем на месте: в базу Оценки с точки хода нет, строку по этому коду
-    заведёт сам бот, когда сотрудник откроет ссылку."""
-    окно.cfg["ocenka_bot"] = "PintelOlxBot"
-    окно.новый_код_медиа()
-    assert окно.код_медиа and окно.s_eval.код.text() == окно.код_медиа
-    assert f"?start=p{окно.код_медиа}" in окно.s_eval.ссылка.text()
+    assert "ocenka_bot" in окно.s_work.медиа.text() and окно.код_медиа == ""
 
 
 def test_export_without_bot_settings_says_so_instead_of_silence(окно):
     """Не заданы токен и чат — сотрудник должен это прочитать, а не нажимать впустую."""
     окно.last = {"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip")}
-    окно.клиент = {"имя": "Зама", "телефон": "+77058837953"}
-    окно.отправить_в_оценку({"цена": 1, "sim": "Стандарт", "коробка": True, "шнур": True,
-                             "комментарий": ""})
-    assert "ocenka_bot_token" in окно.s_eval.ошибка.text()
+    окно.отправить_в_оценку({"имя": "Зама", "телефон": "+77058837953", "цена": 1,
+                             "sim": "Стандарт", "коробка": True, "шнур": True, "комментарий": ""})
+    assert "ocenka_bot_token" in окно.s_work.ошибка.text()
 
 
 def test_export_sends_the_payload_to_the_bot(окно, monkeypatch):
@@ -158,9 +167,9 @@ def test_export_sends_the_payload_to_the_bot(окно, monkeypatch):
     import httpx
     окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
                      "ocenka_chat_id": "-1001"})
-    окно.last = {"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip")}
-    окно.клиент = {"имя": "Зама", "телефон": "+77058837953"}
-    окно.новый_код_медиа()
+    _чистый(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
     ушло = {}
 
     def фейк(url, data=None, files=None, timeout=None):
@@ -168,21 +177,32 @@ def test_export_sends_the_payload_to_the_bot(окно, monkeypatch):
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
 
     monkeypatch.setattr(httpx, "post", фейк)
-    окно.отправить_в_оценку({"цена": 250000, "sim": "Dual sim", "коробка": True, "шнур": False,
-                             "комментарий": "скол"})
+    окно.s_work._отправить()
     окно.tasks[-1].wait(5000)                      # отправка идёт в отдельном потоке
-    assert ушло, "посылка не ушла"
+    assert ушло, "посылка не ушла: " + окно.s_work.ошибка.text()
     посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
-    assert посылка["код"] == окно.код_медиа and посылка["точка"] == "16/38"
+    assert посылка["код"] == окно.код_медиа
     assert посылка["сделка"]["model"] == "iPhone 14 Pro"
     assert посылка["сделка"]["price_grade_auto"] == 250000
     assert посылка["клиент"]["телефон"] == "+77058837953"
     assert "Киоск 16/38" in посылка["сделка"]["comment_ocenka"]
 
 
+def test_sent_deal_shows_the_code_and_opens_printing(окно):
+    """Номер сделки присваивает Оценка при подтверждении, обратного канала нет — на экране
+    и в чеке наш код. Печать до отправки недоступна: печатать нечего."""
+    _чистый(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    assert not окно.s_work.b_печать.isEnabled()
+    окно.сделка_ушла({"код": окно.код_медиа, "message_id": 42})
+    assert окно.s_work.номер.text() == окно.код_медиа
+    assert окно.s_work.b_печать.isEnabled() and not окно.s_work.b_отправить.isEnabled()
+    assert окно.сделка["клиент"] == "Зама" and окно.сделка["сотрудник"] == "Асылбек"
+
+
 def test_receipt_is_written_and_named_by_deal(окно, tmp_path, monkeypatch):
-    """Чек складывается файлом — его печатает сотрудник из окна просмотра. Номер в нём наш,
-    кодовый: номер сделки Оценка присваивает при подтверждении, и обратного канала нет."""
+    """Чек складывается файлом — его печатает сотрудник из окна просмотра."""
     monkeypatch.setattr(kapp, "data_dir", lambda: str(tmp_path))
     os.makedirs(tmp_path / "out", exist_ok=True)
     окно.last = {"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip")}

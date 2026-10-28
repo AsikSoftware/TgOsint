@@ -111,30 +111,6 @@ class Task(QThread):
             self.err.emit(f"{type(e).__name__}: {e}")
 
 
-class IntakePoller(QThread):
-    """Пока показан результат: раз в 2,5 с спрашиваем сервер, выдан ли номер заявки
-    (его выдаёт сотрудник в кассе, записав имя и телефон клиента)."""
-    state = Signal(dict)
-
-    def __init__(self, client, ev_id, parent=None):
-        super().__init__(parent)
-        self.client, self.ev_id = client, ev_id
-        self._stop = False
-
-    def run(self):
-        while not self._stop:
-            try:
-                self.state.emit(self.client.intake(self.ev_id))
-            except Exception:                                    # noqa: BLE001 — нет связи: попробуем ещё
-                pass
-            for _ in range(25):
-                if self._stop:
-                    return
-                time.sleep(0.1)
-
-    def stop(self):
-        self._stop = True
-
 
 DESIGN_W, DESIGN_H = 1920, 1080
 
@@ -186,8 +162,6 @@ class KioskWindow(QMainWindow):
         self.state = "idle"
         self.wait_unplug = False
         self.pipeline = None
-        self.intake = None
-        self.last_intake = None
         self.last = None
         self.tasks = []
         self.setWindowTitle("Pintel Kiosk")
@@ -195,26 +169,20 @@ class KioskWindow(QMainWindow):
         self.host = ScaledHost(self.stack)
         self.setCentralWidget(self.host)
         точка = cfg.get("point") or ""
+        # Два экрана на всю программу: ожидание и рабочее окно. Проверка, сделка и медиа
+        # живут в одном окне — за ним работает сотрудник, а не клиент.
         self.s_main = ui.MainScreen(точка)
-        self.s_client = ui_deal.ClientScreen(точка)
-        self.s_scan = ui.ScanScreen(точка)
-        self.s_result = ui.ResultScreen()
-        self.s_eval = ui_deal.EvalScreen(точка)
-        self.s_done = ui_deal.DoneScreen()
-        for s in (self.s_main, self.s_client, self.s_scan, self.s_result, self.s_eval, self.s_done):
+        self.s_work = ui_deal.WorkScreen(точка)
+        for s in (self.s_main, self.s_work):
             self.stack.addWidget(s)
         self.s_main.начать.connect(self.начать_сделку)
-        self.s_client.дальше.connect(self.клиент_готов)
-        self.s_client.назад.connect(self.go_home)
-        self.s_scan.skip_requested.connect(self.on_skip_apple)
-        self.s_result.just_looking.connect(self.go_home)   # «Готово» — вернуться к началу
-        self.s_eval.отправить.connect(self.отправить_в_оценку)
-        self.s_eval.назад.connect(self.go_home)
-        self.s_eval.новый_код.connect(self.новый_код_медиа)
+        self.s_work.отправить.connect(self.отправить_в_оценку)
+        self.s_work.заново.connect(self.go_home)
+        self.s_work.печать.connect(self.напечатать_чек)
+        self.s_work.пропустить_apple.connect(self.on_skip_apple)
+        self.s_work.новый_код.connect(self.новый_код_медиа)
         self.код_медиа = ""
-        self.s_done.печать.connect(self.напечатать_чек)
-        self.s_done.заново.connect(self.go_home)
-        self.клиент, self.сделка, self.кабель = {}, {}, NO_DEVICE
+        self.сделка, self.кабель = {}, NO_DEVICE
         self.return_timer = QTimer(self)
         self.return_timer.setSingleShot(True)
         self.return_timer.timeout.connect(self.go_home)
@@ -248,7 +216,7 @@ class KioskWindow(QMainWindow):
     # ---------- служебное ----------
     def show_screen(self, w):
         self.stack.setCurrentWidget(w)
-        self.host.set_bg(ui.C["ground"] if w is self.s_result else "#FFFFFF")
+        self.host.set_bg(ui.C["ground"] if w is self.s_work else "#FFFFFF")
 
     def _убрать_старое(self):
         """Старые оценки с диска — при запуске и в фоне: их бывает много, а экран ждать
@@ -268,7 +236,7 @@ class KioskWindow(QMainWindow):
                 c = self.client.config()
                 if c.get("точка"):
                     self.s_main.set_point(c["точка"])
-                    self.s_scan.set_point(c["точка"])
+                    self.s_work.set_point(c["точка"])
                 self.cfg["return_seconds"] = c.get("возврат_с") or self.cfg["return_seconds"]
                 self.cfg["apple_history_seconds"] = c.get("история_apple_с") or self.cfg["apple_history_seconds"]
             except Exception:                                    # noqa: BLE001
@@ -281,19 +249,6 @@ class KioskWindow(QMainWindow):
         t.start()
         return t
 
-    def _stop_intake(self):
-        if self.intake is not None:
-            self.intake.stop()
-            self.intake.wait(2000)
-            self.intake = None
-        self.last_intake = None
-
-    def on_intake(self, state):
-        """Сервер сообщил состояние заявки (номер после имени и телефона, ссылка на фото/видео)."""
-        self.last_intake = state
-        if self.state == "result":
-            self.s_result.set_intake(state)
-
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()
@@ -305,9 +260,7 @@ class KioskWindow(QMainWindow):
         self.net.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()
-        if self.intake is not None:
-            self.intake.stop()
-        for t in (self.poller, self.net, self.pipeline, self.intake, *self.tasks):
+        for t in (self.poller, self.net, self.pipeline, *self.tasks):
             if t is not None and t.isRunning():
                 t.wait(3000)                     # иначе Qt ругается «Destroyed while thread is still running»
         super().closeEvent(e)
@@ -327,24 +280,24 @@ class KioskWindow(QMainWindow):
             if state == NO_DRIVER:
                 self.s_main.set_status("Нет драйвера Apple — установите iTunes", ok=False)
                 self.s_main.set_device("nodriver")
-            elif state == READY and count and not self.wait_unplug:
+            elif state == READY and count:
                 self.s_main.set_device("found")
-                if self.клиент:                        # сперва имя и телефон, потом проверка
-                    self.start_check()
             elif state == NO_DEVICE:
                 self.wait_unplug = False
                 self.s_main.set_device("wait")
                 if self.client.enabled and self.client.online:
                     self.s_main.set_status("Готов к работе", ok=True)
+        elif self.state == "work":
+            # окно уже открыто: телефон подключили — начинаем читать, отключили — ждём следующий
+            if state == NO_DEVICE:
+                self.wait_unplug = False
+            elif state == READY and count and not self.wait_unplug and not self.last:
+                self.start_check()
         elif self.state == "scanning":
             if state == NO_DEVICE and self.pipeline:
                 self.pipeline.cancel.set()
-                self.s_scan.set_trouble("Телефон отключили. Подключите снова, и проверка начнётся заново.")
-                self.state = "failed"
-                QTimer.singleShot(3000, self.go_home)
-        elif self.state == "result":
-            if state == NO_DEVICE:
-                QTimer.singleShot(1500, self.go_home)
+                self.s_work.set_trouble("Телефон отключили. Подключите снова — проверка начнётся заново.")
+                self.state = "work"
 
     def start_check(self):
         if self.pipeline and self.pipeline.isRunning():
@@ -352,32 +305,29 @@ class KioskWindow(QMainWindow):
             self.pipeline.wait(3000)
         self.state = "scanning"
         self.wait_unplug = True
-        self.s_scan.reset()
-        self.show_screen(self.s_scan)
+        self.s_work.set_trouble("Не отключайте кабель. Обычно это занимает около минуты.")
         self.pipeline = Pipeline(self.cfg, self.client, self.grid, self)
         self.pipeline.status.connect(self.on_link_status)
-        self.pipeline.step.connect(self.s_scan.set_step)
-        self.pipeline.apple_prompt.connect(self.s_scan.show_prompt)
+        self.pipeline.step.connect(self.s_work.set_step)
+        self.pipeline.apple_prompt.connect(self.s_work.show_prompt)
         self.pipeline.done.connect(self.on_done)
         self.pipeline.history.connect(self.on_history)
         self.pipeline.failed.connect(self.on_failed)
         self.pipeline.start()
 
     def on_history(self, result):
-        """История Apple пришла после результата — обновляем карточку."""
+        """История Apple пришла после результата — обновляем то, что уже на экране."""
         if self.last and result.get("client_id") == self.last.get("client_id"):
             self.last = result
-            if self.state == "result":
-                self.s_result.fill(result["report"], result.get("server"))
-                if self.last_intake:                       # не сбрасывать уже выданный номер
-                    self.s_result.set_intake(self.last_intake)
+            if self.state == "work":
+                self.s_work.показать(result["report"], (result["report"].get("цена") or {}).get("цена"))
 
     def on_link_status(self, state, human):
         if state != READY:
-            self.s_scan.set_step("connect", "run", human)
-            self.s_scan.set_trouble(human)
+            self.s_work.set_step("connect", "run", human)
+            self.s_work.set_trouble(human)
         else:
-            self.s_scan.set_trouble("Не отключайте кабель. Обычно это занимает около минуты.")
+            self.s_work.set_trouble("Не отключайте кабель. Обычно это занимает около минуты.")
 
     def on_skip_apple(self):
         if self.pipeline:
@@ -389,54 +339,36 @@ class KioskWindow(QMainWindow):
         self.last = result
         rep = result["report"]
         итог = (rep.get("детали_вердикт") or {}).get("итог")
-        if итог == "родные" and self.клиент:
-            self.state = "eval"                        # аппарат чистый — оформляем сделку
-            self.s_eval.показать(rep, (rep.get("цена") or {}).get("цена"))
-            self.show_screen(self.s_eval)
+        self.state = "work"
+        self.s_work.показать(rep, (rep.get("цена") or {}).get("цена"))
+        if итог == "родные":
             self.новый_код_медиа()
             return
-        self.s_result.fill(rep, result.get("server"))
-        if self.клиент:
-            # ремонт, замена или неподтверждённые детали — сделку не оформляем, но слепок уже
-            # сохранён: именно на таких аппаратах учится разбор, и позже мы их добавим
-            self.s_result.set_note(
-                "Сделка не оформляется: "
-                + ("Apple не подтвердила подлинность деталей" if итог in ("кабель", "неполно")
-                   else "по данным Apple деталь меняли")
-                + ". Слепок сохранён — передайте его разработчику.")
-        self.show_screen(self.s_result)
-        self.state = "result"
-        self.return_timer.start(int(self.cfg.get("return_seconds", 60)) * 3000)
-        # номер заявки сервер выдаст, когда сотрудник в кассе запишет имя и телефон клиента — опрашиваем
-        self._stop_intake()
-        srv = result.get("server") or {}
-        if srv.get("id") and not srv.get("локально") and self.client.enabled:
-            self.intake = IntakePoller(self.client, srv["id"], self)
-            self.intake.state.connect(self.on_intake)
-            self.intake.start()
+        # ремонт, замена или неподтверждённые детали — сделку не оформляем, но слепок уже
+        # сохранён: именно на таких аппаратах учится разбор, и позже мы их добавим
+        self.s_work.отказ(
+            "Сделка не оформляется: "
+            + ("Apple не подтвердила подлинность деталей" if итог in ("кабель", "неполно")
+               else "по данным Apple деталь меняли")
+            + ". Слепок сохранён — передайте его разработчику.")
 
     def on_failed(self, text):
         if self.state != "scanning":
             return
-        self.state = "failed"
-        self.s_scan.set_step("connect", "fail", "не удалось")
-        self.s_scan.set_trouble("Не получилось прочитать телефон: " + text + ". Подключите заново или подойдите к сотруднику.")
-        QTimer.singleShot(8000, self.go_home)
+        self.state = "work"
+        self.s_work.set_step("connect", "fail", "не удалось")
+        self.s_work.set_trouble("Не получилось прочитать телефон: " + text
+                                + ". Отключите и подключите кабель заново.")
 
     # ---------- сделка ----------
     def начать_сделку(self):
-        self.s_client.сбросить()
-        self.state = "client"
-        self.show_screen(self.s_client)
-
-    def клиент_готов(self, имя, телефон):
-        self.клиент = {"имя": имя, "телефон": телефон}
-        self.state = "idle"
-        self.wait_unplug = False
-        self.s_scan.reset()
-        self.s_scan.set_trouble("Подключите телефон кабелем и нажмите «Доверять».")
-        self.show_screen(self.s_scan)
-        if self.кабель == READY:
+        """Одно окно на всю сделку: имя клиента можно писать, пока читается телефон."""
+        self.last = None
+        self.сделка = {}
+        self.s_work.начать()
+        self.state = "work"
+        self.show_screen(self.s_work)
+        if self.кабель == READY and not self.wait_unplug:
             self.start_check()
 
     def отправить_в_оценку(self, поля):
@@ -445,14 +377,14 @@ class KioskWindow(QMainWindow):
         rep = (self.last or {}).get("report") or {}
         пас, cfg = rep.get("паспорт") or {}, self.cfg
         if not (cfg.get("ocenka_bot_token") and cfg.get("ocenka_chat_id")):
-            self.s_eval.ошибка.setText("В kiosk.toml не заданы ocenka_bot_token и "
+            self.s_work.ошибка.setText("В kiosk.toml не заданы ocenka_bot_token и "
                                        "ocenka_chat_id — отправлять некуда")
             return
         if not self.код_медиа:
-            self.s_eval.ошибка.setText("Нет кода для медиа — нажмите «Другой код»")
+            self.s_work.ошибка.setText("Нет кода для медиа — нажмите «Другой код»")
             return
-        клиент, код = dict(self.клиент), self.код_медиа
-        self.s_eval.занято("Отправляем…")
+        клиент, код = {"имя": поля["имя"], "телефон": поля["телефон"]}, self.код_медиа
+        self.s_work.занято("Отправляем…")
 
         def job():
             данные = {
@@ -488,31 +420,29 @@ class KioskWindow(QMainWindow):
         from pintel_core.external import ocenka_media
         if not self.cfg.get("ocenka_bot"):
             self.код_медиа = ""
-            self.s_eval.показать_код("—", "")
-            self.s_eval.медиа.setText("В kiosk.toml не задан ocenka_bot — медиа принять не от кого")
+            self.s_work.показать_код("—", "")
+            self.s_work.медиа.setText("В kiosk.toml не задан ocenka_bot — медиа принять не от кого")
             return
         self.код_медиа = ocenka_media.новый_код()
-        self.s_eval.показать_код(self.код_медиа,
+        self.s_work.показать_код(self.код_медиа,
                                  ocenka_media.ссылка(self.cfg["ocenka_bot"], self.код_медиа))
-        self.s_eval.медиа.setText("Видео обязательно — без него бот не создаст сделку.")
+        self.s_work.медиа.setText("Сканируйте телефоном и пришлите видео и фото. "
+                                  "Кто прислал — тот и оценщик. Видео обязательно.")
 
     def отправка_не_удалась(self, текст):
-        self.s_eval.занято("")
-        self.s_eval.ошибка.setText("Не ушло: " + текст)
+        self.s_work.занято("")
+        self.s_work.ошибка.setText("Не ушло: " + текст)
 
     def сделка_ушла(self, итог):
-        поля = self.s_eval.данные()
-        self.s_eval.занято("")
-        self.сделка = {"номер": итог.get("код") or self.код_медиа, "цена": поля.get("цена"),
+        поля = self.s_work.данные()
+        self.s_work.занято("")
+        код = итог.get("код") or self.код_медиа
+        self.сделка = {"номер": код, "цена": поля.get("цена"),
                        "валюта": self.cfg.get("currency", "₸"),
-                       "клиент": self.клиент.get("имя"), "телефон": self.клиент.get("телефон"),
+                       "клиент": поля.get("имя"), "телефон": поля.get("телефон"),
                        "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
                        "коробка": поля.get("коробка"), "шнур": поля.get("шнур")}
-        self.s_done.показать(итог.get("код") or self.код_медиа,
-                             "Оценка ушла в Telegram. Оценщик подтверждает её кнопкой — "
-                             "там же появится номер сделки в Оценке.")
-        self.state = "done"
-        self.show_screen(self.s_done)
+        self.s_work.ушло(код)
 
     def напечатать_чек(self):
         """Чек A4 клиенту: складываем страницу и открываем — печать из окна просмотра."""
@@ -529,17 +459,16 @@ class KioskWindow(QMainWindow):
                 webbrowser.open("file://" + путь)
         except Exception as e:                         # noqa: BLE001
             log_line(f"чек не открылся: {e}")
-        self.s_done.подпись.setText("Чек сохранён: " + путь)
+        self.s_work.итог_текст.setText("Чек сохранён: " + путь)
 
     def go_home(self):
         self.return_timer.stop()
-        self._stop_intake()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
         self.state = "idle"
         self.last = None
-        self.клиент, self.сделка, self.код_медиа = {}, {}, ""
-        self.s_main.set_device("wait")
+        self.сделка, self.код_медиа = {}, ""
+        self.s_main.set_device("found" if self.кабель == READY else "wait")
         self.show_screen(self.s_main)
 
 

@@ -1,50 +1,50 @@
 # -*- coding: utf-8 -*-
-"""Экраны сделки: клиент → оценка → чек.
+"""Рабочее окно сотрудника: проверка, сделка и медиа на одном экране.
 
-Приложение работает само по себе, без нашего сервера: имя клиента сотрудник вводит в
-начале, оценку оформляет здесь же, отсюда же сделка уходит в Оценку и печатается чек.
+За экраном работает сотрудник, а не клиент: он вводит имя и телефон, ставит цену и
+сканирует QR своим телефоном. Поэтому окно одно и плотное — шесть экранов на сделку он
+проходил бы по десять раз в день.
 
-Поля экрана оценки — ровно те, что хранит Оценка: комплектность, SIM её словарём, цена,
-комментарий. Фото и видео приложение не видит вовсе: их принимает бот Оценки по коду с
-этого экрана, он же проверяет, что видео пришло (без него Оценка не открывает карточку —
-её код берёт `video_phone` без проверки), и он же создаёт сделку.
+Три колонки: слева идёт проверка и её итог, в середине — сделка, справа — то, что нужно
+прямо сейчас: сначала шаг с разделом Apple на телефоне, потом QR для медиа, потом
+подтверждение отправки. Имя клиента можно записывать, пока читается телефон.
+
+Поля сделки — ровно те, что хранит Оценка. Фото и видео приложение не видит вовсе: их
+принимает бот по коду с этого экрана, он же проверяет видео и создаёт сделку.
 """
-import os
 import re
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLineEdit, QPushButton, QSizePolicy, QTextEdit, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLineEdit,
+                               QPushButton, QSizePolicy, QStackedWidget, QTextEdit, QVBoxLayout,
+                               QWidget)
 
-from .ui import (C, FONT_HEAD, FONT_NUM, FONT_TEXT, QrBlock, Screen, W, font, header, kicker, label,
-                 point_text, qr_pixmap)
+from .ui import (C, FONT_HEAD, FONT_NUM, FONT_TEXT, QrBlock, Screen, StepRow, STEPS, W, font,
+                 kicker, label, point_text, qr_pixmap)
 
 QSS_DEAL = """
-QLineEdit, QComboBox, QTextEdit { background: #FFFFFF; border: 2px solid %(border)s; border-radius: 16px;
-    padding: 18px 22px; font-size: 26px; color: %(ink)s; selection-background-color: %(tint)s; }
+QLineEdit, QComboBox, QTextEdit { background: #FFFFFF; border: 2px solid %(border)s; border-radius: 14px;
+    padding: 11px 15px; font-size: 21px; color: %(ink)s; selection-background-color: %(tint)s; }
 QLineEdit:focus, QComboBox:focus, QTextEdit:focus { border-color: %(action)s; }
 QLineEdit[плохо="да"] { border-color: %(bad)s; }
-QComboBox::drop-down { border: none; width: 44px; }
-QCheckBox { font-size: 26px; font-weight: 600; spacing: 16px; }
-QCheckBox::indicator { width: 34px; height: 34px; border: 2px solid %(ring)s; border-radius: 10px;
+QLineEdit#цена { font-size: 32px; font-weight: 700; }
+QComboBox::drop-down { border: none; width: 38px; }
+QCheckBox { font-size: 21px; font-weight: 600; spacing: 12px; }
+QCheckBox::indicator { width: 26px; height: 26px; border: 2px solid %(ring)s; border-radius: 8px;
     background: #FFFFFF; }
 QCheckBox::indicator:checked { background: %(action)s; border-color: %(action)s; }
 QPushButton#ghost { background: transparent; color: %(body)s; border: 2px solid %(border)s;
-    border-radius: 18px; font-size: 24px; font-weight: 700; min-height: 70px; padding: 0 32px; }
+    border-radius: 14px; font-size: 21px; font-weight: 700; min-height: 56px; padding: 0 28px; }
 QPushButton#ghost:pressed { background: %(ground)s; }
-QPushButton#file { background: %(tint)s; color: %(brand)s; border: none; border-radius: 16px;
-    font-size: 22px; font-weight: 700; min-height: 62px; padding: 0 26px; }
-QFrame#карточка { background: #FFFFFF; border: 2px solid %(border)s; border-radius: 24px; }
+QPushButton#ghost:disabled { color: %(ghost)s; border-color: %(border)s; }
+QPushButton#primary:disabled { background: %(ghost)s; }
+QPushButton#small { background: %(tint)s; color: %(brand)s; border: none; border-radius: 12px;
+    font-size: 19px; font-weight: 700; min-height: 48px; padding: 0 22px; }
+QFrame#карточка { background: #FFFFFF; border: 2px solid %(border)s; border-radius: 20px; }
 """ % C
 
-ТЕЛЕФОН = re.compile(r"^\+?7\d{10}$")
-
-
-def _кнопка(текст, главная=True):
-    b = QPushButton(текст)
-    b.setObjectName("primary" if главная else "ghost")
-    b.setCursor(Qt.PointingHandCursor)
-    return b
+СОСТОЯНИЕ = {"ok": ("оригинальная", C["ok"]), "repaired": ("меняли, оригинал Apple", C["warntext"]),
+             "used": ("б/у деталь", C["warntext"]), "bad": ("не подтверждена", C["badtext"])}
 
 
 def нормальный_телефон(текст):
@@ -59,273 +59,404 @@ def нормальный_телефон(текст):
     return "+" + цифры
 
 
-class ClientScreen(Screen):
-    """Второй экран: имя и телефон клиента. Без них сделку в Оценку не создать."""
-
-    дальше = Signal(str, str)
-    назад = Signal()
-
-    def __init__(self, point=""):
-        super().__init__()
-        self.setStyleSheet(QSS_DEAL)
-        self.root.addLayout(header(label(point_text(point), "muted")))
-        self.root.addSpacing(40)
-        self.root.addWidget(label("Кто сдаёт телефон", font_=font(FONT_HEAD, 64, W.Bold, -1.0)))
-        self.root.addSpacing(8)
-        self.root.addWidget(label("Имя и номер нужны, чтобы оформить сделку и вернуть телефон владельцу.",
-                                  "lead", wrap=True))
-        self.root.addSpacing(44)
-        сетка = QGridLayout()
-        сетка.setHorizontalSpacing(40)
-        сетка.setVerticalSpacing(14)
-        self.имя = QLineEdit()
-        self.имя.setPlaceholderText("Имя клиента")
-        self.телефон = QLineEdit()
-        self.телефон.setPlaceholderText("+7 7XX XXX XX XX")
-        for столбец, (подпись, поле) in enumerate(((("ИМЯ"), self.имя), ("ТЕЛЕФОН", self.телефон))):
-            поле.setMinimumWidth(620)
-            поле.returnPressed.connect(self._дальше)
-            поле.textChanged.connect(self._проверить)
-            сетка.addWidget(kicker(подпись), 0, столбец)
-            сетка.addWidget(поле, 1, столбец)
-        self.root.addLayout(сетка)
-        self.подсказка = label("", "muted", wrap=True)
-        self.root.addSpacing(10)
-        self.root.addWidget(self.подсказка)
-        self.root.addStretch(1)
-        ряд = QHBoxLayout()
-        ряд.setSpacing(20)
-        b_назад = _кнопка("Назад", главная=False)
-        b_назад.clicked.connect(self.назад.emit)
-        self.b_дальше = _кнопка("Далее — подключить телефон")
-        self.b_дальше.clicked.connect(self._дальше)
-        ряд.addWidget(b_назад)
-        ряд.addStretch(1)
-        ряд.addWidget(self.b_дальше)
-        self.root.addLayout(ряд)
-        self._проверить()
-
-    def сбросить(self):
-        self.имя.clear()
-        self.телефон.clear()
-        self.имя.setFocus()
-
-    def _проверить(self):
-        имя = self.имя.text().strip()
-        тел = нормальный_телефон(self.телефон.text())
-        годно = bool(имя) and bool(тел)
-        self.b_дальше.setEnabled(годно)
-        self.телефон.setProperty("плохо", "да" if (self.телефон.text().strip() and not тел) else "нет")
-        self.телефон.style().unpolish(self.телефон)
-        self.телефон.style().polish(self.телефон)
-        self.подсказка.setText("" if годно else "Заполните имя и номер в формате +7 7XX XXX XX XX")
-        return годно
-
-    def _дальше(self):
-        if self._проверить():
-            self.дальше.emit(self.имя.text().strip(), нормальный_телефон(self.телефон.text()))
+def _кнопка(текст, вид="primary"):
+    b = QPushButton(текст)
+    b.setObjectName(вид)
+    b.setCursor(Qt.PointingHandCursor)
+    return b
 
 
-class EvalScreen(Screen):
-    """Окно оценки: то, что раньше было карточкой сделки на сервере."""
+def _плашка(текст, фон, цвет):
+    l = label(текст, font_=font(FONT_TEXT, 20, W.Bold))
+    l.setStyleSheet(f"background: {фон}; color: {цвет}; border-radius: 16px; padding: 7px 18px;")
+    return l
+
+
+def _карточка(заголовок):
+    """Колонка-карточка с заголовком: внутрь кладут содержимое."""
+    рамка = QFrame()
+    рамка.setObjectName("карточка")
+    рамка.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+    внутри = QVBoxLayout(рамка)
+    внутри.setContentsMargins(26, 22, 26, 22)
+    внутри.setSpacing(12)
+    внутри.addWidget(kicker(заголовок, 15, 2.4, C["brand"]))
+    return рамка, внутри
+
+
+class WorkScreen(Screen):
+    """Всё, что делает сотрудник после «Начать оценку»."""
 
     отправить = Signal(dict)
-    назад = Signal()
+    печать = Signal()
+    заново = Signal()
+    пропустить_apple = Signal()
     новый_код = Signal()
 
     def __init__(self, point=""):
         super().__init__(gray=True)
         self.setStyleSheet(QSS_DEAL)
-        # фото и видео живут только у бота: он принимает их по коду и сам ставит в сделку
-        self.rep = {}
-        self.root.addLayout(header(label(point_text(point), "muted")))
-        self.root.addSpacing(24)
-        self.root.addWidget(label("Оформление оценки", font_=font(FONT_HEAD, 56, W.Bold, -1.0)))
-        self.сводка = label("", "lead_s", wrap=True)
-        self.root.addSpacing(6)
-        self.root.addWidget(self.сводка)
-        self.root.addSpacing(28)
+        self.rep, self.готово, self.отправлено = {}, False, False
+        self.root.setContentsMargins(56, 40, 56, 36)
+
+        шапка = QHBoxLayout()
+        self.аппарат = label("Подключите телефон кабелем", font_=font(FONT_TEXT, 22, W.Bold))
+        self.точка = label(point_text(point), "muted")
+        шапка.addWidget(self.аппарат, 1)
+        шапка.addWidget(self.точка)
+        self.root.addLayout(шапка)
+
+        self.плашки = QHBoxLayout()
+        self.плашки.setSpacing(12)
+        self.плашки.addStretch(1)
+        self.root.addSpacing(14)
+        self.root.addLayout(self.плашки)
 
         тело = QHBoxLayout()
-        тело.setSpacing(40)
-        тело.addLayout(self._левая(), 1)
-        тело.addLayout(self._правая(), 1)
+        тело.setSpacing(22)
+        тело.addWidget(self._проверка(), 105)
+        тело.addWidget(self._сделка(), 100)
+        тело.addWidget(self._справа(), 80)
+        self.root.addSpacing(18)
         self.root.addLayout(тело, 1)
 
         self.ошибка = label("", wrap=True, color=C["badtext"])
+        self.root.addSpacing(10)
         self.root.addWidget(self.ошибка)
-        ряд = QHBoxLayout()
-        ряд.setSpacing(20)
-        b_назад = _кнопка("Назад", главная=False)
-        b_назад.clicked.connect(self.назад.emit)
+        низ = QHBoxLayout()
+        низ.setSpacing(14)
+        self.b_отмена = _кнопка("Отменить", "ghost")
+        self.b_отмена.clicked.connect(self.заново.emit)
+        self.b_печать = _кнопка("Печать чека", "ghost")
+        self.b_печать.clicked.connect(self.печать.emit)
         self.b_отправить = _кнопка("Отправить в Оценку")
         self.b_отправить.clicked.connect(self._отправить)
-        ряд.addWidget(b_назад)
-        ряд.addStretch(1)
-        ряд.addWidget(self.b_отправить)
-        self.root.addLayout(ряд)
+        низ.addWidget(self.b_отмена)
+        низ.addStretch(1)
+        низ.addWidget(self.b_печать)
+        низ.addWidget(self.b_отправить)
+        self.root.addSpacing(16)
+        self.root.addLayout(низ)
+        self.начать()
 
-    def _левая(self):
-        кол = QVBoxLayout()
-        кол.setSpacing(18)
-        кол.addWidget(kicker("КОМПЛЕКТНОСТЬ"))
+    # ---------- колонки ----------
+    def _проверка(self):
+        рамка, внутри = _карточка("ПРОВЕРКА")
+        self.стопка = QStackedWidget()
+        шаги = QWidget()
+        сл = QVBoxLayout(шаги)
+        сл.setContentsMargins(0, 0, 0, 0)
+        сл.setSpacing(10)
+        self.шаги = {}
+        for ключ, имя in STEPS:
+            r = StepRow(имя)
+            self.шаги[ключ] = r
+            сл.addWidget(r)
+        self.подсказка = label("Не отключайте кабель. Обычно это занимает около минуты.", "muted", wrap=True)
+        сл.addSpacing(6)
+        сл.addWidget(self.подсказка)
+        сл.addStretch(1)
+        итог = QWidget()
+        ил = QVBoxLayout(итог)
+        ил.setContentsMargins(0, 0, 0, 0)
+        ил.setSpacing(0)
+        self.итоги = QGridLayout()
+        self.итоги.setHorizontalSpacing(16)
+        self.итоги.setVerticalSpacing(0)
+        self.итоги.setColumnStretch(0, 1)
+        ил.addLayout(self.итоги)
+        ил.addStretch(1)
+        self.стопка.addWidget(шаги)
+        self.стопка.addWidget(итог)
+        внутри.addWidget(self.стопка, 1)
+        return рамка
+
+    def _сделка(self):
+        рамка, внутри = _карточка("СДЕЛКА")
+        сетка = QGridLayout()
+        сетка.setHorizontalSpacing(12)
+        сетка.setVerticalSpacing(6)
+        self.имя = QLineEdit()
+        self.имя.setPlaceholderText("Имя клиента")
+        self.телефон = QLineEdit()
+        self.телефон.setPlaceholderText("+7 7XX XXX XX XX")
+        for столбец, (подпись, поле) in enumerate((("ИМЯ", self.имя), ("ТЕЛЕФОН", self.телефон))):
+            поле.textChanged.connect(self._проверить)
+            сетка.addWidget(kicker(подпись, 13, 2.0), 0, столбец)
+            сетка.addWidget(поле, 1, столбец)
+        внутри.addLayout(сетка)
+
+        ряд = QHBoxLayout()
+        ряд.setSpacing(20)
         self.коробка = QCheckBox("Коробка")
         self.шнур = QCheckBox("Шнур")
-        кол.addWidget(self.коробка)
-        кол.addWidget(self.шнур)
-        кол.addSpacing(18)
-        кол.addWidget(kicker("SIM"))
         self.sim = QComboBox()
         self.sim.addItems(["Стандарт", "Dual sim", "E-sim", "Прочее"])
-        кол.addWidget(self.sim)
-        кол.addSpacing(18)
-        кол.addWidget(kicker("ЦЕНА, ₸"))
+        ряд.addWidget(self.коробка)
+        ряд.addWidget(self.шнур)
+        ряд.addWidget(self.sim, 1)
+        внутри.addSpacing(6)
+        внутри.addLayout(ряд)
+
+        цена_ряд = QHBoxLayout()
+        цена_ряд.setSpacing(12)
         self.цена = QLineEdit()
-        self.цена.setPlaceholderText("Сумма, которую называем клиенту")
-        кол.addWidget(self.цена)
-        кол.addSpacing(18)
-        кол.addWidget(kicker("КОММЕНТАРИЙ"))
+        self.цена.setObjectName("цена")
+        self.цена.setPlaceholderText("Сумма клиенту")
+        self.цена.textChanged.connect(self._цена_набрана)
+        цена_ряд.addWidget(label("Цена, ₸", "muted"))
+        цена_ряд.addWidget(self.цена, 1)
+        внутри.addSpacing(6)
+        внутри.addLayout(цена_ряд)
+
         self.комментарий = QTextEdit()
-        self.комментарий.setPlaceholderText("Состояние корпуса, сколы, что обещали клиенту")
-        self.комментарий.setFixedHeight(150)
-        кол.addWidget(self.комментарий)
-        кол.addStretch(1)
-        return кол
+        self.комментарий.setPlaceholderText("Сколы, состояние корпуса")
+        внутри.addWidget(self.комментарий, 1)
+        return рамка
 
-    def _правая(self):
-        кол = QVBoxLayout()
-        кол.setSpacing(18)
-        кол.addWidget(kicker("ФОТО И ВИДЕО — ЧЕРЕЗ БОТА ОЦЕНКИ"))
-        кол.addWidget(label("Откройте ссылку своим телефоном и пришлите боту видео и фото. "
-                            "Кто открыл — тот и будет оценщиком сделки.", "muted", wrap=True))
-        ряд = QHBoxLayout()
-        ряд.setSpacing(18)
+    def _справа(self):
+        """Что нужно прямо сейчас: шаг Apple → QR для медиа → подтверждение."""
+        self.правая = QStackedWidget()
+
+        apple = QFrame()
+        apple.setObjectName("карточка")
+        ал = QVBoxLayout(apple)
+        ал.setContentsMargins(26, 22, 26, 22)
+        ал.setSpacing(10)
+        ал.addWidget(kicker("ОДИН ШАГ НА ТЕЛЕФОНЕ", 15, 2.4, C["brand"]))
+        ал.addWidget(label("Откройте «Об этом устройстве» — Apple сама скажет, что менялось",
+                           wrap=True, font_=font(FONT_HEAD, 25, W.Bold)))
+        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
+                               "если есть «Детали и обслуживание» — зайдите в неё"), 1):
+            ал.addWidget(label(f"{i} · {t}", "muted", wrap=True))
+        ал.addStretch(1)
+        ал.addWidget(label("Строки может не быть: Apple показывает её, только если деталь меняли. "
+                           "Проверка всё равно уйдёт.", "muted", wrap=True))
+        b_пропуск = QPushButton("Сделает сотрудник")
+        b_пропуск.setObjectName("small")
+        b_пропуск.clicked.connect(self.пропустить_apple.emit)
+        ал.addWidget(b_пропуск, 0, Qt.AlignLeft)
+
+        медиа, мл = _карточка("ФОТО И ВИДЕО — ЧЕРЕЗ БОТА")
         self.qr = QrBlock()
-        ряд.addWidget(self.qr, 0, Qt.AlignTop)
-        правее = QVBoxLayout()
-        правее.setSpacing(8)
-        self.код = label("—", font_=font(FONT_NUM, 40, W.Bold))
+        мл.addWidget(self.qr, 0, Qt.AlignHCenter)
+        self.код = label("—", font_=font(FONT_NUM, 30, W.Bold))
+        self.код.setAlignment(Qt.AlignHCenter)
+        мл.addWidget(self.код)
         self.ссылка = label("", "muted", wrap=True)
-        self.ссылка.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        правее.addWidget(self.код)
-        правее.addWidget(self.ссылка)
-        b_новый = QPushButton("Другой код")
-        b_новый.setObjectName("file")
-        b_новый.clicked.connect(self.новый_код.emit)
-        правее.addWidget(b_новый, 0, Qt.AlignLeft)
-        правее.addStretch(1)
-        ряд.addLayout(правее, 1)
-        кол.addLayout(ряд)
-        self.медиа = label("Видео обязательно — без него бот не создаст сделку.", "muted", wrap=True)
-        кол.addWidget(self.медиа)
-        кол.addSpacing(18)
-        кол.addWidget(kicker("ЧТО УВИДЕЛА ПРОВЕРКА"))
-        карточка = QFrame()
-        карточка.setObjectName("карточка")
-        карточка.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self.итоги = QVBoxLayout(карточка)
-        self.итоги.setContentsMargins(28, 24, 28, 24)
-        self.итоги.setSpacing(10)
-        кол.addWidget(карточка, 1)
-        return кол
+        self.ссылка.setAlignment(Qt.AlignHCenter)
+        мл.addWidget(self.ссылка)
+        self.медиа = label("Сканируйте телефоном и пришлите видео и фото. Кто прислал — тот и оценщик.",
+                           "muted", wrap=True)
+        self.медиа.setAlignment(Qt.AlignHCenter)
+        мл.addWidget(self.медиа)
+        мл.addStretch(1)
+        b_код = QPushButton("Другой код")
+        b_код.setObjectName("small")
+        b_код.clicked.connect(self.новый_код.emit)
+        мл.addWidget(b_код, 0, Qt.AlignHCenter)
 
-    # ---------- наполнение ----------
-    def показать(self, rep, цена=None):
-        self.rep = rep or {}
-        пас = self.rep.get("паспорт") or {}
-        пам = self.rep.get("память") or {}
-        бат = self.rep.get("батарея") or {}
-        self.сводка.setText(" · ".join(x for x in (
-            пас.get("модель"), f"{пам.get('объём_гб')} ГБ" if пам.get("объём_гб") else None,
-            f"аккумулятор {бат.get('здоровье_%')}%" if бат.get("здоровье_%") is not None else None,
-            пас.get("серийник")) if x))
-        from pintel_core.external import ocenka
-        self.sim.setCurrentText(ocenka.sim_для_оценки(пас))
-        if цена:
-            self.цена.setText(str(int(цена)))
+        готово, гл = _карточка("ОТПРАВЛЕНО")
+        гл.addStretch(1)
+        self.номер = label("—", font_=font(FONT_NUM, 44, W.Bold))
+        self.номер.setAlignment(Qt.AlignHCenter)
+        гл.addWidget(self.номер)
+        self.итог_текст = label("", "muted", wrap=True)
+        self.итог_текст.setAlignment(Qt.AlignHCenter)
+        гл.addWidget(self.итог_текст)
+        гл.addStretch(1)
+
+        for w in (apple, медиа, готово):
+            self.правая.addWidget(w)
+        return self.правая
+
+    # ---------- состояния ----------
+    def начать(self):
+        """Новая сделка: поля пустые, проверка с нуля."""
+        self.rep, self.готово, self.отправлено = {}, False, False
+        self.имя.clear()
+        self.телефон.clear()
+        self.цена.clear()
+        self.комментарий.clear()
+        self.коробка.setChecked(False)
+        self.шнур.setChecked(False)
+        self.sim.setCurrentIndex(0)
+        self.аппарат.setText("Подключите телефон кабелем")
+        self.ошибка.setText("")
+        self.подсказка.setText("Не отключайте кабель. Обычно это занимает около минуты.")
+        for r in self.шаги.values():
+            r.set("wait", "")
+        self.шаги["connect"].set("run", "ждём «Доверять»")
+        self.стопка.setCurrentIndex(0)
+        self.правая.setCurrentIndex(1)
+        self._очистить_итоги()
+        self.b_отправить.setText("Отправить в Оценку")
+        self.b_отмена.setText("Отменить")
+        self.b_печать.setEnabled(False)
+        self.имя.setFocus()
+        self._проверить()
+
+    def set_point(self, point):
+        self.точка.setText(point_text(point))
+
+    def set_step(self, key, state, text):
+        if key in self.шаги:
+            self.шаги[key].set(state, text)
+
+    def set_trouble(self, text):
+        self.подсказка.setText(text)
+
+    def show_prompt(self, on):
+        """Шаг с разделом Apple занимает правую колонку, пока он нужен."""
+        if self.отправлено:
+            return
+        self.правая.setCurrentIndex(0 if on else 1)
+
+    def показать_код(self, код, ссылка):
+        self.код.setText(код or "—")
+        # под QR достаточно короткого адреса: он нужен, только если QR не считался
+        self.ссылка.setText(str(ссылка or "").replace("https://", ""))
+        self.qr.set(qr_pixmap(ссылка) if ссылка else None, "СКАНИРУЙТЕ", rise=False)
+
+    def _очистить_итоги(self):
         while self.итоги.count():
             w = self.итоги.takeAt(0).widget()
             if w:
                 w.deleteLater()
+        while self.плашки.count() > 1:
+            w = self.плашки.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+
+    def _строка_итога(self, ключ, значение, цвет=None):
+        n = self.итоги.rowCount()
+        self.итоги.addWidget(label(ключ, "muted", font_=font(FONT_TEXT, 20)), n, 0, Qt.AlignLeft)
+        self.итоги.addWidget(label(значение, font_=font(FONT_TEXT, 20, W.Bold), color=цвет), n, 1,
+                             Qt.AlignRight)
+
+    def показать(self, rep, цена=None):
+        """Проверка закончилась: плашки наверху, подробности слева, QR справа."""
+        self.rep = rep or {}
+        пас = self.rep.get("паспорт") or {}
+        пам = self.rep.get("память") or {}
+        бат = self.rep.get("батарея") or {}
         вердикт = self.rep.get("детали_вердикт") or {}
         итог = (self.rep.get("итог") or {}).get("вердикт") or ""
-        цвет = {"ХОРОШИЙ": C["ok"], "ПРОБЛЕМНЫЙ": C["badtext"]}.get(итог, C["warntext"])
-        self.итоги.addWidget(label(итог or "—", font_=font(FONT_HEAD, 34, W.Bold), color=цвет))
+        self.готово = True
+        self.аппарат.setText(" · ".join(x for x in (
+            пас.get("модель"), f"{пам.get('объём_гб')} ГБ" if пам.get("объём_гб") else None,
+            f"iOS {пас.get('ios')}" if пас.get("ios") else None,
+            f"IMEI {пас.get('imei')}" if пас.get("imei") else None) if x))
+        self._очистить_итоги()
+
+        цвет = {"ХОРОШИЙ": (C["okbg"], C["ok"]), "ИДЕАЛ": (C["okbg"], C["ok"]),
+                "ПРОБЛЕМНЫЙ": (C["badbg"], C["badtext"])}.get(итог, (C["warnbg"], C["warntext"]))
+        плашки = [(итог or "ПРОВЕРКА", *цвет)]
+        if вердикт.get("apple_подтверждено"):
+            плашки.append(("Apple подтвердила детали", C["tint"], C["brand"]))
+        if бат.get("здоровье_%") is not None:
+            фон, кр = (C["warnbg"], C["warntext"]) if бат["здоровье_%"] < 85 else (C["okbg"], C["ok"])
+            плашки.append((f"Аккумулятор {бат['здоровье_%']}%"
+                           + (f" · {бат['циклы']} циклов" if бат.get("циклы") else ""), фон, кр))
+        пан = self.rep.get("паника") or {}
+        if пан.get("panic_full"):
+            плашки.append(("panic full: ЕСТЬ", C["badbg"], C["badtext"]))
+        elif пан.get("проверено"):
+            плашки.append(("panic full: нет", "#FFFFFF", C["body"]))
+        for n, (текст, фон, кр) in enumerate(плашки):
+            self.плашки.insertWidget(n, _плашка(текст, фон, кр))
+
         for d in (вердикт.get("детали") or [])[:7]:
-            знак = {"ok": "·", "repaired": "!", "used": "!", "bad": "×"}.get(d.get("статус"), "·")
-            self.итоги.addWidget(label(f"{знак}  {d.get('деталь')} — {d.get('почему')}", "muted", wrap=True))
-        for x in (self.rep.get("внимание") or [])[:4]:
-            self.итоги.addWidget(label(f"!  {x}", "muted", wrap=True, color=C["warntext"]))
-        self.итоги.addStretch(1)
-        self.ошибка.setText("")
+            имя = str(d.get("деталь") or "")
+            if имя.startswith("Записи"):
+                continue
+            текст, кр = СОСТОЯНИЕ.get(d.get("статус"), (d.get("почему") or "—", C["muted"]))
+            self._строка_итога(имя, текст, кр)
+        прав = self.rep.get("правовой") or {}
+        sk = self.rep.get("sickw") or {}
+        if прав.get("найти_iphone"):
+            включён = прав["найти_iphone"] == "включён"
+            self._строка_итога("Найти iPhone", прав["найти_iphone"],
+                               C["badtext"] if включён else C["ok"])
+        if sk.get("в_чёрном_списке") is not None:
+            плохо = sk["в_чёрном_списке"] is True
+            self._строка_итога("Чёрный список", "числится" if плохо else "чисто",
+                               C["badtext"] if плохо else C["ok"])
+        if пам.get("объём_гб"):
+            self._строка_итога("Память", f"{пам['объём_гб']} ГБ"
+                               + (f" · свободно {пам['свободно_гб']:.0f}" if пам.get("свободно_гб") else ""))
+        for n, x in enumerate((self.rep.get("внимание") or [])[:3]):
+            self._строка_итога("Внимание" if not n else "", x, C["warntext"])
+        self.стопка.setCurrentIndex(1)
 
-    def показать_код(self, код, ссылка):
-        """Код и ссылка на бота: их сотрудник открывает своим телефоном."""
-        self.код.setText(код or "—")
-        self.ссылка.setText(ссылка or "")
-        self.qr.set(qr_pixmap(ссылка) if ссылка else None, "СКАНИРУЙТЕ", rise=False)
+        from pintel_core.external import ocenka
+        self.sim.setCurrentText(ocenka.sim_для_оценки(пас))
+        if цена and not self.цена.text().strip():
+            self.цена.setText(str(int(цена)))
+        if not self.отправлено:
+            self.правая.setCurrentIndex(1)
+        self._проверить()
 
+    def отказ(self, текст):
+        """Телефон с заменой: сделку не оформляем, слепок уже сохранён."""
+        self.готово = False
+        self.ошибка.setText(текст)
+        self.b_отправить.setEnabled(False)
+        self.b_отмена.setText("Новая оценка")
+
+    def ушло(self, код, текст=""):
+        self.отправлено = True
+        self.номер.setText(str(код or "—"))
+        self.итог_текст.setText(текст or "Оценщик подтверждает сделку в Telegram — там появится её номер.")
+        self.правая.setCurrentIndex(2)
+        self.b_печать.setEnabled(True)
+        self.b_отправить.setEnabled(False)
+        self.b_отмена.setText("Новая оценка")
+
+    def занято(self, текст=""):
+        self.b_отправить.setEnabled(not текст and self._годно())
+        self.b_отправить.setText(текст or "Отправить в Оценку")
+
+    # ---------- данные ----------
     def данные(self):
         цена = re.sub(r"\D", "", self.цена.text())
-        return {"коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
+        return {"имя": self.имя.text().strip(), "телефон": нормальный_телефон(self.телефон.text()),
+                "коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
                 "sim": self.sim.currentText(), "цена": int(цена) if цена else None,
                 "комментарий": self.комментарий.toPlainText().strip()}
 
-    def _отправить(self):
-        """Цену проверяем здесь, медиа — бот: он один знает, что ему прислали."""
+    def _цена_набрана(self):
+        """Сумму читают вслух клиенту — «250 000», а не «250000»."""
+        if getattr(self, "_правим_цену", False):
+            return
+        цифры = re.sub(r"\D", "", self.цена.text())
+        красиво = f"{int(цифры):,}".replace(",", " ") if цифры else ""
+        if красиво != self.цена.text():
+            self._правим_цену = True
+            self.цена.setText(красиво)
+            self.цена.setCursorPosition(len(красиво))
+            self._правим_цену = False
+        self._проверить()
+
+    def _годно(self):
         d = self.данные()
-        if not d["цена"]:
-            self.ошибка.setText("Не хватает: цена")
+        return bool(self.готово and not self.отправлено and d["имя"] and d["телефон"] and d["цена"])
+
+    def _проверить(self):
+        d = self.данные()
+        плохой = bool(self.телефон.text().strip() and not d["телефон"])
+        self.телефон.setProperty("плохо", "да" if плохой else "нет")
+        self.телефон.style().unpolish(self.телефон)
+        self.телефон.style().polish(self.телефон)
+        self.b_отправить.setEnabled(self._годно())
+        return self._годно()
+
+    def _отправить(self):
+        d = self.данные()
+        нет = [имя for имя, есть in (("имя клиента", d["имя"]), ("телефон клиента", d["телефон"]),
+                                     ("цена", d["цена"]), ("результат проверки", self.готово)) if not есть]
+        if нет:
+            self.ошибка.setText("Не хватает: " + ", ".join(нет))
             return
         self.ошибка.setText("")
         self.отправить.emit(d)
-
-    def занято(self, текст=""):
-        """Пока идёт отправка — кнопка недоступна, видно что происходит."""
-        self.b_отправить.setEnabled(not текст)
-        self.b_отправить.setText(текст or "Отправить в Оценку")
-
-
-class DoneScreen(Screen):
-    """Оценка ушла боту: код, печать чека, новая оценка.
-
-    Номер сделки присваивает Оценка в момент подтверждения, и обратного канала у нас нет
-    (с точки в её базу хода нет) — поэтому на экране и в чеке стоит наш код. По нему
-    сделку всегда видно в том же сообщении в Telegram.
-    """
-
-    печать = Signal()
-    заново = Signal()
-
-    def __init__(self):
-        super().__init__(gray=True)
-        self.setStyleSheet(QSS_DEAL)
-        self.root.addStretch(1)
-        self.заголовок = label("Оценка отправлена", font_=font(FONT_HEAD, 64, W.Bold, -1.0))
-        self.root.addWidget(self.заголовок, 0, Qt.AlignHCenter)
-        self.root.addSpacing(10)
-        self.номер = label("", font_=font(FONT_NUM, 120, W.Bold))
-        self.root.addWidget(self.номер, 0, Qt.AlignHCenter)
-        self.подпись = label("", "lead", wrap=True)
-        self.подпись.setAlignment(Qt.AlignHCenter)
-        self.root.addSpacing(10)
-        self.root.addWidget(self.подпись)
-        self.root.addSpacing(48)
-        ряд = QHBoxLayout()
-        ряд.setSpacing(20)
-        ряд.addStretch(1)
-        b_печать = _кнопка("Печать чека", главная=False)
-        b_печать.clicked.connect(self.печать.emit)
-        b_новая = _кнопка("Новая оценка")
-        b_новая.clicked.connect(self.заново.emit)
-        ряд.addWidget(b_печать)
-        ряд.addWidget(b_новая)
-        ряд.addStretch(1)
-        self.root.addLayout(ряд)
-        self.root.addStretch(1)
-
-    def показать(self, код, подпись="", заголовок=""):
-        self.номер.setText(str(код or ""))
-        self.подпись.setText(подпись)
-        if заголовок:
-            self.заголовок.setText(заголовок)

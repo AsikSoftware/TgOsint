@@ -43,6 +43,7 @@ except ImportError:                                    # pragma: no cover
 
 URL = sys.argv[1]
 МИН = int(sys.argv[sys.argv.index("--мин-мб") + 1]) if "--мин-мб" in sys.argv else 300
+ВСЕ_ОБРАЗЫ = "--все" in sys.argv                       # читать все образы, а не до первой находки
 
 ИГЛЫ = (rb"systemhealth", rb"Unsealed:", rb"delta components", rb"failed preflight",
         rb"isComponentRepairedUsing", rb"CRRepairHistoryItem", rb"repairHistoryForUI",
@@ -263,8 +264,16 @@ for e in образы:
         зашифрованный(e)
     else:
         (udif if e["метод"] == 0 else сжатый)(e)
-    if найдено:
-        break                                                    # нашли — дальше смотреть незачем
+    if найдено and not ВСЕ_ОБРАЗЫ:
+        # Остановка на первом образе с находками экономит время, но делает ОТСУТСТВИЕ строки
+        # недоказуемым: с iOS 16 кэш лежит в криптексе, а демоны — в корневом образе, и
+        # строка может найтись только там. Поэтому про пропущенные образы говорим вслух.
+        пропущены = [x["имя"] for x in образы[образы.index(e) + 1:]]
+        if пропущены:
+            print(f"  ОСТАНОВИЛИСЬ: не читали {', '.join(пропущены)}. Пустая строка в словаре "
+                  f"значит «нет в прочитанном образе», а не «нет в системе». "
+                  f"Прогон целиком: --все", flush=True)
+        break
 
 print("\n=== найденные строки ===", flush=True)
 for s, n in sorted(найдено.items()):

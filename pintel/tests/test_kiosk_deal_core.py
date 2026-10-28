@@ -152,7 +152,11 @@ def test_numbers_survive_json(ядро):
 def test_handoff_doc_checksums_match_the_files():
     """В задании серверному чату лежат sha256 файлов обработчика: по ним сверяют то, что
     перенесли руками, когда с сервера не достать до GitHub. Файл поменяли, сумму забыли —
-    и сверка либо врёт, либо пугает зря."""
+    и сверка либо врёт, либо пугает зря.
+
+    Считаем по тексту с LF: файлы едут на Linux-сервер, а Windows при checkout делает
+    CRLF, и те же самые байты дали бы другую сумму (на этом и упала сборка #41).
+    """
     import hashlib
     import re
     папка = os.path.join(HERE, "..", "deploy", "оценка_бот")
@@ -162,4 +166,5 @@ def test_handoff_doc_checksums_match_the_files():
     assert названо, "в задании пропала таблица с суммами"
     for имя, сумма in названо.items():
         with open(os.path.join(папка, имя), "rb") as f:
-            assert hashlib.sha256(f.read()).hexdigest() == сумма, f"{имя}: сумма в задании устарела"
+            тело = f.read().replace(b"\r\n", b"\n")
+        assert hashlib.sha256(тело).hexdigest() == сумма, f"{имя}: сумма в задании устарела"

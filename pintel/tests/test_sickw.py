@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Sickw: разбор крашеного HTML, несколько служб, кэш с сырым ответом, влияние на вердикт."""
 import json, os
+
+import pytest
 from pintel_core.external import sickw
 from pintel_core.devicelink import snapshot
 from pintel_core.analysis import report as report_mod
@@ -118,3 +120,18 @@ def test_report_fmi_from_sickw_only_is_todo_not_stop():
     rep = report_mod.build(snap)
     assert rep["итог"]["вердикт"] == before["итог"]["вердикт"]
     assert not any("чёрном списке" in x for x in rep["стоп"])
+
+
+@pytest.mark.parametrize("model,цвет", [
+    ("iPhone 14 Pro A2891", None),                      # в сделке 7093 сюда уехало «Pro A2891»
+    ("iPhone 14 Pro Space Black 256GB", "чёрный космос"),
+    ("iPhone 15 Pro Max Natural Titanium", "натуральный титан"),
+    ("iPhone SE Red", "красный"),
+    ("iPhone 13 mini Midnight", "тёмная ночь"),
+    ("iPhone 11 Purple", "фиолетовый"),
+])
+def test_colour_does_not_keep_model_variant(model, цвет):
+    """Цвет вырезался регуляркой «от начала строки», и она срезала только «iPhone 14 » —
+    вариант модели оставался в цвете. В карточке Оценки это выглядело как «Цвет: Pro A2891»,
+    а у Pro Max и SE — «Pro Max Natural Titanium» и «Se Red»."""
+    assert sickw.normalize({"Model": model}).get("цвет") == цвет

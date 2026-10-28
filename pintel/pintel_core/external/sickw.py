@@ -210,6 +210,22 @@ def parse_gsx_description(desc):
     return out
 
 
+# Слова, которые в описании модели не являются цветом: сама модель, её вариант, объём и
+# номер модели вида A2891. Раньше цвет вырезался одной регуляркой «от начала строки», и она
+# срезала только «iPhone 14 », оставляя вариант: в Оценку уезжало «Цвет: Pro A2891» и
+# «Pro Space Black». Теперь выбрасываем эти слова независимо от их места в строке.
+_НЕ_ЦВЕТ = re.compile(r"(?i)\b(iphone|pro\s+max|pro|plus|mini|air|se|max|xs|xr|x|"
+                      r"\d+\s?(?:gb|tb)|a\d{4}|\d+)\b")
+
+
+def цвет_из_описания(model):
+    """'iPhone 14 Pro Space Black 256GB' → 'Space Black'; 'iPhone 14 Pro A2891' → ''.
+    Что осталось после выброса модельных слов, то и цвет."""
+    s = re.sub(r"\[.*?\]", " ", str(model or ""))
+    s = _НЕ_ЦВЕТ.sub(" ", s)
+    return re.sub(r"[\s,\-/]+", " ", s).strip(" -,/")
+
+
 def _yes(v):
     l = str(v or "").strip().lower()
     return True if l in ("yes", "true", "1") else (False if l in ("no", "false", "0") else None)
@@ -220,13 +236,7 @@ def normalize(raw_fields):
     gsx = parse_gsx_description(_pick(f, "Model Description"))
     model = _pick(f, "Model", "Description") or gsx.get("модель", "")
     cap = re.search(r"\b(\d+)\s?(GB|TB)\b", model, re.I)
-    colour_raw = ""
-    if _pick(f, "Model"):
-        colour_raw = re.sub(r"\[.*?\]", "", _pick(f, "Model"))
-        colour_raw = re.sub(r"\b\d+\s?(GB|TB)\b", "", colour_raw, flags=re.I)
-        colour_raw = re.sub(r"^\s*iPhone[\w\s]*?(Pro Max|Pro|Plus|mini|Air|SE)?\s*\d*\s*",
-                            "", colour_raw, flags=re.I).strip(" -,")
-    colour_raw = colour_raw or gsx.get("цвет_код", "")
+    colour_raw = цвет_из_описания(_pick(f, "Model")) or gsx.get("цвет_код", "")
     colour = colour_ru(colour_raw)
     blk, blk_flag = _strictest(_all(f, BLK_EXACT, BLK_SUBS), blacklist_flag)
     fmi, fmi_on = _strictest(_all(f, FMI_EXACT, FMI_SUBS), fmi_flag)

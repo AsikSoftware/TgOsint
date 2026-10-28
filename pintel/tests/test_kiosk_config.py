@@ -70,3 +70,19 @@ def test_good_file_is_silent(tmp_path):
     cfg = config.load(str(файл))
     assert cfg["_ошибка"] == "" and cfg["staff_name"] == "Асылбек"
     assert cfg["server"] == "https://x.kz"                 # хвостовой слэш убираем сами
+
+
+def test_build_workflow_stays_parseable():
+    """Сломанный workflow не падает — он просто перестаёт запускаться: GitHub не видит
+    триггеры и отвечает «Workflow does not have workflow_dispatch». Так и случилось,
+    когда в строке запуска оказалось «: » — YAML принял её за пару ключ-значение."""
+    yaml = pytest.importorskip("yaml")
+    путь = os.path.join(КОРЕНЬ, "..", ".github", "workflows", "build-doctor.yml")
+    if not os.path.isfile(путь):
+        pytest.skip("рабочий процесс не в этом дереве")
+    with open(путь, encoding="utf-8") as f:
+        поток = yaml.safe_load(f)
+    триггеры = поток.get(True) or поток.get("on") or {}       # «on:» YAML читает как True
+    assert "workflow_dispatch" in триггеры, "сборку нельзя будет запустить вручную"
+    шаги = [ш.get("name") for ш in поток["jobs"]["build"]["steps"]]
+    assert "Метка сборки" in шаги, "без метки программа не узнает о новой версии"

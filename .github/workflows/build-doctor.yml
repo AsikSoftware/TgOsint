@@ -99,7 +99,10 @@ jobs:
 
       - name: Метка сборки
         # по ней программа понимает, что вышла новая версия, и предлагает обновиться
-        run: python -c "import json; json.dump({'тег': 'doctor-${{ github.run_number }}'}, open('dist/pintel-kiosk/build_info.json', 'w', encoding='utf-8'), ensure_ascii=False)"
+        # блочный скаляр: в строке есть «: », и в обычном виде YAML считает её парой ключ-значение
+        run: |
+          python -c "import json, io; io.open('dist/pintel-kiosk/build_info.json', 'w', encoding='utf-8').write(json.dumps({'тег': 'doctor-${{ github.run_number }}'}, ensure_ascii=False))"
+          type dist\pintel-kiosk\build_info.json
 
       - name: Дымовой тест киоска (импорт без экрана)
         shell: pwsh

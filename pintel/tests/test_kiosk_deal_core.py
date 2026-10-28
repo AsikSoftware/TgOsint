@@ -147,3 +147,19 @@ def test_numbers_survive_json(ядро):
     п["сделка"].update({"ddr": 256.0, "akb_exact": "86", "price_grade_auto": "250 000"})
     поля = ядро.колонки(п)
     assert поля["ddr"] == 256 and поля["akb_exact"] == 86 and поля["price_grade_auto"] == 250000
+
+
+def test_handoff_doc_checksums_match_the_files():
+    """В задании серверному чату лежат sha256 файлов обработчика: по ним сверяют то, что
+    перенесли руками, когда с сервера не достать до GitHub. Файл поменяли, сумму забыли —
+    и сверка либо врёт, либо пугает зря."""
+    import hashlib
+    import re
+    папка = os.path.join(HERE, "..", "deploy", "оценка_бот")
+    with open(os.path.join(папка, "ЗАДАНИЕ_серверу.md"), encoding="utf-8") as f:
+        задание = f.read()
+    названо = dict(re.findall(r"\| `([\w.]+)` \|[^|]*\| `([0-9a-f]{64})`", задание))
+    assert названо, "в задании пропала таблица с суммами"
+    for имя, сумма in названо.items():
+        with open(os.path.join(папка, имя), "rb") as f:
+            assert hashlib.sha256(f.read()).hexdigest() == сумма, f"{имя}: сумма в задании устарела"

@@ -147,9 +147,13 @@ def test_ios18_delta_component_is_unknown_part(fake):
 
 
 def test_ios26_items_win_over_synthesis(fake):
+    """Записи о замене сильнее чистой сверки с печатью: «меняли» и «б/у» обязаны остаться,
+    в каком бы порядке строки ни пришли. Источник при этом может остаться от сверки —
+    важен вердикт по детали, а не подпись под ним."""
     fake.script = [IOS18_CLEAN[:3] + list(BLOCK)]
     items, raw, _ = asyncio.run(rh.capture(None, seconds=10))
-    assert items["Display"]["меняли"] and items["Display"]["бу"] and "источник" not in items["Display"]
+    assert items["Display"]["меняли"] and items["Display"]["бу"]
+    assert not items["Battery"]["меняли"]
 
 
 BLOCK_CLEAN = tuple(l.replace("isRepaired:1: isUsed:1: repairDate:2026-03-01", "isRepaired:0: isUsed:0: repairDate:(null)")
@@ -446,3 +450,40 @@ def test_trust_failure_without_a_clear_part_is_not_attributed():
     comp = rh.parse_components(двусмысленно)
     assert not comp.get("детали")
     assert comp.get("доверие_без_детали")
+
+
+# ---------------------------------------------------------------- порядок строк не решает
+# На iOS 26 записи о ремонте и словарь состояния приходят ОДНИМ всплеском, и до этой
+# проверки запись, пришедшая второй, затирала вердикт проверки компонентов целиком: один и
+# тот же телефон давал «замену» или «все детали родные» в зависимости от порядка строк.
+ЗАПИСИ_ЧИСТЫЕ = ('Oct 27 06:59:05 iPhone Preferences(CoreRepairCore)[1] <Notice>: repairHistoryForUI:{\n'
+                 '    Battery = "[CRRepairHistoryItem: componentName:Battery: componentType:1024: '
+                 'isRepaired:0: isUsed:0: repairDate:(null):]";\n'
+                 '    Display = "[CRRepairHistoryItem: componentName:Display: componentType:1025: '
+                 'isRepaired:0: isUsed:0: repairDate:(null):]";\n')
+СЛОВАРЬ_ПЛОХОЙ = ('Oct 27 06:59:05 iPhone Preferences(CoreRepairKit)[1] <Notice>: systemhealth {\n'
+                  '    Battery = 1;\n    Display = "-1";\n    Camera = 1;\n    FaceID = 1;\n}\n')
+
+
+@pytest.mark.parametrize("порядок", [[СЛОВАРЬ_ПЛОХОЙ, ЗАПИСИ_ЧИСТЫЕ], [ЗАПИСИ_ЧИСТЫЕ, СЛОВАРЬ_ПЛОХОЙ]],
+                         ids=["словарь→записи", "записи→словарь"])
+def test_verdict_does_not_depend_on_line_order(порядок):
+    """Телефон сказал «Дисплей — Неизвестно» и тут же напечатал пустые записи о ремонте.
+    Вердикт обязан быть одинаковым в обоих порядках: запись о том, что ремонтов не было,
+    не отменяет сказанного про деталь."""
+    from pintel_core.analysis import parts as parts_mod
+    lst = _прогнать(порядок)
+    assert lst.items["Display"]["неизвестная"], lst.items
+    assert lst.meta["формат"].startswith("проверка компонентов")
+    v = parts_mod.verdict({}, {}, lst.items, None, None, hist_meta=lst.meta, apple_supported=True)
+    assert v["итог"] == "замена"
+
+
+def test_snapshot_does_not_change_under_the_caller():
+    """Слияние меняет записи на месте — значит наружу отдаём копию. Иначе отчёт, собранный
+    по раннему вердикту, молча поменялся бы задним числом, когда телефон допечатает журнал."""
+    lst = _прогнать([ЗАПИСИ_ЧИСТЫЕ])
+    снято = lst.снимок()
+    lst._feed(СЛОВАРЬ_ПЛОХОЙ)
+    assert not снято["Display"].get("неизвестная")     # раннее состояние осталось прежним
+    assert lst.items["Display"]["неизвестная"]         # а у слушателя вердикт обновился

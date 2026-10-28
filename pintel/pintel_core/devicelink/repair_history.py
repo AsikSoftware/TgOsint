@@ -134,6 +134,22 @@ COMPONENT_ALIAS = {"CoverGlass": "Display", "TouchController": "Display", "RCame
 HEALTH_PARTS = {"Battery", "Display", "Camera", "FaceID", "BackGlass", "MTUB", "Enclosure",
                 "CoverGlass", "TouchID", "FrontCamera", "LogicBoard"}
 
+# Сила формата: по ней решается, какой источник главнее, когда их несколько. На iOS 26
+# записи и словарь состояния приходят ОДНИМ всплеском, и до этой правки запись, пришедшая
+# второй, затирала вердикт проверки компонентов целиком: тот же телефон давал «замену» или
+# «все детали родные» в зависимости от порядка строк в журнале.
+СИЛА_ФОРМАТА = (("проверка компонентов", 3), ("сверка с заводской печатью", 3),
+                ("записи обслуживания", 2), ("записи о ремонте", 2),
+                ("новый формат словаря", 1), ("доверие к модулям", 1))
+
+
+def сила_формата(fmt):
+    for начало, вес in СИЛА_ФОРМАТА:
+        if str(fmt or "").startswith(начало):
+            return вес
+    return 0
+
+
 MARKER = "CRRepairHistoryItem"
 RELATED = ("repair", "CoreRepair", "mobilerepaird")
 # признаки, что раздел на телефоне открыт (iOS 18): UI Настроек и демон проснулись
@@ -408,9 +424,9 @@ class Listener:
             self.buf.append(line if line.endswith("\n") else line + "\n")
             parsed = parse("".join(self.buf))
             if parsed:
-                self.items = parsed
+                self._слить(parsed)              # не затирать: вердикт мог прийти раньше записей
                 self._apply_seal()
-                self.meta["формат"] = "записи обслуживания (iOS 26)"
+                self._формат("записи обслуживания (iOS 26)")
                 self.meta["раздел_открыт"] = True
                 self.last_related_at = time.monotonic()
                 if not self.found_at:
@@ -458,8 +474,8 @@ class Listener:
             if unsealed:
                 self.buf.append(line if line.endswith("\n") else line + "\n")
         if (self.meta["дельта"] is not None or self.meta["unsealed"] is not None) and not self.items:
-            self.items = synthesize(self.meta)
-            self.meta["формат"] = "сверка с заводской печатью (iOS 17/18)"
+            self._слить(synthesize(self.meta))
+            self._формат("сверка с заводской печатью (iOS 17/18)")
             if self.items and not self.found_at:
                 self.found_at = time.monotonic()
                 замен = len(self.meta["дельта"] or []) + len(self.meta["unsealed"] or [])
@@ -467,6 +483,38 @@ class Listener:
                          f"RCHL {self.meta['rchl_байт']}")
         elif self.items and (delta is not None or unsealed is not None):
             self._apply_seal()                     # записи уже есть — сверка их дополняет, а не теряется
+
+    def _формат(self, новый):
+        """Поставить формат, только если он не слабее уже стоящего: по формату решается
+        право выдать зелёный, и слабый источник не имеет права вытеснить сильный."""
+        if сила_формата(новый) >= сила_формата(self.meta.get("формат")):
+            self.meta["формат"] = новый
+
+    def снимок(self):
+        """Копия разобранного для вызывающего. Слияние меняет записи на месте, а значит
+        без копии отчёт, собранный по раннему вердикту, молча поменялся бы задним числом,
+        когда телефон допечатает журнал."""
+        return {k: dict(v) for k, v in self.items.items()}
+
+    def _слить(self, новые):
+        """Добавить разобранное к тому, что уже есть. Признаки «меняли», «б/у» и
+        «неизвестная» только накапливаются: раз телефон сказал про деталь плохое, поздняя
+        строка этого не отменяет — иначе порядок строк в журнале решал бы вердикт."""
+        for key, it in новые.items():
+            cur = self.items.get(key)
+            if cur is None:
+                self.items[key] = dict(it)
+                continue
+            cur["меняли"] = bool(cur.get("меняли")) or bool(it.get("меняли"))
+            cur["бу"] = bool(cur.get("бу")) or bool(it.get("бу"))
+            if it.get("неизвестная"):
+                cur["неизвестная"] = True
+            if it.get("записи_без_деталей"):
+                cur["записи_без_деталей"] = True
+            for поле in ("дата", "код", "центр"):
+                if it.get(поле) and not cur.get(поле):
+                    cur[поле] = it[поле]
+            cur.setdefault("источник", it.get("источник", ""))
 
     def _apply_components(self):
         """Вердикт iOS 26 из строк проверки компонентов. Он главнее записей о ремонтах:
@@ -488,10 +536,9 @@ class Listener:
                 cur.setdefault("источник", it["источник"])
         # Словарь состояния — это подтверждение Apple; одно доверие к модулю — нет, и формат
         # обязан это различать: по нему строится право выдать зелёный.
-        self.meta["формат"] = ("проверка компонентов (iOS 26)" if comp.get("здоровье")
-                               else f"новый формат словаря «{comp['новый_формат']}»"
-                               if comp.get("новый_формат")
-                               else "доверие к модулям (iOS 15/16)")
+        self._формат("проверка компонентов (iOS 26)" if comp.get("здоровье")
+                     else f"новый формат словаря «{comp['новый_формат']}»" if comp.get("новый_формат")
+                     else "доверие к модулям (iOS 15/16)")
         self.meta["раздел_открыт"] = True
         self.last_related_at = time.monotonic()
         if not self.found_at:
@@ -511,8 +558,7 @@ class Listener:
             "центр": центр[:40] if центр else ""})
         self.meta["раздел_открыт"] = True
         self.meta.setdefault("ремонт_apple", {"дата": дата, "центр": центр})
-        if not self.meta.get("формат"):
-            self.meta["формат"] = "записи о ремонте (iOS 16)"
+        self._формат("записи о ремонте (iOS 16)")
         self.last_related_at = time.monotonic()
         if not self.found_at:
             self.found_at = time.monotonic()
@@ -573,7 +619,7 @@ class Listener:
             if on_tick:
                 on_tick(int(now - start))
             await asyncio.sleep(0.25)
-        return self.items, self.raw, round(time.monotonic() - start, 1)
+        return self.снимок(), self.raw, round(time.monotonic() - start, 1)
 
     async def wait_change(self, seen, keep_going=None, grace=2.0):
         """Ждать, пока записи станут отличаться от отпечатка seen (signature) — телефон
@@ -590,7 +636,7 @@ class Listener:
             if keep_going and not keep_going():
                 break
             await asyncio.sleep(0.25)
-        return self.items, self.raw, round(time.monotonic() - start, 1)
+        return self.снимок(), self.raw, round(time.monotonic() - start, 1)
 
     async def stop(self):
         self._stop = True

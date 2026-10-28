@@ -3,3 +3,6 @@ pintel_check/build/
 pintel_check/dist/
 pintel_check/build_log.txt
 pintel_check/data/checks.db
+
+# архивы сборок: берутся из Releases, в истории им не место
+*_Windows_x64.zip

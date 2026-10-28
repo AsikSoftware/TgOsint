@@ -140,7 +140,9 @@ def test_client_standalone_sickw_price_and_numbers(monkeypatch, tmp_path):
     assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True
     assert c.price()["база"]["iPhone13,2"]["64"] == 80000
     assert [c.local_number(), c.local_number()] == [1, 2]
-    assert c.upload({"client_id": "x1", "report": {}}) is None and c.queued() == 1
+    # сервера нет вовсе — в очередь не копим: досылать некуда, а слепок и отчёт уже
+    # лежат в out. Копия весит около мегабайта на оценку и росла бы вечно.
+    assert c.upload({"client_id": "x1", "report": {}}) is None and c.queued() == 0
 
 
 def test_pipeline_saves_reference_for_every_phone(fake_core):

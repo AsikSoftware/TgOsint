@@ -8,6 +8,7 @@ import asyncio
 import glob
 import json
 import os
+import shutil
 import threading
 import time
 import traceback
@@ -26,12 +27,48 @@ from .client import ServerError
 from .config import data_dir
 
 
+ЛОГ_МАКС = 5 * 1024 * 1024               # дальше заводим kiosk.log.1, старый перезаписываем
+
+
 def log_line(text):
     try:
-        with open(os.path.join(data_dir(), "logs", "kiosk.log"), "a", encoding="utf-8") as f:
+        путь = os.path.join(data_dir(), "logs", "kiosk.log")
+        with open(путь, "a", encoding="utf-8") as f:
             f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {text}\n")
+            велик = f.tell() > ЛОГ_МАКС
+        if велик:                        # лог на точке никто не чистит — делаем это сами
+            os.replace(путь, путь + ".1")
     except Exception:                                            # noqa: BLE001
         pass
+
+
+def убрать_старое(дней=90):
+    """Чистка на точке. → сколько удалено.
+
+    Оценка весит около мегабайта — это слепок телефона целиком, со всем сырьём. Без
+    уборки диск на точке кончается за несколько месяцев, а кончившийся диск останавливает
+    приём: записать очередную оценку будет некуда.
+
+    Эталоны не трогаем: они обезличены, по 85 КБ и ограничены числом (reference_keep).
+    Чеки клиентам и остатки очереди на сервер чистим вместе с оценками."""
+    if not дней or int(дней) <= 0:
+        return 0
+    порог = time.time() - int(дней) * 86400
+    убрано = 0
+    цели = (glob.glob(os.path.join(data_dir(), "out", "*"))
+            + glob.glob(os.path.join(data_dir(), "queue", "*.json")))
+    for путь in цели:
+        try:
+            if os.path.getmtime(путь) >= порог:
+                continue
+            if os.path.isdir(путь):
+                shutil.rmtree(путь, ignore_errors=True)
+            else:
+                os.remove(путь)
+            убрано += 1
+        except OSError:                  # занят, нет прав — не повод валить запуск
+            pass
+    return убрано
 
 
 class Pipeline(QThread):

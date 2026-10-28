@@ -130,12 +130,17 @@ class Client:
         return n
 
     def upload(self, payload):
-        """→ ответ сервера или None, если оценка легла в очередь (нет связи)."""
+        """→ ответ сервера или None, если оценка легла в очередь (нет связи).
+
+        Сервера нет вовсе — в очередь не кладём: досылать некуда (flush_queue работает
+        только при настроенном сервере), а те же слепок и отчёт уже лежат в папке out.
+        Копия весит около мегабайта на оценку и росла бы вечно."""
         try:
             res = self._req("POST", "/api/kiosk/evaluations", json=payload, timeout=60)
         except ServerError:
-            path = os.path.join(self.qdir, f"{payload['client_id']}.json")
-            json.dump(payload, open(path, "w", encoding="utf-8"), ensure_ascii=False)
+            if self.enabled:
+                path = os.path.join(self.qdir, f"{payload['client_id']}.json")
+                json.dump(payload, open(path, "w", encoding="utf-8"), ensure_ascii=False)
             return None
         return res
 

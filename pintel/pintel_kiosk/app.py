@@ -18,7 +18,7 @@ from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER, READY
 from . import __version__, config, ui, ui_deal
 from .client import Client, ServerError
 from .config import data_dir
-from .worker import Pipeline, log_line
+from .worker import Pipeline, log_line, убрать_старое
 
 
 class Poller(QThread):
@@ -243,11 +243,24 @@ class KioskWindow(QMainWindow):
             else:
                 self.s_main.set_status("Нет сервера и ключей: заполните kiosk.toml", ok=False)
         self._try_server_config()
+        self._убрать_старое()
 
     # ---------- служебное ----------
     def show_screen(self, w):
         self.stack.setCurrentWidget(w)
         self.host.set_bg(ui.C["ground"] if w is self.s_result else "#FFFFFF")
+
+    def _убрать_старое(self):
+        """Старые оценки с диска — при запуске и в фоне: их бывает много, а экран ждать
+        не должен. Кончившийся диск на точке останавливает приём совсем."""
+        дней = self.cfg.get("keep_days", 90)
+
+        def job():
+            убрано = убрать_старое(дней)
+            if убрано:
+                log_line(f"уборка: удалено {убрано} старше {дней} дней")
+            return убрано
+        self._run(job)
 
     def _try_server_config(self):
         def job():

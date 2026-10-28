@@ -16,7 +16,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
                                QLineEdit, QPushButton, QSizePolicy, QTextEdit, QVBoxLayout, QWidget)
 
-from .ui import C, FONT_HEAD, FONT_NUM, FONT_TEXT, Screen, W, font, header, kicker, label, point_text
+from .ui import (C, FONT_HEAD, FONT_NUM, FONT_TEXT, QrBlock, Screen, W, font, header, kicker, label,
+                 point_text, qr_pixmap)
 
 QSS_DEAL = """
 QLineEdit, QComboBox, QTextEdit { background: #FFFFFF; border: 2px solid %(border)s; border-radius: 16px;
@@ -130,11 +131,13 @@ class EvalScreen(Screen):
 
     отправить = Signal(dict)
     назад = Signal()
+    новый_код = Signal()
 
     def __init__(self, point=""):
         super().__init__(gray=True)
         self.setStyleSheet(QSS_DEAL)
-        self.фото, self.видео, self.rep = [], "", {}
+        # фото и видео приходят от бота как file_id Telegram — файлы мы не храним вовсе
+        self.фото, self.видео, self.rep, self.оценщик = [], "", {}, None
         self.root.addLayout(header(label(point_text(point), "muted")))
         self.root.addSpacing(24)
         self.root.addWidget(label("Оформление оценки", font_=font(FONT_HEAD, 56, W.Bold, -1.0)))
@@ -192,21 +195,28 @@ class EvalScreen(Screen):
     def _правая(self):
         кол = QVBoxLayout()
         кол.setSpacing(18)
-        кол.addWidget(kicker("ФОТО И ВИДЕО"))
-        кол.addWidget(label("Видео обязательно: без него Оценка не открывает сделку.", "muted", wrap=True))
+        кол.addWidget(kicker("ФОТО И ВИДЕО — ЧЕРЕЗ БОТА ОЦЕНКИ"))
+        кол.addWidget(label("Откройте ссылку своим телефоном и пришлите боту видео и фото. "
+                            "Кто открыл — тот и будет оценщиком сделки.", "muted", wrap=True))
         ряд = QHBoxLayout()
-        ряд.setSpacing(14)
-        b_фото = QPushButton("Добавить фото")
-        b_фото.setObjectName("file")
-        b_фото.clicked.connect(self._выбрать_фото)
-        b_видео = QPushButton("Выбрать видео")
-        b_видео.setObjectName("file")
-        b_видео.clicked.connect(self._выбрать_видео)
-        ряд.addWidget(b_фото)
-        ряд.addWidget(b_видео)
-        ряд.addStretch(1)
+        ряд.setSpacing(18)
+        self.qr = QrBlock()
+        ряд.addWidget(self.qr, 0, Qt.AlignTop)
+        правее = QVBoxLayout()
+        правее.setSpacing(8)
+        self.код = label("—", font_=font(FONT_NUM, 40, W.Bold))
+        self.ссылка = label("", "muted", wrap=True)
+        self.ссылка.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        правее.addWidget(self.код)
+        правее.addWidget(self.ссылка)
+        b_новый = QPushButton("Другой код")
+        b_новый.setObjectName("file")
+        b_новый.clicked.connect(self.новый_код.emit)
+        правее.addWidget(b_новый, 0, Qt.AlignLeft)
+        правее.addStretch(1)
+        ряд.addLayout(правее, 1)
         кол.addLayout(ряд)
-        self.медиа = label("Пока ничего не выбрано", "muted", wrap=True)
+        self.медиа = label("Ждём медиа от бота…", "muted", wrap=True)
         кол.addWidget(self.медиа)
         кол.addSpacing(18)
         кол.addWidget(kicker("ЧТО УВИДЕЛА ПРОВЕРКА"))
@@ -249,38 +259,31 @@ class EvalScreen(Screen):
         self.итоги.addStretch(1)
         self.ошибка.setText("")
 
-    def _выбрать_фото(self):
-        пути, _ = QFileDialog.getOpenFileNames(self, "Фото телефона", "",
-                                               "Изображения (*.jpg *.jpeg *.png *.heic)")
-        self.фото.extend(p for p in пути if p not in self.фото)
-        self._обновить_медиа()
+    def показать_код(self, код, ссылка):
+        """Код и ссылка на бота: их сотрудник открывает своим телефоном."""
+        self.код.setText(код or "—")
+        self.ссылка.setText(ссылка or "")
+        self.qr.set(qr_pixmap(ссылка) if ссылка else None, "СКАНИРУЙТЕ", rise=False)
 
-    def _выбрать_видео(self):
-        путь, _ = QFileDialog.getOpenFileName(self, "Видео телефона", "", "Видео (*.mp4 *.mov *.m4v)")
-        if путь:
-            self.видео = путь
-        self._обновить_медиа()
-
-    def _обновить_медиа(self):
-        части = []
-        if self.видео:
-            части.append("видео: " + os.path.basename(self.видео))
-        if self.фото:
-            части.append(f"фото: {len(self.фото)} шт.")
-        self.медиа.setText(" · ".join(части) or "Пока ничего не выбрано")
+    def медиа_от_бота(self, состояние, описание):
+        """Что бот уже принял. Пришло видео — можно отправлять сделку."""
+        self.видео = состояние.get("видео") or ""
+        self.фото = list(состояние.get("фото") or [])
+        self.оценщик = состояние.get("оценщик_id")
+        self.медиа.setText(описание)
 
     def данные(self):
         цена = re.sub(r"\D", "", self.цена.text())
         return {"коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
                 "sim": self.sim.currentText(), "цена": int(цена) if цена else None,
                 "комментарий": self.комментарий.toPlainText().strip(),
-                "фото_пути": list(self.фото), "видео_путь": self.видео}
+                "фото": list(self.фото), "видео": self.видео, "оценщик_id": self.оценщик}
 
     def _отправить(self):
         d = self.данные()
         нет = []
-        if not d["видео_путь"]:
-            нет.append("видео телефона")
+        if not d["видео"]:
+            нет.append("видео от бота (без него Оценка не откроет сделку)")
         if not d["цена"]:
             нет.append("цена")
         if нет:

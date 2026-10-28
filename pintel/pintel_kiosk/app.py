@@ -210,6 +210,11 @@ class KioskWindow(QMainWindow):
         self.s_result.just_looking.connect(self.go_home)   # «Готово» — вернуться к началу
         self.s_eval.отправить.connect(self.отправить_в_оценку)
         self.s_eval.назад.connect(self.go_home)
+        self.s_eval.новый_код.connect(self.новый_код_медиа)
+        self.код_медиа = ""
+        self.опрос_медиа = QTimer(self)
+        self.опрос_медиа.setInterval(3000)
+        self.опрос_медиа.timeout.connect(self.проверить_медиа)
         self.s_done.печать.connect(self.напечатать_чек)
         self.s_done.заново.connect(self.go_home)
         self.клиент, self.сделка, self.кабель = {}, {}, NO_DEVICE
@@ -374,6 +379,7 @@ class KioskWindow(QMainWindow):
             self.state = "eval"                        # аппарат чистый — оформляем сделку
             self.s_eval.показать(rep, (rep.get("цена") or {}).get("цена"))
             self.show_screen(self.s_eval)
+            self.новый_код_медиа()
             return
         self.s_result.fill(rep, result.get("server"))
         if self.клиент:
@@ -421,7 +427,7 @@ class KioskWindow(QMainWindow):
 
     def отправить_в_оценку(self, поля):
         """Залить медиа и создать сделку — в отдельном потоке, окно не морозим."""
-        from pintel_core.external import ocenka
+        from pintel_core.external import ocenka, ocenka_media
         rep = (self.last or {}).get("report") or {}
         пас, cfg = rep.get("паспорт") or {}, self.cfg
         if not cfg.get("ocenka_db_url"):
@@ -430,12 +436,9 @@ class KioskWindow(QMainWindow):
         клиент = dict(self.клиент)
         self.s_eval.занято("Отправляем…")
 
+        код = self.код_медиа
+
         def job():
-            токен, чат = cfg.get("ocenka_bot_token"), cfg.get("ocenka_media_chat")
-            видео = ocenka.залить_в_телеграм(поля["видео_путь"], токен, чат, видео=True)
-            if not видео:
-                raise ocenka.ОшибкаЭкспорта("видео не загрузилось в Telegram — проверьте токен и чат")
-            фото = [x for x in (ocenka.залить_в_телеграм(p, токен, чат) for p in поля["фото_пути"]) if x]
             данные = {
                 "модель": пас.get("модель"), "код_модели": пас.get("код_модели"),
                 "память": (rep.get("память") or {}).get("объём_гб"),
@@ -449,15 +452,57 @@ class KioskWindow(QMainWindow):
                     rep, откуда=f"Киоск {cfg.get('point') or ''} от {datetime.now():%Y-%m-%d}"),
                 "имя_клиента": клиент.get("имя"), "телефон_клиента": клиент.get("телефон"),
                 "imei": пас.get("imei"), "imei_все": [пас.get("imei2")],
-                "фото": фото, "видео": видео,
+                "фото": поля.get("фото") or [], "видео": поля.get("видео") or "",
             }
-            return ocenka.отправить(cfg["ocenka_db_url"], данные,
+            итог = ocenka.отправить(cfg["ocenka_db_url"], данные,
                                     литера=cfg.get("ocenka_shop_litera") or "",
-                                    оценщик_id=int(cfg.get("ocenka_user_grade") or 0) or None)
+                                    оценщик_id=поля.get("оценщик_id"))
+            if код:
+                ocenka_media.закрыть(cfg["ocenka_db_url"], код, итог.get("id"))
+            return итог
 
         t = self._run(job)
         t.ok.connect(self.сделка_ушла)
         t.err.connect(self.отправка_не_удалась)
+
+    def новый_код_медиа(self):
+        """Завести код обмена и показать ссылку на бота Оценки."""
+        from pintel_core.external import ocenka_media
+        cfg = self.cfg
+        if not (cfg.get("ocenka_db_url") and cfg.get("ocenka_bot")):
+            self.s_eval.показать_код("—", "")
+            self.s_eval.медиа.setText("В kiosk.toml не заданы ocenka_db_url и ocenka_bot — "
+                                      "медиа принять не от кого")
+            return
+        self.код_медиа = ""
+        self.s_eval.медиа.setText("Заводим код…")
+        t = self._run(lambda: ocenka_media.завести(cfg["ocenka_db_url"], cfg.get("point") or ""))
+        t.ok.connect(self.код_готов)
+        t.err.connect(lambda e: self.s_eval.медиа.setText("Код не завёлся: " + e))
+
+    def код_готов(self, код):
+        from pintel_core.external import ocenka_media
+        self.код_медиа = код
+        self.s_eval.показать_код(код, ocenka_media.ссылка(self.cfg.get("ocenka_bot"), код))
+        self.s_eval.медиа.setText("Ждём медиа от бота…")
+        self.опрос_медиа.start()
+
+    def проверить_медиа(self):
+        from pintel_core.external import ocenka_media
+        if self.state != "eval" or not self.код_медиа:
+            self.опрос_медиа.stop()
+            return
+        код, url = self.код_медиа, self.cfg["ocenka_db_url"]
+        t = self._run(lambda: ocenka_media.состояние(url, код))
+        t.ok.connect(self.медиа_пришли)
+
+    def медиа_пришли(self, состояние):
+        from pintel_core.external import ocenka_media
+        if self.state != "eval":
+            return
+        self.s_eval.медиа_от_бота(состояние, ocenka_media.описание(состояние))
+        if состояние.get("готово") and состояние.get("видео"):
+            self.опрос_медиа.stop()                    # всё прислали, больше спрашивать нечего
 
     def отправка_не_удалась(self, текст):
         self.s_eval.занято("")
@@ -501,7 +546,8 @@ class KioskWindow(QMainWindow):
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
         self.state = "idle"
         self.last = None
-        self.клиент, self.сделка = {}, {}
+        self.опрос_медиа.stop()
+        self.клиент, self.сделка, self.код_медиа = {}, {}, ""
         self.s_main.set_device("wait")
         self.show_screen(self.s_main)
 

@@ -80,3 +80,34 @@ def test_grader_comment_is_short_and_names_the_locks():
     txt = ocenka.комментарий_оценщика(rep, сверка="", откуда="Киоск №4 от 2026-10-27")
     assert "Детали: родные" in txt and "Найти iPhone вкл." in txt
     assert "86%, 320 циклов" in txt and txt.endswith("Киоск №4 от 2026-10-27")
+
+
+# ---------------------------------------------------------------- медиа через бота Оценки
+
+def test_media_code_is_short_and_unmistakable():
+    """Код диктуют голосом и набирают руками — в нём не должно быть похожих знаков."""
+    from pintel_core.external import ocenka_media
+    коды = {ocenka_media.новый_код() for _ in range(200)}
+    assert len(коды) > 190                                  # повторы практически исключены
+    for к in коды:
+        # ни одной пары, которую путают на слух и на вид: O/0, I/1, B/8, S/5, Z/2
+        assert len(к) == 6 and not (set(к) & set("OI10B8SZ2"))
+
+
+def test_media_link_opens_the_bot_with_the_command():
+    """Ссылка — это готовая команда боту: сотрудник ничего не набирает."""
+    from pintel_core.external import ocenka_media
+    assert ocenka_media.ссылка("pintel_bot", "AB12") == "https://t.me/pintel_bot?start=pAB12"
+    for запись in ("@pintel_bot", "https://t.me/pintel_bot", "pintel_bot/"):
+        assert ocenka_media.ссылка(запись, "AB12").endswith("/pintel_bot?start=pAB12"), запись
+
+
+def test_media_state_reads_like_a_sentence():
+    """Строку на экране читает сотрудник, а не программист."""
+    from pintel_core.external import ocenka_media
+    assert ocenka_media.описание({"есть": False}) == "код не найден — заведите новый"
+    пусто = ocenka_media.описание({"есть": True, "видео": "", "фото": [], "оценщик": ""})
+    assert пусто == "видео: ждём"
+    полный = ocenka_media.описание({"есть": True, "видео": "v", "фото": ["a", "b"],
+                                    "оценщик": "Асылбек"})
+    assert полный == "оценщик: Асылбек · видео: есть · фото: 2"

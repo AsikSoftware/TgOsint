@@ -107,13 +107,35 @@ def test_evaluation_requires_video_and_price(окно):
     окно.s_eval.отправить.connect(отправлено.append)
     окно.s_eval._отправить()
     assert not отправлено and "видео" in окно.s_eval.ошибка.text()
-    окно.s_eval.видео = "C:/видео.mp4"
+    окно.s_eval.медиа_от_бота({"видео": "BAACAgIAAx0", "фото": ["AgACAg1", "AgACAg2"],
+                               "оценщик_id": 12, "оценщик": "Асылбек", "готово": True},
+                              "оценщик: Асылбек · видео: есть · фото: 2")
     окно.s_eval.цена.clear()
     окно.s_eval._отправить()
     assert not отправлено and "цена" in окно.s_eval.ошибка.text()
     окно.s_eval.цена.setText("250000")
     окно.s_eval._отправить()
-    assert отправлено and отправлено[0]["видео_путь"] == "C:/видео.mp4"
+    assert отправлено, окно.s_eval.ошибка.text()
+    assert отправлено[0]["видео"] == "BAACAgIAAx0" and len(отправлено[0]["фото"]) == 2
+    # оценщика не спрашиваем отдельно: это тот, кто прислал медиа боту
+    assert отправлено[0]["оценщик_id"] == 12
+
+
+def test_media_link_carries_a_ready_command(окно):
+    """Ссылка открывает бота Оценки с готовой командой и кодом: сотруднику остаётся
+    только прислать видео и фото."""
+    from pintel_core.external import ocenka_media
+    ссылка = ocenka_media.ссылка("pintel_ocenka_bot", "7KQ2M4")
+    assert ссылка == "https://t.me/pintel_ocenka_bot?start=p7KQ2M4"
+    assert ocenka_media.ссылка("@Бот", "A1") == "https://t.me/Бот?start=pA1"
+    окно.s_eval.показать_код("7KQ2M4", ссылка)
+    assert окно.s_eval.код.text() == "7KQ2M4" and ссылка in окно.s_eval.ссылка.text()
+
+
+def test_media_without_config_says_so(окно):
+    """Не задан бот — сотрудник читает причину, а не смотрит на пустой QR."""
+    окно.новый_код_медиа()
+    assert "ocenka_bot" in окно.s_eval.медиа.text()
 
 
 def test_export_without_db_says_so_instead_of_silence(окно):

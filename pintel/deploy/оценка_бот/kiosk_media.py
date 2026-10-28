@@ -27,6 +27,7 @@
 Код самой Оценки этот файл не трогает, разбор посылки и колонки — в kiosk_core.py рядом.
 """
 import io
+import logging
 import re
 
 from aiogram import Bot, F, Router
@@ -336,7 +337,8 @@ async def создать_сделку(call: CallbackQuery, bot: Bot):
         # сделка уже создана, но без карточки её никто не увидит — говорим прямо
         куда = f"⚠️ передать дальше не вышло: {type(exc).__name__}: {exc}"
     шапка = (call.message.caption or "").split("\n\n")[0]
-    итог = (f"✅ Сделка № {сделка['id']} · оценил {сделка['оценщик']}"
+    цена = f" · {сделка['цена']:,} ₸".replace(",", " ") if сделка.get("цена") else " · без автоцены"
+    итог = (f"✅ Сделка № {сделка['id']}{цена} · оценил {сделка['оценщик']}"
             + (f" · {сделка['точка']}" if сделка.get("точка") else ""))
     хвост = f"{итог}\n{куда}"
     try:
@@ -367,7 +369,10 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     фото = [x for x in str(медиа["photos"] or "").split("||") if x]
     поля = kiosk_core.колонки(посылка)
     поля.update({
-        "status_id": kiosk_core.статус_id(поля),
+        # цену и статус ставим после вставки: автоцену считает сама Оценка по своему
+        # прайсу (utils/google_price.py), ровно как в её собственном потоке
+        "status_id": None,
+        "price_grade_auto": None,
         "user_client": client_id,
         "user_grade": оценщик_id,
         "shop_id_grade": shop_id,
@@ -389,6 +394,15 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
             {"d": device_id, "c": посылка["код"]})
         await session.commit()
 
+    цена = await _автоцена(device_id)
+    статус = kiosk_core.статус_id({"phone_status": поля.get("phone_status"),
+                                   "price_grade_auto": цена})
+    async with async_session_factory() as session:
+        await session.execute(text(
+            "UPDATE devices SET price_grade_auto = :p, status_id = :s WHERE id = :i"),
+            {"p": цена, "s": статус, "i": device_id})
+        await session.commit()
+
     оценщик = None
     if оценщик_id:
         async with async_session_factory() as session:
@@ -397,9 +411,22 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
                 {"i": оценщик_id})).mappings().first()
     имя = " ".join(x for x in ((оценщик or {}).get("first_name"),
                                (оценщик or {}).get("last_name")) if x)
-    return {"id": int(device_id), "статус": поля["status_id"],
+    return {"id": int(device_id), "статус": статус, "цена": цена,
             "оценщик": имя or _имя(нажал), "точка": await _имя_точки(shop_id),
             "lang": (оценщик or {}).get("lang") or "ru"}
+
+
+async def _автоцена(device_id: int):
+    """Цена по прайсу Оценки — её же методом. Прайс недоступен → None, и сделка уходит
+    администратору на ручную оценку, как и у неё."""
+    try:
+        from database.database import AsyncOrm
+        from utils.google_price import get_price_for_device
+        устройство = await AsyncOrm.get_device(device_id)
+        return await get_price_for_device(устройство) if устройство else None
+    except Exception as exc:                                     # noqa: BLE001 — цена не повод терять сделку
+        logging.getLogger(__name__).warning("kiosk: автоцена не посчиталась: %s", exc)
+        return None
 
 
 async def _позвать_дальше(bot: Bot, медиа, сделка: dict) -> str:

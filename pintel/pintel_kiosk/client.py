@@ -23,15 +23,10 @@ class Client:
         self.online = False
         self.last_error = ""
         self.qdir = os.path.join(data_dir(), "queue")
-        self.cache = os.path.join(data_dir(), "cache", "price_grid.json")
-        # автономный режим: ключи на самом киоске
+        # автономный режим: ключи на самом киоске. Прайса здесь нет — цену считает бот
+        # Оценки по своему прайсу, и наша цифра всё равно была бы другой.
         self.sickw_key = str(cfg.get("sickw_key") or "")
         self.sickw_services = cfg.get("sickw_services") or [61]
-        gs = str(cfg.get("gservice_json") or "gservice.json")
-        gs = gs if os.path.isabs(gs) else os.path.join(app_dir(), gs)
-        self.gservice = gs if os.path.isfile(gs) else None
-        self.sheet_url = cfg.get("price_sheet_url") or None
-        self._local_price_at = 0.0
 
     @property
     def local_sickw(self):
@@ -39,8 +34,8 @@ class Client:
 
     @property
     def standalone_ready(self):
-        """Без сервера киоск всё равно полноценный, если на нём есть ключи."""
-        return bool(self.gservice or os.path.isfile(self.cache)) and self.local_sickw
+        """Без сервера киоск полноценен, если может проверить телефон по базе IMEI."""
+        return self.local_sickw
 
     # ---------- низкий уровень ----------
     def _req(self, method, path, timeout=15, **kw):
@@ -70,35 +65,6 @@ class Client:
     def config(self):
         return self._req("GET", "/api/kiosk/config")
 
-    def price(self, force=False):
-        """Сетка прайса: с сервера; без сервера — прямо из Google Таблицы (gservice.json
-        рядом с exe), не чаще раза в 15 минут; при обрыве — последняя сохранённая."""
-        if self.enabled:
-            try:
-                p = self._req("GET", "/api/kiosk/price", timeout=30)
-                grid = p["сетка"]
-                grid["_версия"], grid["_обновлён"] = p.get("версия"), p.get("обновлён")
-                json.dump(grid, open(self.cache, "w", encoding="utf-8"), ensure_ascii=False)
-                return grid
-            except ServerError:
-                if force:
-                    raise
-        stale = time.time() - self._local_price_at > 900 or not os.path.isfile(self.cache)
-        if self.gservice and (force or stale):
-            try:
-                from pintel_core.external import gsheet
-                gsheet.set_service_account(self.gservice)
-                grid = json.loads(json.dumps(gsheet.fetch_grid(self.sheet_url), ensure_ascii=False, default=str))
-                json.dump(grid, open(self.cache, "w", encoding="utf-8"), ensure_ascii=False)
-                self._local_price_at = time.time()
-                return grid
-            except Exception as e:                               # noqa: BLE001
-                self.last_error = f"прайс из Google Таблицы: {e}"
-                if force:
-                    raise ServerError(self.last_error)
-        if os.path.isfile(self.cache):
-            return json.load(open(self.cache, encoding="utf-8"))
-        return None
 
     def sickw(self, imei):
         """Через сервер (ключ там); без сервера или при его недоступности — ключом из kiosk.toml."""

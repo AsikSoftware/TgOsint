@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Поток проверки: ждёт телефон → слушатель журнала стартует СРАЗУ → слепок →
-отчёт → ждём историю Apple (подсказка на экране) → Sickw через сервер → цена →
+отчёт → ждём историю Apple (подсказка на экране) → Sickw через сервер →
 отправка → `done`. Дальше поток не умирает: слушатель живёт, пока телефон на
 кабеле, и если клиент открыл раздел позже — приходит `history`, карточка и
 сервер обновляются. Всё на pintel_core, ничего не дублируем."""
@@ -21,7 +21,7 @@ from pintel_core import reference
 from pintel_core.analysis import report as report_mod
 from pintel_core.devicelink import connect, repair_history, snapshot
 from pintel_core.devicelink.connect import READY
-from pintel_core.external import pricing, sickw
+from pintel_core.external import sickw
 
 from .client import ServerError
 from .config import data_dir
@@ -79,9 +79,9 @@ class Pipeline(QThread):
     history = Signal(dict)                    # история Apple пришла позже: обновлённый результат
     failed = Signal(str)                      # человеческий текст ошибки
 
-    def __init__(self, cfg, client, grid=None, parent=None):
+    def __init__(self, cfg, client, parent=None):
         super().__init__(parent)
-        self.cfg, self.client, self.grid = cfg, client, grid
+        self.cfg, self.client = cfg, client
         self.skip_apple = threading.Event()
         self.cancel = threading.Event()
         self.serial = None
@@ -201,8 +201,6 @@ class Pipeline(QThread):
         else:
             self._step("sickw", "warn", "не настроена (kiosk.toml)")
 
-        rep["цена"] = self._price(rep)
-
         # сохраняем локально и отправляем
         cid = f"{self.serial or 'phone'}-{uuid.uuid4().hex[:12]}"
         out = os.path.join(data_dir(), "out", f"{datetime.now():%Y%m%d_%H%M%S}_{(self.serial or 'phone')[:12]}")
@@ -238,7 +236,6 @@ class Pipeline(QThread):
             snap["repair_history"], snap["repair_history_raw"] = items, raw
             snap["repair_history_meta"] = {**(getattr(listener, "meta", None) or {}), "статус": "found", "почему": ""}
             rep = report_mod.build(snap)
-            rep["цена"] = self._price(rep)
             self._save(out, snap, rep)
             self._reference(snap, rep)                # вердикт пришёл позже — перезаписываем эталон
             log_line(f"история Apple обновилась через {waited} с: {len(items)} записей")
@@ -252,14 +249,6 @@ class Pipeline(QThread):
             self._step("apple", "done", "получена")
             self.history.emit({**result, "report": rep})
 
-    def _price(self, rep):
-        pas, bat = rep["паспорт"], rep["батарея"]
-        grid = self.grid or self.client.price()
-        if grid:
-            return pricing.estimate(grid, pas["код_модели"], rep["память"].get("объём_гб"),
-                                    bat.get("здоровье_%"), bat.get("циклы"), self.cfg.get("currency", "₸"))
-        return {"валюта": self.cfg.get("currency", "₸"), "цена": None, "основание": "прайс не загружен",
-                "нехватка": ["нет прайса"]}
 
     def _reference(self, snap, rep):
         """Эталон с КАЖДОГО телефона: обезличенный слепок, сырой журнал Apple и наш вердикт.

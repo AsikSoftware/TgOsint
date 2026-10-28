@@ -50,9 +50,7 @@ def окно(monkeypatch):
 def _отчёт(архив):
     snap, _ = reference.load_bundle(os.path.join(HERE, "fixtures_real", "эталоны", архив),
                                     loads=snapshot.loads)
-    rep = report_mod.build(snap)
-    rep["цена"] = {"валюта": "₸", "цена": 250000, "основание": "тест", "нехватка": []}
-    return rep
+    return report_mod.build(snap)
 
 
 def _чистый(окно):
@@ -93,7 +91,6 @@ def test_client_can_be_typed_while_the_phone_is_read(окно):
     окно.начать_сделку()
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("8 705 883 79 53")
-    окно.s_work.цена.setText("250000")
     assert not окно.s_work.b_отправить.isEnabled()          # результата ещё нет
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
@@ -106,7 +103,6 @@ def test_clean_phone_fills_the_window(окно):
     _чистый(окно)
     assert окно.state == "work"
     assert "iPhone 14 Pro" in окно.s_work.аппарат.text()
-    assert окно.s_work.данные()["цена"] == 250000
     assert окно.s_work.данные()["sim"] in ("Стандарт", "Dual sim", "E-sim", "Прочее")
     assert окно.код_медиа and окно.s_work.код.text() == окно.код_медиа
 
@@ -118,15 +114,14 @@ def test_repaired_phone_is_not_processed_but_kept(окно):
     окно.on_done({"report": _отчёт("эталон_iPhone-15-Pro_iOS26.6.1.zip"), "client_id": "x"})
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
-    окно.s_work.цена.setText("100000")
     assert not окно.s_work.b_отправить.isEnabled()
     текст = окно.s_work.ошибка.text()
     assert "не оформляется" in текст and "деталь меняли" in текст and "лепок сохранён" in текст
 
 
-def test_send_needs_the_client_and_the_price(окно):
-    """Без имени, телефона или цены сделку не создать — кнопка должна быть недоступна,
-    а не выдавать ошибку после нажатия."""
+def test_send_needs_the_client(окно):
+    """Без имени и телефона сделку не создать — кнопка должна быть недоступна, а не
+    выдавать ошибку после нажатия. Цену не спрашиваем вовсе: её считает бот."""
     _чистый(окно)
     assert not окно.s_work.b_отправить.isEnabled()
     окно.s_work.имя.setText("Зама")
@@ -134,9 +129,8 @@ def test_send_needs_the_client_and_the_price(окно):
     окно.s_work.телефон.setText("12345")                    # не телефон
     assert not окно.s_work.b_отправить.isEnabled()
     окно.s_work.телефон.setText("8 705 883 79 53")
-    assert окно.s_work.b_отправить.isEnabled()              # цена подставилась из прайса
-    окно.s_work.цена.clear()
-    assert not окно.s_work.b_отправить.isEnabled()
+    assert окно.s_work.b_отправить.isEnabled()
+    assert not hasattr(окно.s_work, "цена"), "поля цены в окне быть не должно"
 
 
 def test_media_code_is_made_on_the_point(окно):
@@ -157,7 +151,7 @@ def test_media_without_config_says_so(окно):
 def test_export_without_bot_settings_says_so_instead_of_silence(окно):
     """Не заданы токен и чат — сотрудник должен это прочитать, а не нажимать впустую."""
     окно.last = {"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip")}
-    окно.отправить_в_оценку({"имя": "Зама", "телефон": "+77058837953", "цена": 1,
+    окно.отправить_в_оценку({"имя": "Зама", "телефон": "+77058837953",
                              "sim": "Стандарт", "коробка": True, "шнур": True, "комментарий": ""})
     assert "ocenka_bot_token" in окно.s_work.ошибка.text()
 
@@ -183,7 +177,8 @@ def test_export_sends_the_payload_to_the_bot(окно, monkeypatch):
     посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
     assert посылка["код"] == окно.код_медиа
     assert посылка["сделка"]["model"] == "iPhone 14 Pro"
-    assert посылка["сделка"]["price_grade_auto"] == 250000
+    # цены в посылке нет вовсе: её считает Оценка по своему прайсу
+    assert "price_grade_auto" not in посылка["сделка"]
     assert посылка["клиент"]["телефон"] == "+77058837953"
     assert "Киоск 16/38" in посылка["сделка"]["comment_ocenka"]
 
@@ -206,7 +201,7 @@ def test_receipt_is_written_and_named_by_deal(окно, tmp_path, monkeypatch):
     monkeypatch.setattr(kapp, "data_dir", lambda: str(tmp_path))
     os.makedirs(tmp_path / "out", exist_ok=True)
     окно.last = {"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip")}
-    окно.сделка = {"номер": "7KQ4M", "цена": 250000, "валюта": "₸", "клиент": "Зама",
+    окно.сделка = {"номер": "7KQ4M", "клиент": "Зама",
                    "телефон": "+77058837953", "сотрудник": "Асылбек", "точка": "16/38",
                    "коробка": True, "шнур": False}
     monkeypatch.setattr(kapp.os, "startfile", lambda p: None, raising=False)
@@ -214,4 +209,5 @@ def test_receipt_is_written_and_named_by_deal(окно, tmp_path, monkeypatch):
     файл = tmp_path / "out" / "чек_7KQ4M.html"
     assert файл.is_file()
     текст = файл.read_text(encoding="utf-8")
-    assert "250 000 ₸" in текст and "iPhone 14 Pro" in текст and "Зама" in текст
+    assert "iPhone 14 Pro" in текст and "Зама" in текст
+    assert "₸" not in текст, "цены на чеке быть не должно — её называет Оценка"

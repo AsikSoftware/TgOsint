@@ -124,21 +124,20 @@ def test_pipeline_skips_history_wait_on_unsupported_model(fake_core, monkeypatch
     assert any(k == "apple" and s == "done" and "iPhone X" in t for k, s, t in events)
 
 
-def test_client_standalone_sickw_price_and_numbers(monkeypatch, tmp_path):
+def test_client_standalone_sickw_and_numbers(monkeypatch, tmp_path):
     from pintel_kiosk import client as kclient
     from pintel_core.external import sickw as sk
     monkeypatch.setattr(kclient, "data_dir", lambda: str(tmp_path))
     for sub in ("queue", "cache"):
         os.makedirs(tmp_path / sub, exist_ok=True)
     monkeypatch.setattr(kclient, "app_dir", lambda: str(tmp_path))
-    json.dump({"база": {"iPhone13,2": {"64": 80000}}, "сетка_износа": {}}, open(tmp_path / "cache" / "price_grid.json", "w"))
     c = kclient.Client({"server": "", "token": "", "sickw_key": "KEY", "sickw_services": [61]})
     assert not c.enabled and c.local_sickw and c.standalone_ready
     monkeypatch.setattr(sk, "_get", lambda params, timeout=60: {"status": "success",
                         "result": 'Model: iPhone 12 64GB Black<br>Blacklist Status: <font color="green">Clean</font><br>iCloud Lock: <font color="red">ON</font><br>'})
     r = c.sickw("490154203237518")
     assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True
-    assert c.price()["база"]["iPhone13,2"]["64"] == 80000
+    assert not hasattr(c, "price"), "прайса у киоска больше нет — цену считает бот Оценки"
     assert [c.local_number(), c.local_number()] == [1, 2]
     # сервера нет вовсе — в очередь не копим: досылать некуда, а слепок и отчёт уже
     # лежат в out. Копия весит около мегабайта на оценку и росла бы вечно.

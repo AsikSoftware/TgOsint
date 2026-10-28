@@ -46,9 +46,8 @@ class Poller(QThread):
 
 
 class NetThread(QThread):
-    """Фон: пульс на сервер, досылка очереди, прайс раз в 15 минут."""
+    """Фон: пульс на сервер и досылка очереди. Прайс киоску не нужен — цену считает бот."""
     status = Signal(bool, str)
-    price = Signal(dict)
 
     def __init__(self, client, cfg, parent=None):
         super().__init__(parent)
@@ -57,27 +56,13 @@ class NetThread(QThread):
         self.device_state = "?"
 
     def run(self):
-        last_price = 0
         while not self._stop:
-            if not self.client.enabled and time.time() - last_price > 900:
-                try:                                            # автономно: прайс прямо из таблицы
-                    g = self.client.price()
-                    if g:
-                        self.price.emit(g)
-                except Exception:                               # noqa: BLE001
-                    pass
-                last_price = time.time()
             if self.client.enabled:
                 try:
                     sent = self.client.flush_queue()
                     self.client.heartbeat({"драйвер": self.device_state != NO_DRIVER, "телефон": self.device_state,
                                            "в_очереди": self.client.queued(), "версия": __version__})
                     self.status.emit(True, "сервер на связи" + (f", дослано {sent}" if sent else ""))
-                    if time.time() - last_price > 900:
-                        g = self.client.price()
-                        if g:
-                            self.price.emit(g)
-                        last_price = time.time()
                 except ServerError as e:
                     self.status.emit(False, str(e))
                 except Exception as e:                           # noqa: BLE001
@@ -158,7 +143,6 @@ class KioskWindow(QMainWindow):
         super().__init__()
         self.cfg = cfg
         self.client = Client(cfg)
-        self.grid = None
         self.state = "idle"
         self.wait_unplug = False
         self.pipeline = None
@@ -193,16 +177,9 @@ class KioskWindow(QMainWindow):
         self.poller.start()
         self.net = NetThread(self.client, cfg, self)
         self.net.status.connect(self.on_net)
-        self.net.price.connect(self.on_price)
         self.net.start()
         QShortcut(QKeySequence("Escape"), self, activated=self.toggle_fullscreen)
         QShortcut(QKeySequence("Ctrl+Q"), self, activated=self.close)
-        try:
-            g = self.client.price()
-            if g:
-                self.on_price(g)
-        except Exception:                                        # noqa: BLE001
-            pass
         if cfg.get("_ошибка"):
             # сломанный или недописанный kiosk.toml виден сразу, а не в виде «ничего не работает»
             self.s_main.set_status(cfg["_ошибка"], ok=False)
@@ -351,9 +328,6 @@ class KioskWindow(QMainWindow):
         if self.state == "idle" and self.client.enabled:
             self.s_main.set_status("Готов к работе" if ok else f"Автономно: {text}", ok=ok)
 
-    def on_price(self, grid):
-        self.grid = grid
-
     def on_tick(self, state, detail, count):
         self.net.device_state = state
         self.кабель = state
@@ -387,7 +361,7 @@ class KioskWindow(QMainWindow):
         self.state = "scanning"
         self.wait_unplug = True
         self.s_work.set_trouble("Не отключайте кабель. Обычно это занимает около минуты.")
-        self.pipeline = Pipeline(self.cfg, self.client, self.grid, self)
+        self.pipeline = Pipeline(self.cfg, self.client, self)
         self.pipeline.status.connect(self.on_link_status)
         self.pipeline.step.connect(self.s_work.set_step)
         self.pipeline.apple_prompt.connect(self.s_work.show_prompt)
@@ -401,7 +375,7 @@ class KioskWindow(QMainWindow):
         if self.last and result.get("client_id") == self.last.get("client_id"):
             self.last = result
             if self.state == "work":
-                self.s_work.показать(result["report"], (result["report"].get("цена") or {}).get("цена"))
+                self.s_work.показать(result["report"])
 
     def on_link_status(self, state, human):
         if state != READY:
@@ -421,7 +395,7 @@ class KioskWindow(QMainWindow):
         rep = result["report"]
         итог = (rep.get("детали_вердикт") or {}).get("итог")
         self.state = "work"
-        self.s_work.показать(rep, (rep.get("цена") or {}).get("цена"))
+        self.s_work.показать(rep)
         self._выгрузить_архив()                    # свежий эталон уедет в архив сам
         if итог == "родные":
             self.новый_код_медиа()
@@ -480,7 +454,7 @@ class KioskWindow(QMainWindow):
                 # Читаем сами из crash-логов; не прочитали — отдаём пусто, а не «нет».
                 "panic_full": (rep.get("паника") or {}).get("panic_full"),
                 "статус_ремонта": ocenka.статус_ремонта((rep.get("детали_вердикт") or {}).get("итог")),
-                "цена": поля["цена"], "комментарий": поля["комментарий"],
+                "комментарий": поля["комментарий"],
                 "комментарий_оценщика": ocenka.комментарий_оценщика(
                     rep, откуда=f"Киоск {cfg.get('point') or ''} от {datetime.now():%Y-%m-%d}"),
                 "имя_клиента": клиент.get("имя"), "телефон_клиента": клиент.get("телефон"),
@@ -488,8 +462,7 @@ class KioskWindow(QMainWindow):
                 "замки": ocenka.замки(rep),
             }
             посылка = ocenka.посылка(данные, код, точка=cfg.get("point") or "")
-            return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка,
-                                       валюта=cfg.get("currency", "₸"))
+            return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка)
 
         t = self._run(job)
         t.ok.connect(self.сделка_ушла)
@@ -519,8 +492,7 @@ class KioskWindow(QMainWindow):
         поля = self.s_work.данные()
         self.s_work.занято("")
         код = итог.get("код") or self.код_медиа
-        self.сделка = {"номер": код, "цена": поля.get("цена"),
-                       "валюта": self.cfg.get("currency", "₸"),
+        self.сделка = {"номер": код,
                        "клиент": поля.get("имя"), "телефон": поля.get("телефон"),
                        "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
                        "коробка": поля.get("коробка"), "шнур": поля.get("шнур"),

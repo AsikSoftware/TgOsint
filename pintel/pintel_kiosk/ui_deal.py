@@ -27,7 +27,6 @@ QLineEdit, QComboBox, QTextEdit { background: #FFFFFF; border: 2px solid %(borde
     padding: 11px 15px; font-size: 21px; color: %(ink)s; selection-background-color: %(tint)s; }
 QLineEdit:focus, QComboBox:focus, QTextEdit:focus { border-color: %(action)s; }
 QLineEdit[плохо="да"] { border-color: %(bad)s; }
-QLineEdit#цена { font-size: 32px; font-weight: 700; }
 QComboBox::drop-down { border: none; width: 38px; }
 QCheckBox { font-size: 21px; font-weight: 600; spacing: 12px; }
 QCheckBox::indicator { width: 26px; height: 26px; border: 2px solid %(ring)s; border-radius: 8px;
@@ -198,16 +197,9 @@ class WorkScreen(Screen):
         внутри.addSpacing(6)
         внутри.addLayout(ряд)
 
-        цена_ряд = QHBoxLayout()
-        цена_ряд.setSpacing(12)
-        self.цена = QLineEdit()
-        self.цена.setObjectName("цена")
-        self.цена.setPlaceholderText("Сумма клиенту")
-        self.цена.textChanged.connect(self._цена_набрана)
-        цена_ряд.addWidget(label("Цена, ₸", "muted"))
-        цена_ряд.addWidget(self.цена, 1)
         внутри.addSpacing(6)
-        внутри.addLayout(цена_ряд)
+        внутри.addWidget(label("Цену посчитает бот Оценки по своему прайсу — здесь её не ставим.",
+                               "muted", wrap=True))
 
         self.комментарий = QTextEdit()
         self.комментарий.setPlaceholderText("Сколы, состояние корпуса")
@@ -276,7 +268,6 @@ class WorkScreen(Screen):
         self.rep, self.готово, self.отправлено = {}, False, False
         self.имя.clear()
         self.телефон.clear()
-        self.цена.clear()
         self.комментарий.clear()
         self.коробка.setChecked(False)
         self.шнур.setChecked(False)
@@ -334,7 +325,7 @@ class WorkScreen(Screen):
         self.итоги.addWidget(label(значение, font_=font(FONT_TEXT, 20, W.Bold), color=цвет), n, 1,
                              Qt.AlignRight)
 
-    def показать(self, rep, цена=None):
+    def показать(self, rep):
         """Проверка закончилась: плашки наверху, подробности слева, QR справа."""
         self.rep = rep or {}
         пас = self.rep.get("паспорт") or {}
@@ -391,8 +382,6 @@ class WorkScreen(Screen):
 
         from pintel_core.external import ocenka
         self.sim.setCurrentText(ocenka.sim_для_оценки(пас))
-        if цена and not self.цена.text().strip():
-            self.цена.setText(str(int(цена)))
         if not self.отправлено:
             self.правая.setCurrentIndex(1)
         self._проверить()
@@ -419,28 +408,16 @@ class WorkScreen(Screen):
 
     # ---------- данные ----------
     def данные(self):
-        цена = re.sub(r"\D", "", self.цена.text())
+        """Цены здесь нет: её считает бот Оценки по своему прайсу (google_price), и наша
+        цифра всё равно была бы другой."""
         return {"имя": self.имя.text().strip(), "телефон": нормальный_телефон(self.телефон.text()),
                 "коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
-                "sim": self.sim.currentText(), "цена": int(цена) if цена else None,
+                "sim": self.sim.currentText(),
                 "комментарий": self.комментарий.toPlainText().strip()}
-
-    def _цена_набрана(self):
-        """Сумму читают вслух клиенту — «250 000», а не «250000»."""
-        if getattr(self, "_правим_цену", False):
-            return
-        цифры = re.sub(r"\D", "", self.цена.text())
-        красиво = f"{int(цифры):,}".replace(",", " ") if цифры else ""
-        if красиво != self.цена.text():
-            self._правим_цену = True
-            self.цена.setText(красиво)
-            self.цена.setCursorPosition(len(красиво))
-            self._правим_цену = False
-        self._проверить()
 
     def _годно(self):
         d = self.данные()
-        return bool(self.готово and not self.отправлено and d["имя"] and d["телефон"] and d["цена"])
+        return bool(self.готово and not self.отправлено and d["имя"] and d["телефон"])
 
     def _проверить(self):
         d = self.данные()
@@ -454,7 +431,7 @@ class WorkScreen(Screen):
     def _отправить(self):
         d = self.данные()
         нет = [имя for имя, есть in (("имя клиента", d["имя"]), ("телефон клиента", d["телефон"]),
-                                     ("цена", d["цена"]), ("результат проверки", self.готово)) if not есть]
+                                     ("результат проверки", self.готово)) if not есть]
         if нет:
             self.ошибка.setText("Не хватает: " + ", ".join(нет))
             return

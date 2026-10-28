@@ -12,13 +12,10 @@ DEFAULTS = {
     "apple_history_seconds": 90,
     "return_seconds": 60,
     "fullscreen": True,
-    "currency": "₸",
     "sickw": True,
     # Автономно (без сервера, одна точка): ключи прямо на киоске
     "sickw_key": "",
     "sickw_services": [61],
-    "gservice_json": "gservice.json",
-    "price_sheet_url": "",
     # Оценка: сделку создаёт её бот, приложение отдаёт ему посылку через Telegram
     # (в базу Оценки с точки хода нет — порт Postgres закрыт наружу)
     "ocenka_bot": "",             # имя бота Оценки без @: по ссылке на него сдают фото и видео
@@ -27,9 +24,9 @@ DEFAULTS = {
     "staff_name": "",             # имя сотрудника для чека клиенту
     # Реквизиты в шапке чека: пустые строки просто не печатаются
     "company_name": "Pintel.kz",
+    "company_phone": "+77472461313",
+    "company_site": "pintelkz.taplink.kz",
     "company_address": "",
-    "company_phone": "",
-    "company_site": "pintel.kz",
     "company_bin": "",
     "reference_keep": 500,        # сколько обезличенных эталонов держать на точке
     "keep_days": 90,              # сколько дней хранить оценки в папке out (0 — не убирать)

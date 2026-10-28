@@ -17,7 +17,7 @@ def _отчёт(архив="эталон_iPhone-14-Pro_iOS26.5.zip"):
     return report_mod.build(snap)
 
 
-СДЕЛКА = {"номер": 7093, "цена": 250000, "валюта": "₸", "клиент": "Зама",
+СДЕЛКА = {"номер": 7093, "клиент": "Зама",
           "телефон": "+77058837953", "сотрудник": "Асылбек", "точка": "16/38 Pintel",
           "коробка": True, "шнур": False}
 
@@ -31,7 +31,6 @@ def test_receipt_is_a_document_not_a_printout():
     assert "data:image/png;base64," in txt and "БИН 123456789012" in txt
     assert "Алматы, 16/38" in txt and "+7 777 000 00 00" in txt
     assert txt.count("подпись") == 2                 # подписывают обе стороны
-    assert "Действительна до конца дня" in txt       # у цены есть срок
 
 
 def test_receipt_shows_everything_the_check_saw():
@@ -45,10 +44,17 @@ def test_receipt_shows_everything_the_check_saw():
     assert "по кабелю" in txt                        # сноска о том, как проверяли
 
 
-def test_receipt_shows_price_device_and_verdict():
+def test_receipt_has_no_price_at_all():
+    """Цену называет Оценка по своему прайсу уже после создания сделки. Напечатать на
+    бумаге сумму, которой ещё нет, значит пообещать то, что потом не совпадёт."""
+    txt = receipt.html(СДЕЛКА, _отчёт())
+    for слово in ("₸", "Цена", "цена", "250 000", "Действительна"):
+        assert слово not in txt, слово
+
+
+def test_receipt_shows_device_and_verdict():
     rep = _отчёт()
     txt = receipt.html(СДЕЛКА, rep)
-    assert "250 000 ₸" in txt                      # цена читается, а не слипается в 250000
     assert "iPhone 14 Pro" in txt and "№ 7093" in txt
     assert "Зама" in txt and "Асылбек" in txt and "16/38 Pintel" in txt
     assert "Клиент" in txt and "Оценку провёл" in txt

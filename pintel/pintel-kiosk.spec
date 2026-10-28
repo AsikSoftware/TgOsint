@@ -8,7 +8,9 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules, coll
 hidden = ['pymobiledevice3.remote.userspace_tunnel', 'pymobiledevice3.remote.core_device.device_info', 'pmd_pytcp', 'pytun_pmd3', 'pmd_pytcp.stack', 'pmd_pytcp.socket', 'pmd_pytcp.lib.interface_layer', 'pmd_pytcp.lib.io_backend', 
           'pymobiledevice3.services.diagnostics', 'pymobiledevice3.services.syslog', 'pymobiledevice3.services.afc',
           'pymobiledevice3.services.mobile_config', 'google.auth.transport.requests', 'requests', 'rsa',
-          'pintel_core.external.gsheet',
+          'pintel_core.external.gsheet', 'pintel_core.external.ocenka', 'pintel_core.receipt',
+          'pintel_kiosk.ui_deal', 'psycopg', 'sqlalchemy.dialects.postgresql',
+          'sqlalchemy.dialects.postgresql.psycopg',
           'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown', 'httpx', 'qrcode', 'pintel_kiosk.app']
 _pmd_datas, _pmd_bins, _pmd_hidden = collect_all('pmd_pytcp')
 _cd_datas, _cd_bins, _cd_hidden = collect_all('pymobiledevice3.remote')
@@ -32,7 +34,8 @@ datas = collect_data_files('pymobiledevice3') + _pmd_datas + _cd_datas + _tun_da
     ('pintel_kiosk/assets', 'pintel_kiosk/assets'),
 ]
 excludes = ['tkinter', 'matplotlib', 'av', 'jedi', 'IPython', 'parso', 'numpy', 'PIL', 'pillow', 'pandas', 'scipy',
-            'aiohttp', 'fastapi', 'uvicorn', 'starlette', 'sqlalchemy', 'alembic', 'pintel_server',
+            # sqlalchemy и psycopg нужны: приложение само создаёт сделку в базе Оценки
+            'aiohttp', 'fastapi', 'uvicorn', 'starlette', 'alembic', 'pintel_server',
             'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineQuick', 'PySide6.QtQml',
             'PySide6.QtQuick', 'PySide6.QtQuickWidgets', 'PySide6.QtQuickControls2', 'PySide6.Qt3DCore',
             'PySide6.Qt3DRender', 'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets', 'PySide6.QtPdf',

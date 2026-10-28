@@ -17,6 +17,13 @@ DEFAULTS = {
     "sickw_services": [61],
     "gservice_json": "gservice.json",
     "price_sheet_url": "",
+    # Оценка: приложение отправляет сделку само, без нашего сервера
+    "ocenka_db_url": "",          # postgresql+psycopg://user:pass@host/pintel_ocenka
+    "ocenka_shop_litera": "",     # литера точки в таблице shops
+    "ocenka_bot_token": "",       # тот же бот, что крутит Оценку: через него фото и видео
+    "ocenka_media_chat": "",      # чат-хранилище для медиа
+    "ocenka_user_grade": 0,       # id сотрудника Оценки, который проводит сделки на этой точке
+    "сотрудник": "",              # имя для чека
 }
 
 

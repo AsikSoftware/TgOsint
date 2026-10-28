@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import traceback
+from datetime import datetime
 
 from PySide6.QtCore import QRectF, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPalette, QShortcut
@@ -14,9 +15,10 @@ from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsVie
 from pintel_core.devicelink import connect
 from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER, READY
 
-from . import __version__, config, ui
+from . import __version__, config, ui, ui_deal
 from .client import Client, ServerError
-from .worker import Pipeline
+from .config import data_dir
+from .worker import Pipeline, log_line
 
 
 class Poller(QThread):
@@ -90,16 +92,23 @@ class NetThread(QThread):
 
 
 class Task(QThread):
-    """Одноразовое сетевое действие вне UI-потока."""
+    """Одноразовое сетевое действие вне UI-потока.
+
+    Результат и ошибку отдаёт сигналами: сотруднику нужно видеть, чем кончилась
+    отправка сделки, а не гадать, почему ничего не произошло."""
+    ok = Signal(object)
+    err = Signal(str)
+
     def __init__(self, fn, parent=None):
         super().__init__(parent)
         self.fn = fn
 
     def run(self):
         try:
-            self.fn()
-        except Exception:                                        # noqa: BLE001
-            pass
+            self.ok.emit(self.fn())
+        except Exception as e:                                   # noqa: BLE001
+            log_line("задача не выполнилась: " + traceback.format_exc())
+            self.err.emit(f"{type(e).__name__}: {e}")
 
 
 class IntakePoller(QThread):
@@ -185,13 +194,25 @@ class KioskWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.host = ScaledHost(self.stack)
         self.setCentralWidget(self.host)
-        self.s_main = ui.MainScreen(cfg.get("point") or "")
-        self.s_scan = ui.ScanScreen(cfg.get("point") or "")
+        точка = cfg.get("point") or ""
+        self.s_main = ui.MainScreen(точка)
+        self.s_client = ui_deal.ClientScreen(точка)
+        self.s_scan = ui.ScanScreen(точка)
         self.s_result = ui.ResultScreen()
-        for s in (self.s_main, self.s_scan, self.s_result):
+        self.s_eval = ui_deal.EvalScreen(точка)
+        self.s_done = ui_deal.DoneScreen()
+        for s in (self.s_main, self.s_client, self.s_scan, self.s_result, self.s_eval, self.s_done):
             self.stack.addWidget(s)
+        self.s_main.начать.connect(self.начать_сделку)
+        self.s_client.дальше.connect(self.клиент_готов)
+        self.s_client.назад.connect(self.go_home)
         self.s_scan.skip_requested.connect(self.on_skip_apple)
         self.s_result.just_looking.connect(self.go_home)   # «Готово» — вернуться к началу
+        self.s_eval.отправить.connect(self.отправить_в_оценку)
+        self.s_eval.назад.connect(self.go_home)
+        self.s_done.печать.connect(self.напечатать_чек)
+        self.s_done.заново.connect(self.go_home)
+        self.клиент, self.сделка, self.кабель = {}, {}, NO_DEVICE
         self.return_timer = QTimer(self)
         self.return_timer.setSingleShot(True)
         self.return_timer.timeout.connect(self.go_home)
@@ -239,6 +260,7 @@ class KioskWindow(QMainWindow):
         t = Task(fn, self)
         self.tasks = [x for x in self.tasks if x.isRunning()] + [t]
         t.start()
+        return t
 
     def _stop_intake(self):
         if self.intake is not None:
@@ -281,13 +303,15 @@ class KioskWindow(QMainWindow):
 
     def on_tick(self, state, detail, count):
         self.net.device_state = state
+        self.кабель = state
         if self.state == "idle":
             if state == NO_DRIVER:
                 self.s_main.set_status("Нет драйвера Apple — установите iTunes", ok=False)
                 self.s_main.set_device("nodriver")
             elif state == READY and count and not self.wait_unplug:
                 self.s_main.set_device("found")
-                self.start_check()
+                if self.клиент:                        # сперва имя и телефон, потом проверка
+                    self.start_check()
             elif state == NO_DEVICE:
                 self.wait_unplug = False
                 self.s_main.set_device("wait")
@@ -344,7 +368,22 @@ class KioskWindow(QMainWindow):
         if self.state != "scanning":
             return
         self.last = result
-        self.s_result.fill(result["report"], result.get("server"))
+        rep = result["report"]
+        итог = (rep.get("детали_вердикт") or {}).get("итог")
+        if итог == "родные" and self.клиент:
+            self.state = "eval"                        # аппарат чистый — оформляем сделку
+            self.s_eval.показать(rep, (rep.get("цена") or {}).get("цена"))
+            self.show_screen(self.s_eval)
+            return
+        self.s_result.fill(rep, result.get("server"))
+        if self.клиент:
+            # ремонт, замена или неподтверждённые детали — сделку не оформляем, но слепок уже
+            # сохранён: именно на таких аппаратах учится разбор, и позже мы их добавим
+            self.s_result.set_note(
+                "Сделка не оформляется: "
+                + ("Apple не подтвердила подлинность деталей" if итог in ("кабель", "неполно")
+                   else "по данным Apple деталь меняли")
+                + ". Слепок сохранён — передайте его разработчику.")
         self.show_screen(self.s_result)
         self.state = "result"
         self.return_timer.start(int(self.cfg.get("return_seconds", 60)) * 3000)
@@ -364,6 +403,97 @@ class KioskWindow(QMainWindow):
         self.s_scan.set_trouble("Не получилось прочитать телефон: " + text + ". Подключите заново или подойдите к сотруднику.")
         QTimer.singleShot(8000, self.go_home)
 
+    # ---------- сделка ----------
+    def начать_сделку(self):
+        self.s_client.сбросить()
+        self.state = "client"
+        self.show_screen(self.s_client)
+
+    def клиент_готов(self, имя, телефон):
+        self.клиент = {"имя": имя, "телефон": телефон}
+        self.state = "idle"
+        self.wait_unplug = False
+        self.s_scan.reset()
+        self.s_scan.set_trouble("Подключите телефон кабелем и нажмите «Доверять».")
+        self.show_screen(self.s_scan)
+        if self.кабель == READY:
+            self.start_check()
+
+    def отправить_в_оценку(self, поля):
+        """Залить медиа и создать сделку — в отдельном потоке, окно не морозим."""
+        from pintel_core.external import ocenka
+        rep = (self.last or {}).get("report") or {}
+        пас, cfg = rep.get("паспорт") or {}, self.cfg
+        if not cfg.get("ocenka_db_url"):
+            self.s_eval.ошибка.setText("В kiosk.toml не задан ocenka_db_url — отправлять некуда")
+            return
+        клиент = dict(self.клиент)
+        self.s_eval.занято("Отправляем…")
+
+        def job():
+            токен, чат = cfg.get("ocenka_bot_token"), cfg.get("ocenka_media_chat")
+            видео = ocenka.залить_в_телеграм(поля["видео_путь"], токен, чат, видео=True)
+            if not видео:
+                raise ocenka.ОшибкаЭкспорта("видео не загрузилось в Telegram — проверьте токен и чат")
+            фото = [x for x in (ocenka.залить_в_телеграм(p, токен, чат) for p in поля["фото_пути"]) if x]
+            данные = {
+                "модель": пас.get("модель"), "код_модели": пас.get("код_модели"),
+                "память": (rep.get("память") or {}).get("объём_гб"),
+                "акб": (rep.get("батарея") or {}).get("здоровье_%"),
+                "цвет": пас.get("цвет"), "sim": поля["sim"],
+                "коробка": поля["коробка"], "шнур": поля["шнур"],
+                "panic_full": (rep.get("джейлбрейк") or {}).get("panic_full"),
+                "статус_ремонта": ocenka.статус_ремонта((rep.get("детали_вердикт") or {}).get("итог")),
+                "цена": поля["цена"], "комментарий": поля["комментарий"],
+                "комментарий_оценщика": ocenka.комментарий_оценщика(
+                    rep, откуда=f"Киоск {cfg.get('point') or ''} от {datetime.now():%Y-%m-%d}"),
+                "имя_клиента": клиент.get("имя"), "телефон_клиента": клиент.get("телефон"),
+                "imei": пас.get("imei"), "imei_все": [пас.get("imei2")],
+                "фото": фото, "видео": видео,
+            }
+            return ocenka.отправить(cfg["ocenka_db_url"], данные,
+                                    литера=cfg.get("ocenka_shop_litera") or "",
+                                    оценщик_id=int(cfg.get("ocenka_user_grade") or 0) or None)
+
+        t = self._run(job)
+        t.ok.connect(self.сделка_ушла)
+        t.err.connect(self.отправка_не_удалась)
+
+    def отправка_не_удалась(self, текст):
+        self.s_eval.занято("")
+        self.s_eval.ошибка.setText("Не ушло: " + текст)
+
+    def сделка_ушла(self, итог):
+        поля = self.s_eval.данные()
+        self.s_eval.занято("")
+        self.сделка = {"номер": итог.get("id"), "цена": поля.get("цена"),
+                       "валюта": self.cfg.get("currency", "₸"),
+                       "клиент": self.клиент.get("имя"), "телефон": self.клиент.get("телефон"),
+                       "сотрудник": self.cfg.get("сотрудник") or "", "точка": self.cfg.get("point") or "",
+                       "коробка": поля.get("коробка"), "шнур": поля.get("шнур")}
+        self.s_done.показать(итог.get("id"),
+                             "Клиенту видна цена сразу" if итог.get("статус") == 1
+                             else "Ушла оценщику на ручную оценку")
+        self.state = "done"
+        self.show_screen(self.s_done)
+
+    def напечатать_чек(self):
+        """Чек A4 клиенту: складываем страницу и открываем — печать из окна просмотра."""
+        from pintel_core import receipt
+        rep = (self.last or {}).get("report") or {}
+        путь = os.path.join(data_dir(), "out", f"чек_{self.сделка.get('номер') or 'без-номера'}.html")
+        with open(путь, "w", encoding="utf-8") as f:
+            f.write(receipt.html(self.сделка, rep))
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(путь)                     # Windows: откроется браузер, дальше Ctrl+P
+            else:
+                import webbrowser
+                webbrowser.open("file://" + путь)
+        except Exception as e:                         # noqa: BLE001
+            log_line(f"чек не открылся: {e}")
+        self.s_done.подпись.setText("Чек сохранён: " + путь)
+
     def go_home(self):
         self.return_timer.stop()
         self._stop_intake()
@@ -371,6 +501,7 @@ class KioskWindow(QMainWindow):
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
         self.state = "idle"
         self.last = None
+        self.клиент, self.сделка = {}, {}
         self.s_main.set_device("wait")
         self.show_screen(self.s_main)
 

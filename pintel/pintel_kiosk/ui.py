@@ -518,6 +518,8 @@ class Screen(QWidget):
 # ---------- 1. Ожидание ----------
 
 class MainScreen(Screen):
+    начать = Signal()
+
     def __init__(self, point=""):
         super().__init__()
         self.point_label = label(point_text(point), "muted")
@@ -528,14 +530,15 @@ class MainScreen(Screen):
         left = QVBoxLayout()
         left.setSpacing(0)
         left.addStretch(1)
-        left.addWidget(label("Узнайте, сколько стоит ваш iPhone", wrap=True, font_=font(FONT_HEAD, 78, W.Bold, -1.5)))
+        left.addWidget(label("Оценка iPhone", wrap=True, font_=font(FONT_HEAD, 78, W.Bold, -1.5)))
         left.addSpacing(28)
-        lead = label("Подключите телефон кабелем. Через пару минут увидите состояние, а цену назовёт сотрудник.",
+        lead = label("Проверяем телефон по кабелю и данным Apple, оформляем сделку и печатаем чек клиенту.",
                      "lead", wrap=True)
         lead.setMaximumWidth(760)
         left.addWidget(lead)
         left.addSpacing(48)
-        steps = ("Подключите iPhone", "Разблокируйте и нажмите «Доверять»", "Получите отчёт — остальное у сотрудника")
+        steps = ("Нажмите «Начать оценку»", "Запишем имя и телефон клиента",
+                 "Подключим iPhone и прочитаем его")
         for i, t in enumerate(steps, 1):
             r = QHBoxLayout()
             r.setSpacing(22)
@@ -547,6 +550,13 @@ class MainScreen(Screen):
             left.addLayout(r)
             if i < len(steps):
                 left.addSpacing(22)
+        left.addSpacing(44)
+        self.b_начать = QPushButton("Начать оценку")
+        self.b_начать.setObjectName("primary")
+        self.b_начать.setCursor(Qt.PointingHandCursor)
+        self.b_начать.setMinimumWidth(420)
+        self.b_начать.clicked.connect(self.начать.emit)
+        left.addWidget(self.b_начать, 0, Qt.AlignLeft)
         left.addStretch(1)
         body.addLayout(left, 1)
         self.card = ConnectCard()
@@ -846,8 +856,12 @@ class ResultScreen(Screen):
         srow.setSpacing(12)
         self.pulse = Pulse(C["action"])
         self.status = label("ожидаем оформление у сотрудника", "cardstatus")
+        self.note = label("", "qrtext", wrap=True, color=C["warntext"])
+        self.note.hide()
         srow.addWidget(self.pulse)
         srow.addWidget(self.status)
+        pl.addSpacing(10)
+        pl.addWidget(self.note)
         srow.addStretch(1)
         pl.addLayout(srow)
         pl.addStretch(1)
@@ -1014,6 +1028,11 @@ class ResultScreen(Screen):
         self.l_pass.addLayout(kv("Куплен (по базе)", sk.get("дата_покупки") or "—"))
         self.l_pass.addLayout(kv("Уже приносили", "да" if (server or {}).get("уже_приносили") else "нет"))
         self.l_pass.addStretch(1)
+
+    def set_note(self, text):
+        """Строка под карточкой: почему сделку не оформляем. Пусто — строки нет."""
+        self.note.setText(text or "")
+        self.note.setVisible(bool(text))
 
     def set_intake(self, st):
         """Номер заявки появляется, когда сотрудник в кассе записал имя и телефон клиента

@@ -30,6 +30,7 @@ _tun_datas += [(_wintun[0], os.path.relpath(os.path.dirname(_wintun[0]), os.path
 
 datas = collect_data_files('pymobiledevice3') + _pmd_datas + _cd_datas + _tun_datas + [
     ('pintel_core/analysis/models.json', 'pintel_core/analysis'),
+    ('pintel_core/assets', 'pintel_core/assets'),        # логотип для чека клиенту
     ('pintel_kiosk/assets', 'pintel_kiosk/assets'),
 ]
 excludes = ['tkinter', 'matplotlib', 'av', 'jedi', 'IPython', 'parso', 'numpy', 'PIL', 'pillow', 'pandas', 'scipy',

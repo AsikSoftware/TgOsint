@@ -523,8 +523,16 @@ class KioskWindow(QMainWindow):
                        "валюта": self.cfg.get("currency", "₸"),
                        "клиент": поля.get("имя"), "телефон": поля.get("телефон"),
                        "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
-                       "коробка": поля.get("коробка"), "шнур": поля.get("шнур")}
+                       "коробка": поля.get("коробка"), "шнур": поля.get("шнур"),
+                       "комментарий": поля.get("комментарий"), "фирма": self._фирма()}
         self.s_work.ушло(код)
+
+    def _фирма(self):
+        """Реквизиты для шапки чека — из настроек точки."""
+        c = self.cfg
+        return {"название": c.get("company_name"), "адрес": c.get("company_address"),
+                "телефон": c.get("company_phone"), "сайт": c.get("company_site"),
+                "бин": c.get("company_bin")}
 
     def напечатать_чек(self):
         """Чек A4 клиенту: складываем страницу и открываем — печать из окна просмотра."""

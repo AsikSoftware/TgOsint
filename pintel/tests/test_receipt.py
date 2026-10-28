@@ -22,13 +22,36 @@ def _отчёт(архив="эталон_iPhone-14-Pro_iOS26.5.zip"):
           "коробка": True, "шнур": False}
 
 
+def test_receipt_is_a_document_not_a_printout():
+    """Клиент уносит это с собой: на листе должны быть логотип и реквизиты, иначе бумага
+    ничья. Логотип вшит в страницу — чек открывается без интернета и соседних файлов."""
+    txt = receipt.html({**СДЕЛКА, "фирма": {"название": "Pintel", "бин": "123456789012",
+                                            "телефон": "+7 777 000 00 00", "адрес": "Алматы, 16/38"}},
+                       _отчёт())
+    assert "data:image/png;base64," in txt and "БИН 123456789012" in txt
+    assert "Алматы, 16/38" in txt and "+7 777 000 00 00" in txt
+    assert txt.count("подпись") == 2                 # подписывают обе стороны
+    assert "Действительна до конца дня" in txt       # у цены есть срок
+
+
+def test_receipt_shows_everything_the_check_saw():
+    """Прошлый чек печатал шесть строк «оригинальная» и ни слова о блокировках. Клиент
+    должен видеть, за что ему назвали цену."""
+    txt = receipt.html(СДЕЛКА, _отчёт())
+    for раздел in ("Телефон", "Проверка подлинности", "Аккумулятор", "Блокировки и история"):
+        assert раздел in txt, раздел
+    assert "Циклов заряда" in txt and "Найти iPhone" in txt
+    assert "Серийный номер" in txt and "Комплект" in txt
+    assert "по кабелю" in txt                        # сноска о том, как проверяли
+
+
 def test_receipt_shows_price_device_and_verdict():
     rep = _отчёт()
     txt = receipt.html(СДЕЛКА, rep)
     assert "250 000 ₸" in txt                      # цена читается, а не слипается в 250000
-    assert "iPhone 14 Pro" in txt and "сделка № 7093" in txt
+    assert "iPhone 14 Pro" in txt and "№ 7093" in txt
     assert "Зама" in txt and "Асылбек" in txt and "16/38 Pintel" in txt
-    assert "Подпись клиента" in txt
+    assert "Клиент" in txt and "Оценку провёл" in txt
 
 
 def test_receipt_tells_whether_apple_confirmed():

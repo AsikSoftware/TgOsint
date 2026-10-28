@@ -3,6 +3,8 @@ import os
 import sys
 import tomllib
 
+# Ключи — только латиницей: в TOML голый ключ это буквы ASCII, цифры, «_» и «-».
+# Кириллический ключ («сотрудник = …») tomllib отвергает, и киоск не поднимается вовсе.
 DEFAULTS = {
     "server": "",                 # https://pintel.example.kz
     "token": "",                  # pk_… из Настройки → Киоски
@@ -23,7 +25,7 @@ DEFAULTS = {
     "ocenka_bot_token": "",       # токен того же бота: им приложение отправляет сделку
     "ocenka_chat_id": "",         # рабочая группа, где оценщик подтверждает сделку кнопкой
     "ocenka_shop_litera": "",     # литера точки в таблице shops
-    "сотрудник": "",              # имя для чека
+    "staff_name": "",             # имя сотрудника для чека клиенту
 }
 
 
@@ -42,11 +44,28 @@ def data_dir():
 
 
 def load(path=None) -> dict:
+    """Настройки рядом с exe.
+
+    Сломанный файл не роняет программу: на точке киоск должен подняться и показать
+    причину на экране, а не traceback в окне Windows. Незнакомые ключи тоже называем —
+    молча проглоченная опечатка выглядит как «настройка не работает»."""
     cfg = dict(DEFAULTS)
     p = path or os.path.join(app_dir(), "kiosk.toml")
+    беда, данные = "", {}
     if os.path.isfile(p):
-        with open(p, "rb") as f:
-            cfg.update({k: v for k, v in tomllib.load(f).items() if k in DEFAULTS})
+        try:
+            with open(p, "rb") as f:
+                данные = tomllib.load(f)
+        except tomllib.TOMLDecodeError as e:
+            беда = f"kiosk.toml не прочитан ({e}) — работаем на умолчаниях"
+        except OSError as e:
+            беда = f"kiosk.toml не открылся ({e}) — работаем на умолчаниях"
+        else:
+            лишние = sorted(set(данные) - set(DEFAULTS))
+            if лишние:
+                беда = "в kiosk.toml незнакомые ключи: " + ", ".join(лишние)
+        cfg.update({k: v for k, v in данные.items() if k in DEFAULTS})
     cfg["_path"] = p
+    cfg["_ошибка"] = беда
     cfg["server"] = str(cfg["server"]).rstrip("/")
     return cfg

@@ -233,7 +233,11 @@ class KioskWindow(QMainWindow):
                 self.on_price(g)
         except Exception:                                        # noqa: BLE001
             pass
-        if not self.client.enabled:
+        if cfg.get("_ошибка"):
+            # сломанный или недописанный kiosk.toml виден сразу, а не в виде «ничего не работает»
+            self.s_main.set_status(cfg["_ошибка"], ok=False)
+            log_line(cfg["_ошибка"])
+        elif not self.client.enabled:
             if self.client.standalone_ready:
                 self.s_main.set_status("Готов к работе (без сервера)", ok=True)
             else:
@@ -489,7 +493,7 @@ class KioskWindow(QMainWindow):
         self.сделка = {"номер": итог.get("код") or self.код_медиа, "цена": поля.get("цена"),
                        "валюта": self.cfg.get("currency", "₸"),
                        "клиент": self.клиент.get("имя"), "телефон": self.клиент.get("телефон"),
-                       "сотрудник": self.cfg.get("сотрудник") or "", "точка": self.cfg.get("point") or "",
+                       "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
                        "коробка": поля.get("коробка"), "шнур": поля.get("шнур")}
         self.s_done.показать(итог.get("код") or self.код_медиа,
                              "Оценка ушла в Telegram. Оценщик подтверждает её кнопкой — "

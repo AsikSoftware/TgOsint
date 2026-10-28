@@ -36,7 +36,7 @@ def окно(monkeypatch):
     QApplication.instance() or QApplication([])
     monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
     monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
-    w = kapp.KioskWindow({**kconfig.DEFAULTS, "point": "16/38", "_path": None, "сотрудник": "Асылбек"})
+    w = kapp.KioskWindow({**kconfig.DEFAULTS, "point": "16/38", "_path": None, "staff_name": "Асылбек"})
     yield w
     # потоки гасим ДО закрытия окна: QThread, разрушенный на ходу, роняет весь прогон
     for поток in (w.poller, w.net):

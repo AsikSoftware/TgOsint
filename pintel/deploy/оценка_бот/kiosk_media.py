@@ -18,8 +18,9 @@ chat_id сразу знает, кто пришёл, и это же станов�
 Своего в базе Оценки заводится одна таблица `kiosk_media` (DDL рядом, kiosk_media.sql).
 Код самой Оценки этот файл не трогает.
 """
+import re
+
 from aiogram import F, Router
-from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
@@ -30,8 +31,10 @@ from database.engine import async_session_factory
 
 router_kiosk_media = Router()
 
-# Ссылка приходит как «/start pКОД»: префикс «p» отделяет её от других deep link бота.
-КОД = r"^p[A-Z0-9]{4,12}$"
+# Ссылка приходит обычным сообщением «/start pКОД» — префикс «p» отделяет её от других
+# переходов на бота. Фильтруем по тексту, а не параметрами CommandStart: так обработчик
+# работает в любой версии aiogram 3 и наверняка не перехватит чужой /start.
+СТАРТ = re.compile(r"^/start(?:@\w+)?\s+p([A-Z0-9]{4,12})\b")
 
 
 class KioskMediaState(StatesGroup):
@@ -73,11 +76,14 @@ async def _добавить(код: str, file_id: str, видео: bool) -> None
         await session.commit()
 
 
-@router_kiosk_media.message(CommandStart(deep_link=True, magic=F.args.regexp(КОД)))
-async def открыть_приём(message: Message, command: CommandObject, state: FSMContext):
+@router_kiosk_media.message(F.text.regexp(СТАРТ.pattern))
+async def открыть_приём(message: Message, state: FSMContext):
     from database.database import AsyncOrm
 
-    код = (command.args or "")[1:]
+    совпало = СТАРТ.match(message.text or "")
+    if not совпало:                                   # сюда не попадём, но пусть будет явно
+        return
+    код = совпало.group(1)
     строка = await _строка(код)
     if строка is None:
         await message.answer("Код не найден. Заведите новый в программе на точке.")

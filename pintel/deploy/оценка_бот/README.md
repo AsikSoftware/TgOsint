@@ -49,7 +49,14 @@ media = [InputMediaVideo(media=device.video_phone)]
 ## Что приложению нужно в kiosk.toml
 
 ```toml
-ocenka_db_url   = "postgresql+psycopg://…/pintel_ocenka_test"
-ocenka_bot      = "pintel_ocenka_bot"   # имя бота для ссылки (без @)
+ocenka_db_url      = "postgresql+psycopg://…/pintel_ocenka_test"
+ocenka_bot         = "PintelOlxBot"   # имя бота для ссылки, без @ (сейчас тестовый)
 ocenka_shop_litera = "16/38"
 ```
+
+## Как проверить, что всё встало
+
+1. В боте: отправить ему `/start pTEST1` — он должен ответить «Код не найден».
+   Ответил — обработчик подключён и чужие `/start` не задеты.
+2. В программе на точке: дойти до окна оценки, отсканировать QR, прислать боту
+   видео — в программе появится строка «оценщик: … · видео: есть».

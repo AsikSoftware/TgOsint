@@ -97,7 +97,7 @@ REPAIRED_RE = re.compile(r"component: (\w+) isComponentRepairedUsing(\w+): (\d)"
 # «%{public}@ result: failed preflight checks». Ловим обе, иначе на iOS 17 отказ по детали
 # прошёл бы мимо: имя компонента стоит перед «result:», а не перед «failed».
 PREFLIGHT_RE = re.compile(r"\b(\w+)(?:\s+result:)?\s+failed preflight")
-AUTHCP_RE = re.compile(r"AuthCP Components: \((.*?)\n\)", re.S)
+AUTHCP_RE = re.compile(r"(?:AuthCP )?Components: \((.*?)\n\)", re.S)
 BATTERY_STATE_RE = re.compile(r"Battery Health State\{(.*?)\n\}", re.S)
 # iOS 15 и 16 пишут доверие к модулю отдельной строкой, а не словарём AuthCP: в прошивках
 # есть «isTrustedForUI: %@», «isTrustedForUI failed» и ключи аналитики
@@ -139,6 +139,7 @@ HEALTH_PARTS = {"Battery", "Display", "Camera", "FaceID", "BackGlass", "MTUB", "
 # второй, затирала вердикт проверки компонентов целиком: тот же телефон давал «замену» или
 # «все детали родные» в зависимости от порядка строк в журнале.
 СИЛА_ФОРМАТА = (("проверка компонентов", 3), ("сверка с заводской печатью", 3),
+                ("заключение FDR", 3),
                 ("записи обслуживания", 2), ("записи о ремонте", 2),
                 ("новый формат словаря", 1), ("доверие к модулям", 1))
 
@@ -150,6 +151,10 @@ def сила_формата(fmt):
     return 0
 
 
+# Сколько строк журнала кладём в слепок. Из 400 у iPhone Air на iOS 27 не поместились
+# строки проверки компонентов, и по такому слепку разбор уже не повторить — а именно по
+# ним мы и чиним разбор, когда он ошибся. Эталон при этом весит сотню килобайт.
+ПРЕДЕЛ_СТРОК = 1500
 MARKER = "CRRepairHistoryItem"
 RELATED = ("repair", "CoreRepair", "mobilerepaird")
 # признаки, что раздел на телефоне открыт (iOS 18): UI Настроек и демон проснулись
@@ -163,6 +168,11 @@ DELTA_RE = re.compile(r"delta components:\s*\{(.*?)\}\s*$", re.S)
 UNSEALED_RE = re.compile(r"Unsealed:\s*\{(.*?)\}\s*$", re.S)
 RCHL_RE = re.compile(r"fetched RCHL successfully:.*?length = (\d+)")
 SEAL_RE = re.compile(r"_copyIdentifierListForSealingMapEntry: Using value (.+?) for key (\w+) from query cache")
+# iOS 18 пишет вывод словами: «FDR data indicates no repair happened on this device.»
+# Это и есть ответ Apple на вопрос «был ли ремонт», тот же, что видно в разделе на экране.
+FDR_ИТОГ = re.compile(r"FDR data indicates (.+?)\.?\s*$", re.I | re.M)
+FDR_БЕЗ_РЕМОНТА = re.compile(r"no repair happened", re.I)
+FDR_ПРОВЕРКА = re.compile(r"FDR Validation status:\s*(\w+)", re.I)
 
 
 def _dict_keys(body):
@@ -438,15 +448,18 @@ class Listener:
             return
         self.meta["строк_по_теме"] += 1
         self.last_related_at = time.monotonic()
-        if len(self.related) < 400:
+        if len(self.related) < ПРЕДЕЛ_СТРОК:
             self.related.append(line[:600])
+        else:
+            self.meta["строк_обрезано"] = self.meta.get("строк_обрезано", 0) + 1
         if any(k in line for k in OPENED) and not self.meta["раздел_открыт"]:
             self.meta["раздел_открыт"] = True
             self.log("на телефоне открыт раздел «Об этом устройстве» / история обслуживания")
         похоже_на_словарь = "{" in line and "=" in line and ";" in line
         if похоже_на_словарь or any(k in line for k in (
                 "systemhealth", "isComponentRepairedUsing", "failed preflight",
-                "AuthCP Components", "Battery Health State", "isTrustedForUI")):
+                "AuthCP Components", "Components: (", "ComponentName",
+                "Battery Health State", "isTrustedForUI")):
             self.buf.append(line if line.endswith("\n") else line + "\n")
             self._apply_components()
         m = RCHL_RE.search(line)
@@ -464,6 +477,18 @@ class Listener:
             self.meta["печать"][m.group(2)] = m.group(1)[:120]
         if "No delta components found" in line and self.meta["дельта"] is None:
             self.meta["дельта"] = []
+        m = FDR_ПРОВЕРКА.search(line)
+        if m:
+            self.meta["fdr_печать"] = m.group(1)          # Pass — заводская печать сошлась
+        m = FDR_ИТОГ.search(line)
+        if m:
+            self.meta["fdr"] = m.group(1).strip()[:120]
+            if FDR_БЕЗ_РЕМОНТА.search(m.group(1)):
+                # Apple сказала прямым текстом: ремонта не было. Это тот же вывод, что
+                # даёт пустая «delta components», только словами — и на втором заходе в
+                # раздел телефон печатает ТОЛЬКО его: словарь печати он не повторяет.
+                if self.meta["дельта"] is None:
+                    self.meta["дельта"] = []
         delta = parse_delta(line)
         if delta is not None:
             self.meta["дельта"] = delta
@@ -475,7 +500,8 @@ class Listener:
                 self.buf.append(line if line.endswith("\n") else line + "\n")
         if (self.meta["дельта"] is not None or self.meta["unsealed"] is not None) and not self.items:
             self._слить(synthesize(self.meta))
-            self._формат("сверка с заводской печатью (iOS 17/18)")
+            self._формат("заключение FDR: ремонта не было (iOS 18)" if self.meta.get("fdr")
+                         and not self.meta.get("печать") else "сверка с заводской печатью (iOS 17/18)")
             if self.items and not self.found_at:
                 self.found_at = time.monotonic()
                 замен = len(self.meta["дельта"] or []) + len(self.meta["unsealed"] or [])

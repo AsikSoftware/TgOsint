@@ -510,3 +510,53 @@ def test_repair_is_visible_on_ios26_0_without_component_lines():
     assert v["итог"] == "ремонт" and v["apple_подтверждено"] is True
     экран = [d for d in v["детали"] if d["ключ"] == "Display"][0]
     assert экран["статус"] == "repaired" and "2026-02-02" in экран["почему"]
+
+
+def test_fdr_verdict_is_read_on_a_second_entry(кусок=None):
+    """iOS 18 на ВТОРОМ заходе в раздел печатает короткий журнал: словарь заводской печати
+    «Настройки» уже разобрали и не повторяют. Остаётся одна строка — и в ней прямой ответ
+    Apple: «FDR data indicates no repair happened on this device.»
+
+    На живом прогоне (iPhone 12, iOS 18.7.8) первый заход давал «родные», а второй —
+    «формат не распознан» и ПРОВЕРКА НЕПОЛНАЯ, то есть сделка не оформлялась на ровном
+    месте. Журнал тот же телефон, те же детали.
+    """
+    import os
+    from pintel_core import reference
+    from pintel_core.analysis import parts as parts_mod
+    from pintel_core.devicelink import snapshot as snap_mod
+
+    путь = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "fixtures_real", "эталоны", "эталон_iPhone-12_iOS18.7.8.zip")
+    snap, прочее = reference.load_bundle(путь, loads=snap_mod.loads)
+    сырое = (прочее or {}).get("raw") or snap.get("repair_history_raw") or ""
+    assert "FDR data indicates no repair happened" in сырое, "фикстура не та"
+    assert "delta components" not in сырое, "во втором заходе сверки печати уже нет"
+
+    lst = rh.Listener(None)
+    for строка in сырое.splitlines():
+        lst._feed(строка)
+
+    assert lst.meta["формат"].startswith("заключение FDR")
+    assert lst.meta["fdr_печать"] == "Pass"           # заводская печать сошлась
+    assert lst.meta["дельта"] == []                   # ремонта нет — тот же вывод, что у пустой дельты
+    детали = lst.снимок()
+    assert {"Battery", "Display", "Camera", "FaceID"} <= set(детали)
+    assert not any(d["меняли"] for d in детали.values())
+
+    вердикт = parts_mod.verdict({}, {}, детали, {}, {}, lst.meta, apple_supported=True)
+    assert вердикт["итог"] == "родные" and вердикт["apple_подтверждено"] is True
+
+
+def test_opened_but_silent_section_gets_actionable_advice():
+    """Если раздел открыли, а проверка деталей не пришла, советовать «откройте раздел»
+    бессмысленно — он уже открыт. Помогает закрыть «Настройки» полностью."""
+    from pintel_core.analysis import parts as parts_mod
+    в = parts_mod.verdict({"cable_ok": True}, {"Display": {"ok": True}}, {}, {}, {},
+                          {"раздел_открыт": True}, apple_supported=True)
+    if в["итог"] == "кабель":
+        assert "Закройте «Настройки» полностью" in в["почему"]
+    закрыт = parts_mod.verdict({"cable_ok": True}, {"Display": {"ok": True}}, {}, {}, {},
+                               {"раздел_открыт": False}, apple_supported=True)
+    if закрыт["итог"] == "кабель":
+        assert "не открыт" in закрыт["почему"]

@@ -44,12 +44,19 @@ def screen_calibration(backlight):
 
 
 def coverglass(product):
-    """product/coverglass-serial-number входит в raw-panel-serial-number."""
+    """product/coverglass-serial-number входит в raw-panel-serial-number.
+
+    Поле панели — список значений через «+». На части моделей (проверено на iPhone 11)
+    в нём вообще нет сегмента такой длины, как серийник стекла: вхождение там
+    невозможно в принципе, и проверка давала «не совпадает» на КАЖДОМ таком аппарате —
+    то есть отказ по сделке на ровном месте. Нет места под серийник — нет и ответа."""
     p = product or {}
     cg = txt(deep(p, "coverglass-serial-number")).rstrip("\x00")
     raw = deep(p, "raw-panel-serial-number")
     raw = bytes(raw).decode("ascii", "replace") if isinstance(raw, (bytes, bytearray)) else txt(raw)
     if not cg or not raw:
+        return None
+    if max((len(часть) for часть in raw.split("+")), default=0) < len(cg):
         return None
     return cg in raw
 
@@ -97,7 +104,7 @@ def signals(snap):
     """Сводка сигналов: {имя: {"ок": True/False/None, "почему": str}}.
     Сигнала нет вовсе, если у модели такой детали нет (Face ID у SE) или узла нет
     в карте IORegistry этого телефона — это не «не прочиталось»."""
-    from .capabilities import has_face_id
+    from .capabilities import has_face_id, сравнимая_калибровка_экрана
     n = snap.get("nodes", {})
     absent = set((snap.get("quality") or {}).get("нет_в_карте") or [])
     pt = (snap.get("root") or {}).get("ProductType")
@@ -117,9 +124,13 @@ def signals(snap):
     if "AppleHapticsSupportArcEEPROM" not in absent:
         t = taptic(n.get("AppleHapticsSupportArcEEPROM"), n.get("haptics-support-interface"))
         put("Taptic ↔ плата", t, "модуль сопряжён с платой", "модуль не тот, под который прошита плата")
-    s = screen_calibration(n.get("AppleARMBacklight"))
-    put("Экран: калибровка", s, "калибровка панели совпадает с ожидаемой",
-        "калибровка панели не совпадает — вероятна замена")
+    if сравнимая_калибровка_экрана(pt):
+        s = screen_calibration(n.get("AppleARMBacklight"))
+        put("Экран: калибровка", s, "калибровка панели совпадает с ожидаемой",
+            "калибровка панели не совпадает — вероятна замена")
+    else:
+        put("Экран: калибровка", None, "", "",
+            "эта модель хранит калибровку иначе — подлинность экрана смотрим у Apple")
     c = coverglass(n.get("product"))
     put("Экран: стекло ↔ панель", c, "серийник стекла входит в серийник панели",
         "серийник стекла не совпадает с панелью")

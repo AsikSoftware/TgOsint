@@ -116,7 +116,10 @@ def test_repaired_phone_is_not_processed_but_kept(окно):
     окно.s_work.телефон.setText("+77058837953")
     assert not окно.s_work.b_отправить.isEnabled()
     текст = окно.s_work.ошибка.text()
-    assert "не оформляется" in текст and "деталь меняли" in текст and "лепок сохранён" in текст
+    # отказ обязан назвать КАНАЛ и саму деталь: оценщик сверяет это с экраном телефона,
+    # и «по данным Apple» про наш же сигнал по кабелю сбивало его с толку
+    assert "не оформляется" in текст and "лепок сохранён" in текст
+    assert ("по данным Apple" in текст or "по кабелю" in текст) and "Экран" in текст
 
 
 def test_send_needs_the_client(окно):

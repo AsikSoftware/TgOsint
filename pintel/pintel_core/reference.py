@@ -177,11 +177,24 @@ def compare(rep, truth):
     износ_батареи = any("аккумулятор требует обслуживания" in str(w) for w in (rep.get("внимание") or []))
     bad = []
     marked = {k: v for k, v in (truth.get("детали") or {}).items() if v in STATES}
+    # «Сервисное обслуживание» у аккумулятора — это износ, а не замена, и мы его уже
+    # назвали. Исключение должно действовать и в общих проверках ниже: иначе один и тот
+    # же разобранный случай всё равно числится расхождением.
+    отметки = {k: v for k, v in marked.items()
+               if not (v == "serviced" and k == "Battery" and износ_батареи)}
     for key, state in marked.items():
         name = names.get(key, key)
         ours = status.get(key)
-        if state == "serviced" and key == "Battery" and износ_батареи:
-            continue            # «Сервисное обслуживание» у аккумулятора — износ, мы его уже назвали
+        if key not in отметки:
+            continue
+        if state == "absent":
+            # Apple эту деталь отслеживает, раздел на телефоне открывали — и в списке её
+            # НЕТ. Значит замены Apple не видела, и наш «СТОП» по ней ложный. Ровно этим
+            # ошибался iPhone 11: сигналы по кабелю кричали «экран меняли», а телефон про
+            # дисплей не писал ничего, и выкуп срывался на каждом таком аппарате.
+            if ours == "bad" and truth.get("раздел_открывали"):
+                bad.append(f"{name}: Apple в списке её не показывает, а наш вердикт — «СТОП»")
+            continue
         if state in NOT_ORIGINAL:
             if ours not in ("bad", "used", "repaired"):
                 bad.append(f"{name}: телефон — «{STATES[state]}», мы — "
@@ -190,11 +203,11 @@ def compare(rep, truth):
                 bad.append(f"{name}: телефон — «{STATES[state]}» (это СТОП), мы — «{ours}»")
         elif state == "genuine" and ours in ("bad", "used"):
             bad.append(f"{name}: телефон — «{STATES[state]}», мы — «{ours}»")
-    if marked and all(v == "genuine" for v in marked.values()):
+    if отметки and all(v == "genuine" for v in отметки.values()):
         if parts_v.get("итог") != "родные":
             bad.append(f"телефон: все детали оригинальные, наш вердикт по деталям — «{parts_v.get('итог')}»"
                        + ("" if parts_v.get("apple_подтверждено") else " (Apple не подтвердила — ждём разбора журнала)"))
-    if any(v in NOT_ORIGINAL for v in marked.values()) and parts_v.get("итог") == "родные":
+    if any(v in NOT_ORIGINAL for v in отметки.values()) and parts_v.get("итог") == "родные":
         bad.append("телефон показывает неоригинальные детали, а наш вердикт — «все детали родные»")
     if truth.get("раздел_открывали") and not hist and rep.get("apple_история_статус") != "не поддерживается":
         bad.append("раздел на телефоне открывали, а журнал Apple мы не разобрали "

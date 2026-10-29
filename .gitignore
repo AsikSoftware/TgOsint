@@ -6,3 +6,9 @@ pintel_check/data/checks.db
 
 # архивы сборок: берутся из Releases, в истории им не место
 *_Windows_x64.zip
+
+# рабочие настройки точки: в них токены бота и GitHub — в репозиторий им нельзя
+kiosk.toml
+server.toml
+config.toml
+gservice.json

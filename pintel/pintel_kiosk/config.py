@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import shutil
 import sys
 import tomllib
 
@@ -54,6 +55,39 @@ def data_dir():
     return d
 
 
+КОПИЯ = "kiosk.toml.копия"
+
+
+def сберечь(настройки: str, папка_данных: str) -> str:
+    """Копия настроек вне папки программы. → путь копии («» — нечего беречь).
+
+    Папку программы сносит и обновление, и обычная переустановка распаковкой поверх.
+    Настройки точки (токены, chat_id, кто работает) заполняют руками один раз, и ехать
+    на точку, чтобы заполнить их заново, никто не станет."""
+    if not os.path.isfile(настройки):
+        return ""
+    цель = os.path.join(папка_данных, КОПИЯ)
+    try:
+        if os.path.isfile(цель) and os.path.getmtime(цель) >= os.path.getmtime(настройки):
+            return цель                       # не переписываем тем же на каждом запуске
+        shutil.copy2(настройки, цель)
+    except OSError:
+        return ""
+    return цель
+
+
+def вернуть(настройки: str, папка_данных: str) -> bool:
+    """Настроек нет, а копия есть — вернуть их на место. → вернули ли."""
+    копия = os.path.join(папка_данных, КОПИЯ)
+    if os.path.exists(настройки) or not os.path.isfile(копия):
+        return False
+    try:
+        shutil.copy2(копия, настройки)
+    except OSError:
+        return False
+    return True
+
+
 def load(path=None) -> dict:
     """Настройки рядом с exe.
 
@@ -62,7 +96,12 @@ def load(path=None) -> dict:
     молча проглоченная опечатка выглядит как «настройка не работает»."""
     cfg = dict(DEFAULTS)
     p = path or os.path.join(app_dir(), "kiosk.toml")
-    беда, данные = "", {}
+    беда, данные, вернули = "", {}, False
+    if path is None:
+        try:
+            вернули = вернуть(p, data_dir())
+        except OSError:
+            вернули = False
     if os.path.isfile(p):
         try:
             with open(p, "rb") as f:
@@ -76,6 +115,13 @@ def load(path=None) -> dict:
             if лишние:
                 беда = "в kiosk.toml незнакомые ключи: " + ", ".join(лишние)
         cfg.update({k: v for k, v in данные.items() if k in DEFAULTS})
+        if path is None and not беда:
+            try:
+                сберечь(p, data_dir())
+            except OSError:
+                pass
+    if вернули and not беда:
+        беда = "kiosk.toml пропал и восстановлен из копии — проверьте настройки точки"
     cfg["_path"] = p
     cfg["_ошибка"] = беда
     cfg["server"] = str(cfg["server"]).rstrip("/")

@@ -162,6 +162,7 @@ class KioskWindow(QMainWindow):
         self.s_main.начать.connect(self.начать_сделку)
         self.s_main.обновить.connect(self.обновиться)
         self.обновление = None
+        self.обновление_ставится = False
         self.s_work.отправить.connect(self.отправить_в_оценку)
         self.s_work.заново.connect(self.go_home)
         self.s_work.печать.connect(self.напечатать_чек)
@@ -238,8 +239,8 @@ class KioskWindow(QMainWindow):
         self._run(job)
 
     def _проверить_обновление(self):
-        """Есть ли свежая сборка. Нашлась — показываем кнопку на экране ожидания; сами
-        посреди работы ничего не подменяем."""
+        """Есть ли свежая сборка. Проверяем один раз, при запуске — посреди сделки ничего
+        подменять нельзя."""
         from . import updater
         cfg = self.cfg
         if not (cfg.get("update_repo") and cfg.get("update_token")):
@@ -249,10 +250,18 @@ class KioskWindow(QMainWindow):
         t.ok.connect(self._обновление_найдено)
 
     def _обновление_найдено(self, итог):
+        """Нашлась новая сборка — ставим сразу, не спрашивая.
+
+        Оценщику некогда следить за версиями, а работать на точке на старой сборке нельзя:
+        именно из-за этого исправленная ошибка неделями жила на части точек. Проверка идёт
+        при запуске, когда ни одна сделка не открыта, так что прервать нечего."""
         self.обновление = итог if (итог or {}).get("есть") else None
         if self.обновление:
-            log_line("обновление: доступно " + str(итог.get("тег")))
-            self.s_main.показать_обновление(f"Обновить программу · {итог.get('тег')}")
+            log_line("обновление: доступно " + str(итог.get("тег")) + " — ставим сразу")
+            self.обновление_ставится = True
+            self.s_main.set_status(f"Обновление {итог.get('тег')} — программа перезапустится",
+                                   ok=True)
+            self.обновиться()
         elif (итог or {}).get("почему"):
             log_line("обновление: " + str(итог["почему"]))
 
@@ -270,6 +279,7 @@ class KioskWindow(QMainWindow):
             updater.скачать(self.обновление["url"], cfg["update_token"], архив)
             новая = updater.распаковать(архив, os.path.join(data_dir(), "update", тег))
             установлена = config.app_dir()
+            updater.перенести_своё(установлена, новая)   # kiosk.toml не теряем
             exe = sys.executable if getattr(sys, "frozen", False) else os.path.join(
                 установлена, "pintel-kiosk.exe")
             return updater.применить(новая, установлена, exe, os.path.join(data_dir(), "update"))
@@ -284,9 +294,15 @@ class KioskWindow(QMainWindow):
         QTimer.singleShot(1200, self.close)        # дать сценарию стартовать
 
     def _обновление_сорвалось(self, текст):
+        """Сорвалось — работаем на текущей версии.
+
+        Запирать точку нельзя: пропал интернет или прилёг GitHub — выкуп на всех точках
+        встанет, а это дороже старой сборки. Кнопка остаётся: повторить можно руками."""
+        self.обновление_ставится = False
         log_line("обновление не удалось: " + текст)
-        self.s_main.показать_обновление("Обновление не удалось — попробуйте позже")
+        self.s_main.показать_обновление("Обновить программу — не вышло, повторить")
         self.s_main.b_обновить.setEnabled(True)
+        self.s_main.set_status("Обновиться не вышло — работаем на этой версии", ok=False)
 
     def _try_server_config(self):
         def job():
@@ -419,6 +435,10 @@ class KioskWindow(QMainWindow):
     # ---------- сделка ----------
     def начать_сделку(self):
         """Одно окно на всю сделку: имя клиента можно писать, пока читается телефон."""
+        if self.обновление_ставится:            # на старой сборке сделку не начинаем
+            self.s_main.set_status("Идёт обновление — подождите, программа перезапустится",
+                                   ok=False)
+            return
         self.last = None
         self.сделка = {}
         self.s_work.начать()

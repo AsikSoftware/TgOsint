@@ -108,6 +108,42 @@ def test_unpack_without_the_exe_is_an_error(tmp_path):
         updater.распаковать(str(архив), str(tmp_path / "н"))
 
 
+def test_update_keeps_the_settings_of_the_point(tmp_path):
+    """Самая дорогая поломка обновления: оно стирало kiosk.toml.
+
+    Подмена уносит папку целиком, а в сборке с GitHub лежит только kiosk.example.toml.
+    На точке токены и chat_id заполняют руками один раз — ехать туда и заполнять заново
+    никто не станет."""
+    установлена, новая = tmp_path / "Pintel", tmp_path / "new"
+    установлена.mkdir(), новая.mkdir()
+    (установлена / "kiosk.toml").write_text("ocenka_chat_id = -100500\n", encoding="utf-8")
+    (установлена / "pintel-kiosk.exe").write_text("старая", encoding="utf-8")
+    (установлена / "принтер.ini").write_text("своё", encoding="utf-8")   # что угодно своё
+    (новая / "pintel-kiosk.exe").write_text("новая", encoding="utf-8")
+    (новая / "kiosk.example.toml").write_text("пример", encoding="utf-8")
+
+    перенесли = updater.перенести_своё(str(установлена), str(новая))
+
+    assert "kiosk.toml" in перенесли and "принтер.ini" in перенесли
+    assert (новая / "kiosk.toml").read_text(encoding="utf-8") == "ocenka_chat_id = -100500\n"
+    assert (новая / "pintel-kiosk.exe").read_text(encoding="utf-8") == "новая"  # exe не трогаем
+    assert "pintel-kiosk.exe" not in перенесли
+
+
+def test_update_does_not_drag_old_libraries_along(tmp_path):
+    """Переносим только то, что лежит рядом с exe. Внутрь _internal не лезем: иначе
+    обновление тащило бы за собой библиотеки от прошлой версии."""
+    установлена, новая = tmp_path / "Pintel", tmp_path / "new"
+    (установлена / "_internal").mkdir(parents=True)
+    (установлена / "_internal" / "старая.pyd").write_text("хлам", encoding="utf-8")
+    новая.mkdir()
+    (новая / "_internal").mkdir()
+
+    updater.перенести_своё(str(установлена), str(новая))
+
+    assert not (новая / "_internal" / "старая.pyd").exists()
+
+
 def test_script_waits_backs_up_and_can_roll_back():
     """Сценарий подменяет папку, пока программа закрыта. Старая версия уезжает рядом:
     не поднимется новая — вернуть прежнюю можно руками."""

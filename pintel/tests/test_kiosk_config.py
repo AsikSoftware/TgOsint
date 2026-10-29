@@ -6,6 +6,7 @@
 роняет программу — на точке нужен экран с причиной, а не окно Windows с traceback.
 """
 import os
+import shutil
 import re
 import tomllib
 
@@ -86,3 +87,42 @@ def test_build_workflow_stays_parseable():
     assert "workflow_dispatch" in триггеры, "сборку нельзя будет запустить вручную"
     шаги = [ш.get("name") for ш in поток["jobs"]["build"]["steps"]]
     assert "Метка сборки" in шаги, "без метки программа не узнает о новой версии"
+
+
+def test_settings_are_kept_outside_the_program_folder(tmp_path):
+    """Копия настроек переживает снос папки программы.
+
+    Папку сносит не только обновление: переустановка распаковкой поверх делает то же
+    самое. Настройки точки заполняют руками один раз."""
+    папка, данные = tmp_path / "Pintel", tmp_path / "data"
+    папка.mkdir(), данные.mkdir()
+    настройки = папка / "kiosk.toml"
+    настройки.write_text('staff_name = "Данияр"\n', encoding="utf-8")
+
+    assert config.сберечь(str(настройки), str(данные))
+    shutil.rmtree(папка)                      # обновление унесло папку целиком
+    папка.mkdir()
+
+    assert config.вернуть(str(настройки), str(данные)) is True
+    assert настройки.read_text(encoding="utf-8") == 'staff_name = "Данияр"\n'
+
+
+def test_existing_settings_are_never_overwritten_by_the_copy(tmp_path):
+    """Файл на месте — копия к нему не лезет: на точке его могли поправить руками."""
+    папка, данные = tmp_path / "Pintel", tmp_path / "data"
+    папка.mkdir(), данные.mkdir()
+    настройки = папка / "kiosk.toml"
+    настройки.write_text("старое\n", encoding="utf-8")
+    config.сберечь(str(настройки), str(данные))
+    настройки.write_text("поправили руками\n", encoding="utf-8")
+
+    assert config.вернуть(str(настройки), str(данные)) is False
+    assert настройки.read_text(encoding="utf-8") == "поправили руками\n"
+
+
+def test_nothing_to_restore_is_not_an_error(tmp_path):
+    """Первый запуск на новой точке: ни настроек, ни копии — это не поломка."""
+    папка, данные = tmp_path / "Pintel", tmp_path / "data"
+    папка.mkdir(), данные.mkdir()
+    assert config.вернуть(str(папка / "kiosk.toml"), str(данные)) is False
+    assert config.сберечь(str(папка / "kiosk.toml"), str(данные)) == ""

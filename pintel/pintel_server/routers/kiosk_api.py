@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api/kiosk", tags=["kiosk"])
 class SickwIn(BaseModel):
     imei: str
     fresh: bool = False
+    services: list[int] | None = None     # не по умолчанию: запечатанному нужна другая служба
 
 
 class EvaluationIn(BaseModel):
@@ -75,7 +76,8 @@ def price(kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)
 @router.post("/sickw")
 def sickw(body: SickwIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
     try:
-        r = sickw_service.lookup(db, body.imei.strip(), use_cache=not body.fresh)
+        r = sickw_service.lookup(db, body.imei.strip(), services=body.services or None,
+                                 use_cache=not body.fresh)
     except (RuntimeError, ValueError) as e:
         raise HTTPException(502, str(e))
     r.pop("сырые_ответы", None)

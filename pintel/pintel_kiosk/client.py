@@ -66,18 +66,24 @@ class Client:
         return self._req("GET", "/api/kiosk/config")
 
 
-    def sickw(self, imei):
-        """Через сервер (ключ там); без сервера или при его недоступности — ключом из kiosk.toml."""
+    def sickw(self, imei, services=None):
+        """Через сервер (ключ там); без сервера или при его недоступности — ключом из kiosk.toml.
+
+        `services` — службы Sickw не по умолчанию: для запечатанного аппарата нужна другая
+        (модель, объём, цвет и активация по IMEI с коробки), а не оператор и FMI."""
         if self.enabled:
+            тело = {"imei": imei}
+            if services:
+                тело["services"] = [int(s) for s in services]
             try:
-                return self._req("POST", "/api/kiosk/sickw", json={"imei": imei}, timeout=90)
+                return self._req("POST", "/api/kiosk/sickw", json=тело, timeout=90)
             except ServerError:
                 if not self.local_sickw:
                     raise
         if self.local_sickw:
             from pintel_core.external import sickw as sk
             try:
-                return sk.lookup_many(imei, self.sickw_key, self.sickw_services,
+                return sk.lookup_many(imei, self.sickw_key, services or self.sickw_services,
                                       cache_dir=os.path.join(data_dir(), "cache", "sickw"))
             except Exception as e:                               # noqa: BLE001
                 raise ServerError(f"Sickw: {e}")

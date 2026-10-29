@@ -99,9 +99,16 @@ class WorkScreen(Screen):
         self.root.setContentsMargins(56, 40, 56, 36)
 
         шапка = QHBoxLayout()
+        шапка.setSpacing(16)
         self.аппарат = label("Подключите телефон кабелем", font_=font(FONT_TEXT, 22, W.Bold))
+        # состояние, выбранное сотрудником до диагностики — кнопка Оценки; проверка может его
+        # изменить, и тогда здесь же видно, на что и почему
+        self.состояние = _плашка("", C["tint"], C["brand"])
+        self.состояние.setWordWrap(True)
+        self.состояние.hide()
         self.точка = label(point_text(point), "muted")
         шапка.addWidget(self.аппарат, 1)
+        шапка.addWidget(self.состояние, 2)
         шапка.addWidget(self.точка)
         self.root.addLayout(шапка)
 
@@ -277,7 +284,8 @@ class WorkScreen(Screen):
         self.подсказка.setText("Не отключайте кабель. Обычно это занимает около минуты.")
         for r in self.шаги.values():
             r.set("wait", "")
-        self.шаги["connect"].set("run", "ждём «Доверять»")
+        self.set_состояние("")
+        self.режим(False)
         self.стопка.setCurrentIndex(0)
         self.правая.setCurrentIndex(1)
         self._очистить_итоги()
@@ -289,6 +297,44 @@ class WorkScreen(Screen):
 
     def set_point(self, point):
         self.точка.setText(point_text(point))
+
+    def set_клиент(self, имя, телефон):
+        """Клиента записали на анкете, до кабеля; здесь поля остаются правимыми."""
+        self.имя.setText(str(имя or ""))
+        self.телефон.setText(str(телефон or ""))
+        self._проверить()
+
+    def set_состояние(self, текст, причина=""):
+        """Плашка состояния: выбор сотрудника, а если проверка его изменила — на что и почему."""
+        if not текст:
+            self.состояние.hide()
+            return
+        if причина:
+            self.состояние.setText(f"{текст} — изменено проверкой: {причина}")
+            self.состояние.setStyleSheet(f"background: {C['warnbg']}; color: {C['warntext']}; "
+                                         "border-radius: 16px; padding: 7px 18px;")
+        else:
+            self.состояние.setText(str(текст))
+            self.состояние.setStyleSheet(f"background: {C['tint']}; color: {C['brand']}; "
+                                         "border-radius: 16px; padding: 7px 18px;")
+        self.состояние.show()
+
+    СТРОКИ_КАБЕЛЯ = ("connect", "battery", "locks", "apple", "upload")
+
+    def режим(self, запечатанный, имеи=()):
+        """Запечатанный: кабеля нет, остаются шаги по базе IMEI и реестру; коробка и шнур
+        на месте по определению. Обычный аппарат — все шаги."""
+        for ключ, r in self.шаги.items():
+            r.setVisible(not (запечатанный and ключ in self.СТРОКИ_КАБЕЛЯ))
+        if запечатанный:
+            self.аппарат.setText("Запечатанный · IMEI " + " · ".join(x for x in имеи if x))
+            self.подсказка.setText("Кабель не нужен: проверяем IMEI с коробки по базе и реестру РФС.")
+            self.шаги["passport"].set("run", "по базе IMEI")
+            self.коробка.setChecked(True)
+            self.шнур.setChecked(True)
+            self.правая.setCurrentIndex(1)
+        else:
+            self.шаги["connect"].set("run", "ждём «Доверять»")
 
     def set_step(self, key, state, text):
         if key in self.шаги:
@@ -373,6 +419,18 @@ class WorkScreen(Screen):
             плохо = sk["в_чёрном_списке"] is True
             self._строка_итога("Чёрный список", "числится" if плохо else "чисто",
                                C["badtext"] if плохо else C["ok"])
+        from pintel_core.external import rfs as rfs_mod
+        for r in (self.rep.get("рфс") or []):                  # реестр РК — по каждому IMEI
+            цвет_рфс = (C["muted"] if not r.get("ok") else
+                        {rfs_mod.VERIFIED: C["ok"], rfs_mod.BLOCKED: C["badtext"]}.get(r.get("verdict"), C["warntext"]))
+            self._строка_итога(f"РФС · {r.get('imei')}", rfs_mod.словами(r), цвет_рфс)
+        if self.rep.get("запечатанный"):                       # что знаем о коробке из базы IMEI
+            for имя, ключ in (("Активация", "активация"), ("Гарантия", "гарантия"),
+                              ("Куплен", "дата_покупки"), ("Страна покупки", "страна_покупки")):
+                if sk.get(ключ):
+                    self._строка_итога(имя, str(sk[ключ]))
+            if пас.get("цвет"):
+                self._строка_итога("Цвет (по базе)", str(пас["цвет"]))
         if пам.get("объём_гб"):
             self._строка_итога("Память", f"{пам['объём_гб']} ГБ"
                                + (f" · свободно {пам['свободно_гб']:.0f}" if пам.get("свободно_гб") else ""))

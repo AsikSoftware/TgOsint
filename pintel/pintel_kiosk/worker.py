@@ -19,9 +19,10 @@ from PySide6.QtCore import QThread, Signal
 
 from pintel_core import reference
 from pintel_core.analysis import report as report_mod
+from pintel_core.analysis import sealed as sealed_mod
 from pintel_core.devicelink import connect, repair_history, snapshot
 from pintel_core.devicelink.connect import READY
-from pintel_core.external import sickw
+from pintel_core.external import rfs, sickw
 
 from .client import ServerError
 from .config import data_dir
@@ -69,6 +70,35 @@ def убрать_старое(дней=90):
         except OSError:                  # занят, нет прав — не повод валить запуск
             pass
     return убрано
+
+
+def проверить_рфс(cfg, имеи, step):
+    """Реестр РФС РК по всем IMEI аппарата → результаты, или None (выключено, нечего).
+
+    Один и тот же шаг для аппарата на кабеле и для запечатанного по коробке: гос-реестр
+    отвечает по секунде на запрос, отказывает точечно, из-за рубежа может молчать —
+    всё это шаг показывает словами, а отчёт решает, что с этим делать."""
+    имеи = [str(x or "").strip() for x in (имеи or []) if str(x or "").strip()]
+    if not имеи:
+        step("rfs", "warn", "у телефона нет IMEI")
+        return None
+    if not cfg.get("rfs", True):
+        step("rfs", "warn", "выключена (kiosk.toml)")
+        return None
+    step("rfs", "run", f"{len(имеи)} IMEI")
+    try:
+        итог = rfs.проверить(имеи, os.path.join(data_dir(), "cache", "rfs"), cfg.get("rfs_proxy") or None)
+    except Exception as e:                                       # noqa: BLE001 — реестр не роняет приём
+        step("rfs", "warn", "реестр недоступен")
+        log_line(f"rfs: {e}")
+        return None
+    св = rfs.сводка(итог)
+    step("rfs",
+         {rfs.BLOCKED: "fail", rfs.NOT_VERIFIED: "warn", rfs.UNKNOWN: "warn"}.get(св["вердикт"], "done"),
+         {rfs.BLOCKED: "ЗАБЛОКИРОВАН",
+          rfs.NOT_VERIFIED: "не верифицирован" + (f" · до {св['срок']}" if св.get("срок") else ""),
+          rfs.UNKNOWN: "реестр не ответил"}.get(св["вердикт"], "верифицирован"))
+    return итог
 
 
 class Pipeline(QThread):
@@ -201,6 +231,14 @@ class Pipeline(QThread):
         else:
             self._step("sickw", "warn", "не настроена (kiosk.toml)")
 
+        # Реестр РФС РК — оба IMEI, при любой оценке
+        рфс = проверить_рфс(self.cfg, [pas.get("imei"), pas.get("imei2")], self._step)
+        if рфс is not None:
+            snap["rfs"] = рфс
+            rep = report_mod.build(snap)
+        if self.cancel.is_set():
+            return
+
         # сохраняем локально и отправляем
         cid = f"{self.serial or 'phone'}-{uuid.uuid4().hex[:12]}"
         out = os.path.join(data_dir(), "out", f"{datetime.now():%Y%m%d_%H%M%S}_{(self.serial or 'phone')[:12]}")
@@ -284,3 +322,65 @@ class Pipeline(QThread):
     def _save(out, snap, rep):
         open(os.path.join(out, "snapshot.json"), "w", encoding="utf-8").write(snapshot.dumps(snap))
         open(os.path.join(out, "report.json"), "w", encoding="utf-8").write(snapshot.dumps(rep))
+
+
+class SealedPipeline(QThread):
+    """Запечатанный аппарат: кабеля нет. По IMEI с коробки — база IMEI (Sickw, служба для
+    запечатанных: модель, объём, цвет, активация) и реестр РФС; из них отчёт в тех же
+    ключах, что и с кабеля, чтобы экран, чек и посылка в Оценку читали его одинаково.
+
+    На кассу такая оценка не уходит: там ждут слепок телефона, а его нет. Отчёт лежит в
+    out/ рядом с остальными."""
+    step = Signal(str, str, str)
+    done = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, cfg, client, imeis, parent=None):
+        super().__init__(parent)
+        self.cfg, self.client = cfg, client
+        self.imeis = [str(x or "").strip() for x in (imeis or []) if str(x or "").strip()]
+
+    def run(self):
+        try:
+            self._main()
+        except Exception as e:                                   # noqa: BLE001
+            log_line(traceback.format_exc())
+            self.failed.emit(f"{type(e).__name__}: {e}")
+
+    def _step(self, key, state, text=""):
+        log_line(f"запечатанный · шаг {key}: {state} {text}".rstrip())
+        self.step.emit(key, state, text)
+
+    def _main(self):
+        имеи = self.imeis
+        if not имеи or not sickw.luhn_ok(имеи[0]):
+            self.failed.emit("IMEI с коробки не проходит контрольную цифру — проверьте цифры")
+            return
+        self._step("passport", "run", "по базе IMEI")
+        sk = None
+        службы = [int(x) for x in (self.cfg.get("sickw_services_sealed") or [sickw.SERVICE_SEALED])]
+        if self.cfg.get("sickw", True) and (self.client.enabled or self.client.local_sickw):
+            self._step("sickw", "run", "служба " + ", ".join(map(str, службы)))
+            try:
+                sk = self.client.sickw(имеи[0], services=службы)
+                self._step("sickw", "done" if sk.get("в_чёрном_списке") is not True else "fail",
+                           "чисто" if sk.get("в_чёрном_списке") is False
+                           else (sk.get("чёрный_список") or "проверено"))
+            except ServerError as e:
+                self._step("sickw", "warn", "база недоступна")
+                log_line(f"sickw: {e}")
+        else:
+            self._step("sickw", "warn", "не настроена (kiosk.toml)")
+        if sk and sk.get("модель"):
+            self._step("passport", "done", f"{sk['модель']} · {sk.get('объём_гб') or '?'} ГБ")
+        else:
+            self._step("passport", "warn", "модель по базе не определилась")
+
+        рфс = проверить_рфс(self.cfg, имеи, self._step)
+        rep = sealed_mod.build(sk, имеи, рфс)
+        out = os.path.join(data_dir(), "out", f"{datetime.now():%Y%m%d_%H%M%S}_box_{имеи[0][-6:]}")
+        os.makedirs(out, exist_ok=True)
+        open(os.path.join(out, "report.json"), "w", encoding="utf-8").write(snapshot.dumps(rep))
+        self.done.emit({"report": rep, "server": {"номер": self.client.local_number(), "локально": True},
+                        "client_id": f"box-{uuid.uuid4().hex[:12]}", "serial": None, "out": out,
+                        "запечатанный": True})

@@ -96,3 +96,26 @@ def test_receipt_escapes_client_input():
     сделка = {**СДЕЛКА, "клиент": '<b>Зама</b> & "сын"'}
     txt = receipt.html(сделка, _отчёт())
     assert "&lt;b&gt;Зама&lt;/b&gt;" in txt and "<b>Зама</b>" not in txt
+
+
+def test_receipt_shows_the_registry_for_each_imei():
+    """Реестр РФС — по каждому IMEI, со сроком временного доступа: клиент должен знать,
+    что после него телефон перестанет работать в сетях Казахстана."""
+    rep = _отчёт()
+    rep["рфс"] = [{"imei": "350585886690250", "verdict": "verified", "ok": True, "deadline": None},
+                  {"imei": "350585881725184", "verdict": "not_verified", "ok": True, "deadline": "31.12.2026"}]
+    txt = receipt.html(СДЕЛКА, rep)
+    assert "Реестр РФС · 350585886690250" in txt and "верифицирован" in txt
+    assert "Реестр РФС · 350585881725184" in txt and "до 31.12.2026" in txt
+
+
+def test_sealed_receipt_says_the_box_was_not_opened():
+    """Запечатанный кабелем не читался — чек не должен делать вид, что читался."""
+    from pintel_core.analysis import sealed
+    rep = sealed.build({"модель": "iPhone 15 Pro", "объём_гб": 256, "цвет": "натуральный титан",
+                        "активация": "Not Activated", "активирован": False, "в_чёрном_списке": False},
+                       ["350585886690250"], [{"imei": "350585886690250", "verdict": "verified", "ok": True}])
+    txt = receipt.html(СДЕЛКА, rep)
+    assert "Запечатанный аппарат" in txt and "кабелем не читался" in txt
+    assert "по кабелю" not in txt and "Коробка не вскрыта" in txt
+    assert "iPhone 15 Pro" in txt and "Not Activated" in txt and "256 ГБ" in txt

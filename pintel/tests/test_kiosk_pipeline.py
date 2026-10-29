@@ -48,7 +48,7 @@ class FakeClient:
     local_sickw = False
     def local_number(self): return 99
     def __init__(self): self.calls = []
-    def sickw(self, imei): self.calls.append(("sickw", imei)); return {"в_чёрном_списке": False, "цвет": "чёрный", "все_поля": {"Blacklist Status": "Clean"}}
+    def sickw(self, imei, services=None): self.calls.append(("sickw", imei)); return {"в_чёрном_списке": False, "цвет": "чёрный", "все_поля": {"Blacklist Status": "Clean"}}
     def price(self): return None
     def upload(self, payload): self.calls.append(("upload", payload["client_id"])); return {"id": 7, "номер": 3, "ссылка_отчёта": "http://x/r/1"}
     def update_evaluation(self, ev_id, report, snapshot_patch=None): self.calls.append(("update", ev_id, list(snapshot_patch or {}))); return {"ok": True}
@@ -68,6 +68,10 @@ def fake_core(monkeypatch):
     def mk(ld, log=None, **kw):
         l = FakeListener(ld); listeners.append(l); return l
     monkeypatch.setattr(worker.repair_history, "Listener", mk)
+    # реестр РФС — без сети: оба IMEI верифицированы
+    monkeypatch.setattr(worker.rfs, "проверить", lambda imeis, cache_dir=None, proxy=None, **kw: [
+        {"imei": i, "verdict": "verified", "status_text": "Верифицирован", "deadline": None, "text": "ок", "ok": True}
+        for i in imeis if i])
     return listeners
 
 
@@ -96,7 +100,10 @@ def test_pipeline_done_then_late_history(fake_core):
     assert ("apple", "done") in steps              # журнал — бонус: шаг закрывается с кабеля
     assert steps[-1] == ("apple", "done")
     assert ("sickw", "done") in steps and ("upload", "done") in steps
+    assert ("rfs", "done") in steps and steps.index(("rfs", "done")) < steps.index(("upload", "done"))
     assert [c[0] for c in client.calls] == ["sickw", "upload", "update"]
+    done = [e for e in events if e[0] == "done"]
+    assert done, events
     assert client.calls[-1][1] == 7 and "repair_history" in client.calls[-1][2]
     assert fake_core[0].stopped and fake_core[0].calls == 2        # второй wait_change без изменений — выход
 

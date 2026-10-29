@@ -135,3 +135,31 @@ def test_colour_does_not_keep_model_variant(model, цвет):
     вариант модели оставался в цвете. В карточке Оценки это выглядело как «Цвет: Pro A2891»,
     а у Pro Max и SE — «Pro Max Natural Titanium» и «Se Red»."""
     assert sickw.normalize({"Model": model}).get("цвет") == цвет
+
+
+# ---------------------------------------------------------------- запечатанный: модель по базе
+
+@pytest.mark.parametrize("model,ждём", [
+    ("iPhone 14 Pro Space Black 256GB", "iPhone 14 Pro"),
+    ("iPhone 12 64GB Black", "iPhone 12"),
+    ("iPhone 15 Pro Max 1TB Natural Titanium", "iPhone 15 Pro Max"),
+    ("iPhone SE 128GB Midnight", "iPhone SE"),
+    ("iPhone 14 Pro A2891", "iPhone 14 Pro"),
+    ("", ""),
+])
+def test_model_for_the_deal_has_no_capacity_or_colour(model, ждём):
+    """Для запечатанного модель приходит только из базы IMEI, а в сделке Оценки `model`
+    должен совпасть со строкой её прайса — без объёма и цвета."""
+    assert sickw.модель_без_цвета(model) == ждём
+
+
+def test_sealed_service_fields_are_read():
+    """Служба для запечатанных: модель и объём из описания GSX, активация, продавец."""
+    n = sickw.normalize({"Model Description": "IPHONE 15 PRO,NAJP,256GB,NAT",
+                         "Activation Status": "Not Activated", "Sold By": "Apple Retail"})
+    assert n["модель"] == "iPhone 15 Pro" and n["объём_гб"] == 256
+    assert n["цвет"] == "натуральный титан"
+    assert n["активация"] == "Not Activated" and n["активирован"] is False
+    assert n["продано"] == "Apple Retail"
+    assert sickw.normalize({"Model": "iPhone 12 64GB Black", "Activation Status": "Activated"})["активирован"] is True
+    assert sickw.normalize({"Model": "iPhone 12 64GB Black"})["активирован"] is None

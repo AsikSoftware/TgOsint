@@ -10,6 +10,7 @@ hidden = ['pymobiledevice3.remote.userspace_tunnel', 'pymobiledevice3.remote.cor
           'pymobiledevice3.services.mobile_config', 'google.auth.transport.requests', 'requests', 'rsa',
           'pintel_core.external.gsheet', 'pintel_core.external.ocenka', 'pintel_core.receipt',
           'pintel_core.external.ocenka_tg', 'pintel_core.external.ocenka_media', 'pintel_kiosk.ui_deal',
+          'pintel_core.external.rfs', 'pintel_core.analysis.sealed', 'pintel_kiosk.ui_start',
           'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown', 'httpx', 'qrcode', 'pintel_kiosk.app']
 _pmd_datas, _pmd_bins, _pmd_hidden = collect_all('pmd_pytcp')
 _cd_datas, _cd_bins, _cd_hidden = collect_all('pymobiledevice3.remote')

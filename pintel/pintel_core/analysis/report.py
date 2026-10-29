@@ -88,6 +88,16 @@ def build(snap):
             todo.append("«Найти iPhone» включён (по Sickw) — клиент должен выйти из Apple ID")
         elif fmi_sk is False and leg["найти_iphone"] == "включён":
             warn.append("Sickw: «Найти iPhone» выключен, телефон говорит включён — верим телефону")
+    # Реестр IMEI РФС РК: оба IMEI. Заблокирован — стоп; не верифицирован — предупреждение
+    # (после срока временного доступа телефон не будет работать в сетях Казахстана);
+    # реестр не ответил — не превращаем в вердикт, но и молчать нельзя.
+    рфс = snap.get("rfs")
+    if рфс:
+        from ..external import rfs as rfs_mod
+        s, w, u = rfs_mod.в_отчёт(рфс)
+        stop.extend(s)
+        warn.extend(w)
+        unknown.extend(u)
     if sto["объём_сошёлся"] is False:
         stop.append(f"объём памяти не сходится: диск {sto['объём_гб']} ГБ, контроллер "
                     f"{sto['nvme_объём_гб']} / {sto['nvme_модель_гб']} ГБ — возможна перепайка")
@@ -200,6 +210,7 @@ def build(snap):
         "детали": parts,
         "детали_вердикт": parts_v,
         "sickw": sk,
+        "рфс": list(рфс) if рфс else None,      # реестр IMEI РК, по каждому IMEI
         "джейлбрейк": jailbreak.verdict(jb),
         "паника": pan,
         "apple_подтверждение_возможно": bool(hist_ok and подтверждение_возможно),

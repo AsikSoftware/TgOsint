@@ -14,11 +14,12 @@ from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsVie
 
 from pintel_core.devicelink import connect
 from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER, READY
+from pintel_core.external import ocenka
 
-from . import __version__, config, ui, ui_deal
+from . import __version__, config, ui, ui_deal, ui_start
 from .client import Client, ServerError
 from .config import data_dir
-from .worker import Pipeline, log_line, убрать_старое
+from .worker import Pipeline, SealedPipeline, log_line, убрать_старое
 
 
 class Poller(QThread):
@@ -153,14 +154,20 @@ class KioskWindow(QMainWindow):
         self.host = ScaledHost(self.stack)
         self.setCentralWidget(self.host)
         точка = cfg.get("point") or ""
-        # Два экрана на всю программу: ожидание и рабочее окно. Проверка, сделка и медиа
-        # живут в одном окне — за ним работает сотрудник, а не клиент.
+        # Три экрана на всю программу: ожидание, анкета (состояние и клиент — до кабеля, как
+        # у продавца в боте Оценки) и рабочее окно. Проверка, сделка и медиа живут в одном
+        # окне — за ним работает сотрудник, а не клиент.
         self.s_main = ui.MainScreen(точка)
+        self.s_start = ui_start.StartScreen(точка)
         self.s_work = ui_deal.WorkScreen(точка)
-        for s in (self.s_main, self.s_work):
+        for s in (self.s_main, self.s_start, self.s_work):
             self.stack.addWidget(s)
         self.s_main.начать.connect(self.начать_сделку)
         self.s_main.обновить.connect(self.обновиться)
+        self.s_start.далее.connect(self.анкета_готова)
+        self.s_start.отмена.connect(self.go_home)
+        self.анкета, self.статус_сделки, self.переклассификация = {}, None, None
+        self.sealed = None
         self.обновление = None
         self.обновление_ставится = False
         self.s_work.отправить.connect(self.отправить_в_оценку)
@@ -198,7 +205,7 @@ class KioskWindow(QMainWindow):
     # ---------- служебное ----------
     def show_screen(self, w):
         self.stack.setCurrentWidget(w)
-        self.host.set_bg(ui.C["ground"] if w is self.s_work else "#FFFFFF")
+        self.host.set_bg(ui.C["ground"] if w in (self.s_work, self.s_start) else "#FFFFFF")
 
     def _убрать_старое(self):
         """Старые оценки с диска — при запуске и в фоне: их бывает много, а экран ждать
@@ -310,6 +317,7 @@ class KioskWindow(QMainWindow):
                 c = self.client.config()
                 if c.get("точка"):
                     self.s_main.set_point(c["точка"])
+                    self.s_start.set_point(c["точка"])
                     self.s_work.set_point(c["точка"])
                 self.cfg["return_seconds"] = c.get("возврат_с") or self.cfg["return_seconds"]
                 self.cfg["apple_history_seconds"] = c.get("история_apple_с") or self.cfg["apple_history_seconds"]
@@ -334,7 +342,7 @@ class KioskWindow(QMainWindow):
         self.net.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()
-        for t in (self.poller, self.net, self.pipeline, *self.tasks):
+        for t in (self.poller, self.net, self.pipeline, self.sealed, *self.tasks):
             if t is not None and t.isRunning():
                 t.wait(3000)                     # иначе Qt ругается «Destroyed while thread is still running»
         super().closeEvent(e)
@@ -358,11 +366,17 @@ class KioskWindow(QMainWindow):
                 self.s_main.set_device("wait")
                 if self.client.enabled and self.client.online:
                     self.s_main.set_status("Готов к работе", ok=True)
-        elif self.state == "work":
-            # окно уже открыто: телефон подключили — начинаем читать, отключили — ждём следующий
+        elif self.state == "intake":
+            # анкета ещё не заполнена: кабель подключили — ждём, читать телефон рано
             if state == NO_DEVICE:
                 self.wait_unplug = False
-            elif state == READY and count and not self.wait_unplug and not self.last:
+        elif self.state == "work":
+            # окно уже открыто: телефон подключили — начинаем читать, отключили — ждём следующий.
+            # Запечатанный кабелем не читается вовсе.
+            if state == NO_DEVICE:
+                self.wait_unplug = False
+            elif (state == READY and count and not self.wait_unplug and not self.last
+                  and self.анкета.get("состояние") != "новый"):
                 self.start_check()
         elif self.state == "scanning":
             if state == NO_DEVICE and self.pipeline:
@@ -387,11 +401,13 @@ class KioskWindow(QMainWindow):
         self.pipeline.start()
 
     def on_history(self, result):
-        """История Apple пришла после результата — обновляем то, что уже на экране."""
+        """История Apple пришла после результата — обновляем то, что уже на экране. Вердикт
+        мог измениться, значит и состояние сделки пересчитываем."""
         if self.last and result.get("client_id") == self.last.get("client_id"):
             self.last = result
             if self.state == "work":
                 self.s_work.показать(result["report"])
+                self._классифицировать(result["report"])
 
     def on_link_status(self, state, human):
         if state != READY:
@@ -409,19 +425,26 @@ class KioskWindow(QMainWindow):
             return
         self.last = result
         rep = result["report"]
-        вердикт_деталей = rep.get("детали_вердикт") or {}
-        итог = вердикт_деталей.get("итог")
         self.state = "work"
         self.s_work.показать(rep)
         self._выгрузить_архив()                    # свежий эталон уедет в архив сам
-        if итог == "родные":
-            self.новый_код_медиа()
-            return
-        # ремонт, замена или неподтверждённые детали — сделку не оформляем, но слепок уже
-        # сохранён: именно на таких аппаратах учится разбор, и позже мы их добавим
-        from pintel_core.analysis import parts as parts_mod
-        self.s_work.отказ("Сделка не оформляется: " + parts_mod.причина_отказа(вердикт_деталей)
-                          + ". Слепок сохранён — передайте его разработчику.")
+        # Сделка оформляется при любом вердикте: замена или дефект не отказ, а другое
+        # состояние — как у продавца в боте. Что нашёл кабель, видно на плашке и уйдёт
+        # админу на ручную оценку вместо автоцены.
+        self._классифицировать(rep)
+        self.новый_код_медиа()
+
+    def _классифицировать(self, rep):
+        """Выбор сотрудника до диагностики + отчёт → состояние сделки (phone_status Оценки)."""
+        состояние = self.анкета.get("состояние") or "норма"
+        статус, почему = ocenka.переклассифицировать(состояние, rep)
+        self.статус_сделки, self.переклассификация = статус, почему
+        кнопка = ocenka.состояние_словами(состояние)
+        if почему:
+            итог = {ocenka.СТАТУС_РЕМОНТ: "ремонт", ocenka.СТАТУС_ДЕФЕКТ: "дефект"}.get(статус)
+            кнопка = ocenka.состояние_словами(итог) if итог else кнопка
+            log_line(f"состояние: {состояние} → {статус}: {почему}")
+        self.s_work.set_состояние(кнопка, почему or "")
 
     def on_failed(self, text):
         if self.state != "scanning":
@@ -433,22 +456,70 @@ class KioskWindow(QMainWindow):
 
     # ---------- сделка ----------
     def начать_сделку(self):
-        """Одно окно на всю сделку: имя клиента можно писать, пока читается телефон."""
+        """Сделка начинается с анкеты — состояние и клиент до кабеля, как у продавца в боте
+        Оценки. Телефон, подключённый раньше времени, ждёт."""
         if self.обновление_ставится:            # на старой сборке сделку не начинаем
             self.s_main.set_status("Идёт обновление — подождите, программа перезапустится",
                                    ok=False)
             return
         self.last = None
-        self.сделка = {}
+        self.сделка, self.анкета = {}, {}
+        self.статус_сделки = self.переклассификация = None
+        self.s_start.начать()
         self.s_work.начать()
-        self.state = "work"
+        self.state = "intake"
+        self.show_screen(self.s_start)
+
+    def анкета_готова(self, данные):
+        """Состояние выбрано, клиент записан. Запечатанный — по IMEI с коробки, без кабеля;
+        остальные — читаем телефон, имя уже стоит в окне сделки."""
+        self.анкета = dict(данные or {})
+        self.s_work.set_клиент(self.анкета.get("имя"), self.анкета.get("телефон"))
+        self.s_work.set_состояние(ocenka.состояние_словами(self.анкета.get("состояние")))
         self.show_screen(self.s_work)
+        if self.анкета.get("состояние") == "новый":
+            self.s_work.режим(True, self.анкета.get("imei") or [])
+            self.state = "work"
+            self.start_sealed(self.анкета.get("imei") or [])
+            return
+        self.s_work.режим(False)
+        self.state = "work"
         if self.кабель == READY and not self.wait_unplug:
             self.start_check()
 
+    def start_sealed(self, имеи):
+        """Запечатанный: Sickw (служба для запечатанных) и реестр РФС по IMEI с коробки."""
+        if self.sealed and self.sealed.isRunning():
+            self.sealed.wait(3000)
+        self.last = None
+        self.sealed = SealedPipeline(self.cfg, self.client, имеи, self)
+        self.sealed.step.connect(self.s_work.set_step)
+        self.sealed.done.connect(self.on_sealed_done)
+        self.sealed.failed.connect(self.on_sealed_failed)
+        self.sealed.start()
+
+    def on_sealed_done(self, result):
+        if self.state != "work" or self.анкета.get("состояние") != "новый":
+            return
+        self.last = result
+        rep = result["report"]
+        self.s_work.показать(rep)
+        self.s_work.аппарат.setText("Запечатанный · " + self.s_work.аппарат.text())
+        self._классифицировать(rep)
+        self.новый_код_медиа()
+        if not (rep.get("память") or {}).get("объём_гб") or not (rep.get("паспорт") or {}).get("модель"):
+            self.s_work.ошибка.setText("База IMEI не назвала модель или объём — без них сделку не "
+                                       "собрать. Проверьте IMEI и службу sickw_services_sealed.")
+
+    def on_sealed_failed(self, text):
+        if self.state != "work":
+            return
+        self.s_work.set_step("passport", "fail", "не удалось")
+        self.s_work.set_trouble("Не получилось проверить по базе: " + text)
+
     def отправить_в_оценку(self, поля):
         """Сделку отправляем боту Оценки — создаёт её он. Сеть в отдельном потоке."""
-        from pintel_core.external import ocenka, ocenka_tg
+        from pintel_core.external import ocenka_tg
         rep = (self.last or {}).get("report") or {}
         пас, cfg = rep.get("паспорт") or {}, self.cfg
         if not (cfg.get("ocenka_bot_token") and cfg.get("ocenka_chat_id")):
@@ -459,27 +530,39 @@ class KioskWindow(QMainWindow):
             self.s_work.ошибка.setText("Нет кода для медиа — нажмите «Другой код»")
             return
         клиент, код = {"имя": поля["имя"], "телефон": поля["телефон"]}, self.код_медиа
+        состояние = self.анкета.get("состояние") or "норма"
+        if self.статус_сделки is None:
+            self._классифицировать(rep)
+        статус, почему = self.статус_сделки, self.переклассификация
+        откуда = f"Киоск {cfg.get('point') or ''} от {datetime.now():%Y-%m-%d}"
         self.s_work.занято("Отправляем…")
 
         def job():
-            данные = {
-                "модель": пас.get("модель"), "код_модели": пас.get("код_модели"),
-                "память": (rep.get("память") or {}).get("объём_гб"),
-                "акб": (rep.get("батарея") or {}).get("здоровье_%"),
-                "циклы": (rep.get("батарея") or {}).get("циклы"),
-                "цвет": пас.get("цвет"), "sim": поля["sim"],
-                "коробка": поля["коробка"], "шнур": поля["шнур"],
-                # «Есть ли ошибка Panic full?» — тот же вопрос, что бот задаёт продавцу.
-                # Читаем сами из crash-логов; не прочитали — отдаём пусто, а не «нет».
-                "panic_full": (rep.get("паника") or {}).get("panic_full"),
-                "статус_ремонта": ocenka.статус_ремонта((rep.get("детали_вердикт") or {}).get("итог")),
-                "комментарий": поля["комментарий"],
-                "комментарий_оценщика": ocenka.комментарий_оценщика(
-                    rep, откуда=f"Киоск {cfg.get('point') or ''} от {datetime.now():%Y-%m-%d}"),
-                "имя_клиента": клиент.get("имя"), "телефон_клиента": клиент.get("телефон"),
-                "imei": пас.get("imei"), "imei_все": [пас.get("imei2")],
-                "замки": ocenka.замки(rep),
-            }
+            if состояние == "новый":
+                данные = ocenka.данные_запечатанного(
+                    rep.get("sickw") or {}, [пас.get("imei"), пас.get("imei2")], клиент,
+                    sim=поля["sim"], коробка=поля["коробка"], шнур=поля["шнур"],
+                    комментарий=поля["комментарий"], откуда=откуда, рфс=rep.get("рфс"))
+            else:
+                данные = {
+                    "модель": пас.get("модель"), "код_модели": пас.get("код_модели"),
+                    "память": (rep.get("память") or {}).get("объём_гб"),
+                    "акб": (rep.get("батарея") or {}).get("здоровье_%"),
+                    "циклы": (rep.get("батарея") or {}).get("циклы"),
+                    "цвет": пас.get("цвет"), "sim": поля["sim"],
+                    "коробка": поля["коробка"], "шнур": поля["шнур"],
+                    # «Есть ли ошибка Panic full?» — тот же вопрос, что бот задаёт продавцу.
+                    # Читаем сами из crash-логов; не прочитали — отдаём пусто, а не «нет».
+                    "panic_full": (rep.get("паника") or {}).get("panic_full"),
+                    # состояние — кнопка Оценки, выбранная до диагностики, с поправкой кабеля
+                    "статус_ремонта": статус, "состояние": состояние, "переклассификация": почему,
+                    "комментарий": поля["комментарий"],
+                    "комментарий_оценщика": ocenka.комментарий_оценщика(
+                        rep, откуда=откуда, состояние=ocenka.состояние_словами(состояние), почему=почему or ""),
+                    "имя_клиента": клиент.get("имя"), "телефон_клиента": клиент.get("телефон"),
+                    "imei": пас.get("imei"), "imei_все": [пас.get("imei2")],
+                    "замки": ocenka.замки(rep), "рфс": rep.get("рфс"),
+                }
             посылка = ocenka.посылка(данные, код, точка=cfg.get("point") or "")
             return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка)
 
@@ -515,7 +598,9 @@ class KioskWindow(QMainWindow):
                        "клиент": поля.get("имя"), "телефон": поля.get("телефон"),
                        "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
                        "коробка": поля.get("коробка"), "шнур": поля.get("шнур"),
-                       "комментарий": поля.get("комментарий"), "фирма": self._фирма()}
+                       "комментарий": поля.get("комментарий"), "фирма": self._фирма(),
+                       "состояние": ocenka.состояние_словами(self.анкета.get("состояние")),
+                       "статус": self.статус_сделки}
         self.s_work.ушло(код)
 
     def _фирма(self):
@@ -548,7 +633,8 @@ class KioskWindow(QMainWindow):
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
         self.state = "idle"
         self.last = None
-        self.сделка, self.код_медиа = {}, ""
+        self.сделка, self.код_медиа, self.анкета = {}, "", {}
+        self.статус_сделки = self.переклассификация = None
         self.s_main.set_device("found" if self.кабель == READY else "wait")
         self.show_screen(self.s_main)
 

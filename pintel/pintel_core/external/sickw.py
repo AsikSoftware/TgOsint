@@ -21,7 +21,8 @@ Luhn до запроса, кэш по IMEI+служба (на сервере —
 import html, json, os, re, time, urllib.parse, urllib.request
 
 API = "https://sickw.com/api.php"
-SERVICE_FULL = 61          # iPHONE CARRIER & FMI & BLACKLIST
+SERVICE_FULL = 61          # iPHONE CARRIER & FMI & BLACKLIST — аппарат на кабеле
+SERVICE_SEALED = 147       # запечатанный: по IMEI с коробки — модель, объём, цвет, активация
 DEFAULT_SERVICES = (SERVICE_FULL,)
 
 _BLOCK_TAG = re.compile(r"<\s*/?\s*(br|p|div|li|tr|td|th|h[1-6]|ul|ol|table|tbody|hr)\b[^>]*>", re.I)
@@ -226,6 +227,33 @@ def цвет_из_описания(model):
     return re.sub(r"[\s,\-/]+", " ", s).strip(" -,/")
 
 
+def модель_без_цвета(model):
+    """'iPhone 14 Pro Space Black 256GB' → 'iPhone 14 Pro'; 'iPhone 12 64GB Black' → 'iPhone 12'.
+
+    Для запечатанного это единственный источник модели: кабеля нет, а в сделке Оценки
+    `model` должен совпадать со строкой её прайса — без объёма и цвета."""
+    s = re.sub(r"\[.*?\]", " ", str(model or ""))
+    s = re.sub(r"(?i)\b\d+\s?(gb|tb)\b", " ", s)
+    s = re.sub(r"(?i)\ba\d{4}\b", " ", s)
+    for w in цвет_из_описания(model).split():
+        s = re.sub(rf"(?i)\b{re.escape(w)}\b", " ", s)
+    s = re.sub(r"[\s,\-/]+", " ", s).strip(" -,/")
+    return re.sub(r"(?i)^iphone", "iPhone", s) if s else ""
+
+
+def активация_flag(v):
+    """'Activated' / 'Not Activated' / 'Unactivated' → True/False/None. Для запечатанного
+    «не активирован» — главный признак того, что коробку действительно не вскрывали."""
+    l = str(v or "").strip().lower()
+    if not l:
+        return None
+    if any(p in l for p in ("not activ", "unactiv", "inactive", "никогда", "не актив")):
+        return False
+    if any(p in l for p in ("activ", "yes", "актив")) or re.search(r"\d{4}", l):
+        return True
+    return None
+
+
 def _yes(v):
     l = str(v or "").strip().lower()
     return True if l in ("yes", "true", "1") else (False if l in ("no", "false", "0") else None)
@@ -253,10 +281,16 @@ def normalize(raw_fields):
         by = _pick(f, "Repairs and Service Expired By")
         if by:
             warranty += f" (истекло: {by})"
+    активация = _pick(f, "Activation Status", "Activated", "Activation", "Activation Date",
+                      "First Activation Date")
     return {
         "модель_строка": model,
+        "модель": gsx.get("модель") or модель_без_цвета(_pick(f, "Model", "Description")) or None,
         "объём_гб": ((int(cap.group(1)) * (1024 if cap.group(2).upper() == "TB" else 1)) if cap
                      else gsx.get("объём_гб")),
+        "активация": активация or None,
+        "активирован": активация_flag(активация),
+        "продано": _pick(f, "Sold By", "Sold To", "Sold by", "Seller", "Sales Channel") or None,
         "цвет": colour or None,
         "цвет_исходный": colour_raw or None,
         "регион_gsx": gsx.get("регион_gsx"),

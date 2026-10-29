@@ -125,7 +125,7 @@ def fmt_report(rep):
             L.append("         особые отметки Apple: " + ", ".join(flags))
         for s, e in (sk.get("ошибки_служб") or {}).items():
             L.append(f"         служба {s} не ответила: {e}")
-    диаг = (snap.get("mobilegestalt") or {}).get("_диагностика") or {}
+    диаг = rep.get("mobilegestalt_диагностика") or {}
     if диаг:
         L.append("  Туннель CoreDevice: " + ", ".join(f"{k}={v}" for k, v in диаг.items()
                                                       if k != "список"))

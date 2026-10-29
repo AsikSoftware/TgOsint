@@ -205,6 +205,7 @@ def build(snap):
         "apple_подтверждение_возможно": bool(hist_ok and подтверждение_возможно),
         "mobilegestalt": ("недоступен" if "недоступен" in mg else ("есть" if mg else "не запрашивался")),
         "mobilegestalt_канал": mg.get("_канал"),
+        "mobilegestalt_диагностика": mg.get("_диагностика") or None,
         "печать_деталей": seal,
         "apple_история": hist or None,
         "apple_история_источник": hist_source,

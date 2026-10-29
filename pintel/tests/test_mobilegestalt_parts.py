@@ -32,7 +32,7 @@ def test_deprecated_falls_back_to_tunnel(monkeypatch):
     called = {}
     async def fake_tunnel(serial, keys, timeout):
         called["serial"] = serial
-        return {"FDRSealingStatus": True, "DeviceEnclosureColor": 9}, None, {"model": "x"}
+        return {"FDRSealingStatus": True, "DeviceEnclosureColor": 9}, None, {"model": "x"}, {}
     monkeypatch.setattr(mg, "_via_coredevice", fake_tunnel)
     r = asyncio.run(mg.read(FakeDiag("deprecated"), serial="UDID17"))
     assert r["канал"] == "coredevice" and called["serial"] == "UDID17"
@@ -41,10 +41,26 @@ def test_deprecated_falls_back_to_tunnel(monkeypatch):
 
 def test_tunnel_failure_is_not_fatal(monkeypatch):
     async def fail(serial, keys, timeout):
-        return {}, "NoDeviceConnectedError: нет", None
+        return {}, "NoDeviceConnectedError: нет", None, {}
     monkeypatch.setattr(mg, "_via_coredevice", fail)
     r = asyncio.run(mg.read(FakeDiag("deprecated"), serial="x"))
     assert r["канал"] == "нет" and "туннель" in r["ошибка"]
+
+
+def test_missing_service_records_what_the_phone_does_offer(monkeypatch):
+    """Туннель поднялся, а нужной службы телефон не предложил. Чтобы понять почему,
+    нужен список того, что он предлагает вместо неё: телефон клиента для опытов не
+    подержишь, и разбираться придётся по слепку."""
+    async def нет_службы(serial, keys, timeout):
+        return {}, "InvalidServiceError: нет службы", None, {
+            "туннель": "поднялся", "служб": 31, "coredevice": [],
+            "режим_разработчика": False, "ios": "18.7.8"}
+    monkeypatch.setattr(mg, "_via_coredevice", нет_службы)
+    r = asyncio.run(mg.read(FakeDiag("deprecated"), serial="x"))
+    assert r["канал"] == "нет"
+    assert r["диагностика"]["туннель"] == "поднялся"
+    assert r["диагностика"]["режим_разработчика"] is False
+    assert r["диагностика"]["служб"] == 31
 
 
 def test_seal_summary():

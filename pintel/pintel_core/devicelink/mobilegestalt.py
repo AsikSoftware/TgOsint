@@ -67,18 +67,46 @@ async def _via_diagnostics(diag, keys):
         return {}, f"{name}: {str(e)[:120]}"
 
 
+def _что_предлагает(rsd):
+    """Что телефон вообще даёт по туннелю. Нужно, когда нужной службы в списке нет:
+    без этого списка причина не видна, а телефон клиента для опытов не подержишь."""
+    сведения = {}
+    try:
+        службы = sorted((rsd._require_peer_info().get("Services") or {}).keys())
+        сведения["служб"] = len(службы)
+        сведения["coredevice"] = [s for s in службы if "coredevice" in s][:12]
+        сведения["список"] = службы[:60]
+    except Exception as e:                                   # noqa: BLE001
+        сведения["служб"] = f"не прочитать: {type(e).__name__}"
+    for имя, брать in (("режим_разработчика", lambda: rsd.has_developer_mode),
+                       ("ios", lambda: rsd.product_version),
+                       ("сборка", lambda: rsd.product_build_version)):
+        try:
+            сведения[имя] = брать()
+        except Exception:                                    # noqa: BLE001
+            pass
+    return сведения
+
+
 async def _via_coredevice(serial, keys, timeout):
     """iOS ≥ 17.4: userspace-туннель → CoreDevice querymobilegestalt. Без прав администратора."""
     try:
         from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
         from pymobiledevice3.remote.core_device.device_info import DeviceInfoService
     except Exception as e:                                   # noqa: BLE001
-        return {}, f"нет CoreDevice в pymobiledevice3: {e}", None
+        return {}, f"нет CoreDevice в pymobiledevice3: {e}", None, {}
+
+    диагностика = {}
 
     async def run():
         async with UserspaceRsdTunnel(serial=serial, autopair=True,
                                       remotepairing_fallback=False) as rsd:
-            info = DeviceInfoService(rsd)
+            диагностика["туннель"] = "поднялся"
+            try:
+                info = DeviceInfoService(rsd)
+            except Exception:                                # службы нет — запишем, что есть
+                диагностика.update(_что_предлагает(rsd))
+                raise
             mg = await info.query_mobilegestalt(keys)
             extra = {}
             try:
@@ -88,9 +116,9 @@ async def _via_coredevice(serial, keys, timeout):
             return _clean(mg.get("CacheData") or mg.get("GestaltData") or mg), extra
     try:
         mg, extra = await asyncio.wait_for(run(), timeout)
-        return mg, None, extra
+        return mg, None, extra, диагностика
     except Exception as e:                                   # noqa: BLE001
-        return {}, f"{type(e).__name__}: {str(e)[:150]}", None
+        return {}, f"{type(e).__name__}: {str(e)[:150]}", None, диагностика
 
 
 async def read(diag, serial=None, keys=None, prefer_tunnel=None, tunnel_timeout=25):
@@ -98,7 +126,9 @@ async def read(diag, serial=None, keys=None, prefer_tunnel=None, tunnel_timeout=
 
     prefer_tunnel: None — авто (сначала классика; если deprecated — туннель),
                    False — только классика, True — только туннель.
-    → {значения:{...}, канал:'diagnostics|coredevice|нет', ошибка:str|None, device_info:{...}}
+    → {значения:{...}, канал:'diagnostics|coredevice|нет', ошибка:str|None, device_info:{...},
+       диагностика:{...}} — последнее заполняется, когда туннель поднялся, но нужной
+    службы телефон не предложил: там список того, что он предлагает вместо неё.
     """
     keys = keys or DEFAULT_KEYS
     out = {"значения": {}, "канал": "нет", "ошибка": None, "device_info": None}
@@ -115,7 +145,9 @@ async def read(diag, serial=None, keys=None, prefer_tunnel=None, tunnel_timeout=
             return out
 
     # сюда попадаем на iOS 17.4+ (deprecated) или при prefer_tunnel=True
-    vals, err, extra = await _via_coredevice(serial, keys, tunnel_timeout)
+    vals, err, extra, диагностика = await _via_coredevice(serial, keys, tunnel_timeout)
+    if диагностика:
+        out["диагностика"] = диагностика
     if vals or extra:
         out.update(значения=vals, канал="coredevice", device_info=extra or None)
         return out

@@ -197,6 +197,9 @@ async def collect(ld, diag, log=lambda *a: None):
     mg["_канал"] = mg_res.get("канал")
     if mg_res.get("device_info"):
         mg["_device_info"] = mg_res["device_info"]
+    if mg_res.get("диагностика"):
+        # туннель поднялся, а службы нет: кладём в слепок, что телефон предлагает вместо неё
+        mg["_диагностика"] = mg_res["диагностика"]
     quality["mobilegestalt_канал"] = mg_res.get("канал")
     quality["время_с"]["mobilegestalt"] = round(time.monotonic() - t, 2)
 

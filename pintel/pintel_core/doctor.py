@@ -125,6 +125,10 @@ def fmt_report(rep):
             L.append("         особые отметки Apple: " + ", ".join(flags))
         for s, e in (sk.get("ошибки_служб") or {}).items():
             L.append(f"         служба {s} не ответила: {e}")
+    диаг = (snap.get("mobilegestalt") or {}).get("_диагностика") or {}
+    if диаг:
+        L.append("  Туннель CoreDevice: " + ", ".join(f"{k}={v}" for k, v in диаг.items()
+                                                      if k != "список"))
     L.append(f"  Джейлбрейк: {rep.get('джейлбрейк')}; MobileGestalt: {rep.get('mobilegestalt')}"
              + (f"; цвет корпуса по коду {rep['паспорт'].get('код_цвета_корпуса')}: {rep['паспорт'].get('цвет_по_коду')}"
                 if rep["паспорт"].get("код_цвета_корпуса") is not None else ""))

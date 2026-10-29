@@ -7,10 +7,13 @@
 сразу, а это дороже старой сборки.
 """
 import os
+import tempfile
 
 import pytest
 
+pytest.importorskip("PySide6")                        # лёгкий job CI ставит Qt не везде
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
 
 from PySide6.QtWidgets import QApplication            # noqa: E402
 

@@ -111,6 +111,14 @@ TRUST_LINE_RE = re.compile(r"\b(\w+)\s+isTrustedForUI(?::\s*(\w+)|\s+(failed))")
 # Если деталей в строке несколько или ни одной — вердикт не ставим: приписать отказ не к той
 # детали хуже, чем не прочитать его вовсе.
 TRUST_FAIL_RE = re.compile(r"isTrustedForUI(?:\s*[:=]\s*(?:0|false|no)\b|\s+failed)", re.I)
+# iOS 16 говорит о недоверенной детали своими словами и из UI Настроек, а не из демона:
+# «Preferences(CoreRepairUI) … Do not need to show data collection specifier for untrusted
+# component battery». Имя детали там строчными. Снято с живого iPhone 14 Pro Max на
+# iOS 16.1.2, где Apple не доверяла аккумулятору и дисплею — ровно тем деталям, которые
+# независимо нашли сигналы по кабелю.
+# Соседняя строка «Has infomation collection specifier for component: Display» (опечатка
+# Apple) обвинением НЕ является: она лишь говорит, что по детали есть что показать.
+UNTRUSTED_UI_RE = re.compile(r"untrusted component\s+(\w+)", re.I)
 # Страховка на будущие версии. Apple уже трижды меняла слова (iOS 16 — systemhealth,
 # 18 — delta components, 26 — isComponentRepairedUsing), и каждый раз мы узнавали об этом
 # по живому аппарату. Форма при этом не менялась: процесс CoreRepair печатает блок
@@ -133,6 +141,8 @@ COMPONENT_ALIAS = {"CoverGlass": "Display", "TouchController": "Display", "RCame
 # Что из systemhealth вообще считаем деталью (остальное — узлы связи и звук)
 HEALTH_PARTS = {"Battery", "Display", "Camera", "FaceID", "BackGlass", "MTUB", "Enclosure",
                 "CoverGlass", "TouchID", "FrontCamera", "LogicBoard"}
+# iOS 16 пишет имя детали строчными — приводим к нашему написанию
+_КАНОН = {имя.lower(): имя for имя in list(HEALTH_PARTS) + list(COMPONENT_ALIAS)}
 
 # Сила формата: по ней решается, какой источник главнее, когда их несколько. На iOS 26
 # записи и словарь состояния приходят ОДНИМ всплеском, и до этой правки запись, пришедшая
@@ -337,6 +347,10 @@ def parse_components(text):
             nm = re.search(r"ComponentName\s*=\s*(\w+)", block)
             if nm:
                 out["доверие"][part(nm.group(1))] = {k: int(v) for k, v in kv.items()}
+    for name in UNTRUSTED_UI_RE.findall(text):
+        key = part(_КАНОН.get(name.lower(), name))
+        if key in HEALTH_PARTS:
+            out["доверие"].setdefault(key, {})["isTrustedForUI"] = 0
     for name, val, fail in TRUST_LINE_RE.findall(text):
         key = part(name)
         if key in HEALTH_PARTS or name in HEALTH_PARTS:
@@ -459,7 +473,7 @@ class Listener:
         if похоже_на_словарь or any(k in line for k in (
                 "systemhealth", "isComponentRepairedUsing", "failed preflight",
                 "AuthCP Components", "Components: (", "ComponentName",
-                "Battery Health State", "isTrustedForUI")):
+                "Battery Health State", "isTrustedForUI", "untrusted component")):
             self.buf.append(line if line.endswith("\n") else line + "\n")
             self._apply_components()
         m = RCHL_RE.search(line)

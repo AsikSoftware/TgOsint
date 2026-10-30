@@ -58,10 +58,21 @@ class KioskMediaState(StatesGroup):
     приём = State()
 
 
-def _кнопка_готово(код: str):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Я всё отправил", callback_data=f"kmedia_done_{код}")
-    return kb.as_markup()
+def _вид_медиа(message: Message):
+    """Что прислали: (ЖДЁМ_ВИДЕО|ЖДЁМ_ФОТО, file_id) или (None, None) — не медиа вовсе.
+
+    Документом присылают, когда отправляют «без сжатия» — это те же фото и видео."""
+    if message.video or message.video_note:
+        return kiosk_core.ЖДЁМ_ВИДЕО, (message.video or message.video_note).file_id
+    if message.photo:
+        return kiosk_core.ЖДЁМ_ФОТО, message.photo[-1].file_id
+    if message.document:
+        mime = message.document.mime_type or ""
+        if mime.startswith("video/"):
+            return kiosk_core.ЖДЁМ_ВИДЕО, message.document.file_id
+        if mime.startswith("image/"):
+            return kiosk_core.ЖДЁМ_ФОТО, message.document.file_id
+    return None, None
 
 
 async def _сотрудник(chat_id: int):
@@ -195,8 +206,8 @@ async def открыть_приём(message: Message, state: FSMContext):
         f"Принимаю медиа для сделки, {сотрудник.first_name or 'коллега'}.\n"
         f"{точка}\n"
         f"{kiosk_core.шаги_списком()}\n\n"
-        f"Присылайте по одному. Начните с первого: {осталось[0]}.",
-        reply_markup=_кнопка_готово(код),
+        f"Присылайте по одному, в этом порядке — приму только то, что нужно на шаге.\n"
+        f"Сейчас: {осталось[0]}"
     )
 
 
@@ -208,33 +219,38 @@ async def принять(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    видео = bool(message.video or message.video_note)
-    if видео:
-        await _добавить(код, (message.video or message.video_note).file_id, видео=True)
-        текст = "Видео принято."
-    elif message.photo:
-        await _добавить(код, message.photo[-1].file_id, видео=False)
-        текст = "Фото принято."
-    else:
-        # документом присылают, когда отправляют «без сжатия» — это те же фото и видео
-        mime = (message.document.mime_type or "") if message.document else ""
-        if not mime.startswith(("image/", "video/")):
-            return
-        видео = mime.startswith("video/")
-        await _добавить(код, message.document.file_id, видео=видео)
-        текст = "Принято."
-
+    что, file_id = _вид_медиа(message)
+    if что is None:                        # не фото и не видео — не наше дело
+        return
     строка = await _строка(код)
     if строка is None:
         return
-    if not видео:
+    if строка["device_id"]:
+        await message.answer(f"По этому коду сделка № {строка['device_id']} уже создана — "
+                             "медиа к ней больше не принимаю.")
+        return
+
+    ждём = kiosk_core.что_ждём(строка)
+    if ждём is not None and что != ждём:
+        # Не своё не принимаем вовсе: иначе «Видео принято. Теперь фото задней стороны» —
+        # и сотрудник думает, что видео уже учтено, хотя его шаг ещё впереди.
+        await message.answer(kiosk_core.не_то_прислали(строка, что))
+        return
+
+    await _добавить(код, file_id, видео=(что == kiosk_core.ЖДЁМ_ВИДЕО))
+    строка = await _строка(код)
+    if строка is None:
+        return
+    if что == kiosk_core.ЖДЁМ_ВИДЕО:
+        текст = "✅ Видео принято."
+    else:
         n, надо = kiosk_core.сколько_фото(строка), len(kiosk_core.ЭТАПЫ_ФОТО)
-        текст = f"Фото {n} из {надо} принято." if n <= надо else "Ещё одно фото принято."
+        текст = (f"✅ Фото {n} из {надо} принято." if n <= надо
+                 else f"✅ Ещё одно фото принято, всего {n}.")
 
     осталось = kiosk_core.чего_не_хватает(строка)
     if осталось:
-        await message.answer(f"{текст}\n\nТеперь: {осталось[0]}.",
-                             reply_markup=_кнопка_готово(код))
+        await message.answer(f"{текст}\n\nСейчас: {осталось[0]}")
         return
     # всё собрано — и только теперь точка; на каждое фото список точек не шлём
     if not строка["shop_id"]:
@@ -247,28 +263,27 @@ async def принять(message: Message, state: FSMContext):
 
 @router_kiosk_media.callback_query(F.data.startswith("kmedia_done_"))
 async def что_принято(call: CallbackQuery):
-    """Сотруднику важно знать, дошло ли видео: без него сделка не создастся."""
+    """Кнопки «Я всё отправил» больше нет: бот ведёт по шагам и сам знает, когда собрано.
+
+    Обработчик оставлен для кнопок в прежних сообщениях — они остались в чатах, и
+    нажатие не должно висеть без ответа."""
     код = call.data.removeprefix("kmedia_done_")
     строка = await _строка(код)
     if строка is None:
         await call.answer("Код не найден", show_alert=True)
         return
-    фото = kiosk_core.сколько_фото(строка)
     осталось = kiosk_core.чего_не_хватает(строка)
+    await call.answer()
     if осталось:
-        await call.answer()
-        await call.message.answer(
-            "Ещё не всё:\n" + "\n".join("• " + ш for ш in осталось),
-            reply_markup=_кнопка_готово(код))
+        await call.message.answer("Ещё не всё:\n" + "\n".join("• " + ш for ш in осталось))
         return
     if not строка["shop_id"]:
-        await call.answer()
         await call.message.answer("Осталось выбрать точку, где идёт оценка:",
                                   reply_markup=await _кнопки_точек(код, строка["user_id"]))
         return
-    await call.answer()
     await call.message.answer(
-        f"Принято: видео есть, фото {фото}. Точка: <b>{await _имя_точки(строка['shop_id'])}</b>.\n"
+        f"Принято: видео есть, фото {kiosk_core.сколько_фото(строка)}. "
+        f"Точка: <b>{await _имя_точки(строка['shop_id'])}</b>.\n"
         "Отправьте оценку из программы — сделку создам по этому коду.")
 
 

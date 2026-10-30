@@ -245,7 +245,8 @@ class WorkScreen(Screen):
         self.ссылка = label("", "muted", wrap=True)
         self.ссылка.setAlignment(Qt.AlignHCenter)
         мл.addWidget(self.ссылка)
-        self.медиа = label("Сканируйте телефоном и пришлите видео и фото. Кто прислал — тот и оценщик.",
+        self.медиа = label("Сканируйте телефоном. Бот проведёт по шагам: фото с *#06#, лицевая, "
+                           "задняя, потом видео. Кто прислал — тот и оценщик.",
                            "muted", wrap=True)
         self.медиа.setAlignment(Qt.AlignHCenter)
         мл.addWidget(self.медиа)

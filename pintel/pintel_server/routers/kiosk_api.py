@@ -16,6 +16,7 @@ from ..services import evaluations as ev_service
 from ..services import kiosk_settings
 from ..services import references as ref_service
 from ..services import ocenka_import
+from ..services import points as points_service
 from ..services import price as price_service
 from ..services import sickw_service
 
@@ -60,10 +61,14 @@ def points(db: DbSession = Depends(get_db)):
     """Список точек для первой настройки программы: из него сотрудник выбирает свою.
 
     Без токена: выбрать точку надо ДО того, как он введён. Отдаём только то, что и так
-    написано на вывеске — id (он же id магазина в Оценке), название и литеру."""
+    написано на вывеске — id (он же id магазина в Оценке), название и литеру.
+
+    Магазины, которых в Оценке уже нет, в этот список не попадают: настраивать на них новый
+    компьютер нельзя — сделка уехала бы с `shop_id`, которого у Оценки нет. Уже настроенные
+    точки при этом работают: их опознаёт токен, а не этот список."""
     строки = db.scalars(select(Point).where(Point.is_active == True).order_by(Point.name))  # noqa: E712
     return {"точки": [{"id": p.id, "название": p.name, "литера": p.litera, "город": p.city}
-                      for p in строки]}
+                      for p in строки if not points_service.пропала(p)]}
 
 
 @router.get("/config")

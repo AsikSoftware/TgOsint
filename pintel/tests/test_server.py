@@ -687,12 +687,16 @@ def test_the_point_is_a_shop_of_ocenka_and_the_token_lives_in_the_base(app, monk
     assert points_service.пропала(db.get(Point, 19)) is True
     db.close()
     assert k.get("/api/kiosk/config", headers=H).status_code == 200, "точка продолжает работать"
+    # а вот настроить на неё новый компьютер уже нельзя: сделка уехала бы с shop_id, которого
+    # у Оценки нет, и бот не смог бы её создать. В списке первой настройки её не видно.
+    assert 19 not in [т["id"] for т in k.get("/api/kiosk/points").json()["точки"]]
     # вернули обратно — пометка снимается сама
     магазины.append({"id": 19, "litera": "Z", "shop_name": "Апорт Южный"})
     points_service.синхронизировать(SessionLocal())
     db = SessionLocal()
     assert points_service.пропала(db.get(Point, 19)) is False
     db.close()
+    assert 19 in [т["id"] for т in k.get("/api/kiosk/points").json()["точки"]]
 
     # отключённая точка в список не попадает и внутрь не пускает
     admin.post("/settings/points/19/toggle")

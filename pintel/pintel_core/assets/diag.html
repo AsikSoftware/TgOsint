@@ -55,6 +55,9 @@ button:active{transform:scale(.96)}
 #bar{position:fixed;left:0;right:0;top:0;height:4px;z-index:30;display:flex;gap:2px;padding:0 2px}
 #bar i{flex:1;background:rgba(255,255,255,.14);border-radius:0 0 3px 3px}
 #bar i.done{background:#37D9A0}#bar i.now{background:#7ADCFF}
+#skip{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:13;display:none;
+  opacity:.8}
+#skip:active{transform:translateX(-50%) scale(.96)}
 #grid{position:fixed;inset:0;display:grid;z-index:10;background:#061427}
 #grid div{border:1px solid rgba(255,255,255,.05)}
 #grid div.hit{background:rgba(55,217,160,.55);border-color:transparent}
@@ -83,6 +86,12 @@ input[type=file]{display:none}
 </style></head><body>
 
 <div id="bar"></div>
+<!--
+  Выход есть с любого теста. Клиент может не захотеть нажимать, камера может не открыться,
+  телефон может не дать звук — и тогда человек обязан иметь возможность идти дальше, а не
+  упереться в экран посреди сделки. Пропуск не «в порядке»: в сделке он снимает автоцену.
+-->
+<button class="ghost small" id="skip" onclick="ответить('skip')">Пропустить тест</button>
 
 <!-- 0. старт -->
 <div class="screen on" id="s0">
@@ -202,6 +211,12 @@ function экран(id){
   for(var i=0;i<все.length;i++) все[i].classList.remove("on");
   var s=document.getElementById(id);
   if(s) s.classList.add("on");
+  // «Пропустить» висит на тех тестах, где без него можно упереться в экран: динамик не
+  // зазвучал, камера не открылась, микрофон не дали. На сенсоре и мультитаче его нет —
+  // там палец работает по всему экрану, и кнопка внизу ловила бы касания вместо сетки;
+  // у обоих есть свой ответ «не получается».
+  document.getElementById("skip").style.display=
+    (id==="s3"||id==="s4"||id==="s5"||id==="s6") ? "inline-block" : "none";
 }
 function полоска(){
   var b=document.getElementById("bar"), h="";
@@ -341,6 +356,8 @@ function экранЭкран(){
 function экранПуск(){
   var b=document.getElementById("colorbox");
   document.getElementById("s3").classList.remove("on");
+  // во время заливки тап по экрану листает цвет — кнопке здесь не место
+  document.getElementById("skip").style.display="none";
   b.style.display="flex"; ci=0; document.body.style.background=COLORS[0];
   b.onclick=function(){
     ci++;

@@ -79,6 +79,9 @@ def test_the_page_asks_only_after_the_test_and_lets_you_redo_it():
     assert "Пройти заново" in страница and "__again" in страница
     # обзор в конце: видно весь список и можно повторить любой тест по строке
     assert "function обзор(" in страница and "function повторить(" in страница
+    # и с любого теста есть выход: иначе не зазвучавший динамик или не открывшаяся камера
+    # останавливают сделку посреди зала
+    assert 'id="skip"' in страница and "ответить('skip')" in страница
 
 
 def test_the_page_plays_sound_through_audio_with_a_type():

@@ -672,3 +672,17 @@ def test_if_the_kiosk_cannot_see_the_bot_it_says_so_and_does_not_stop_the_point(
     подписи = " ".join(окно.s_work.медиа_список.itemAt(i).widget().text()
                        for i in range(окно.s_work.медиа_список.count()))
     assert "не видит" in подписи and "без них бот сделку не создаст" in подписи
+
+
+def test_without_a_server_the_point_still_works(окно):
+    """Касса без связи с сервером спросить про медиа некого. Это не повод остановить
+    точку: сделку бот всё равно не создаст без видео, а сотрудник у стойки должен
+    работать. На экране при этом написано, что мы не видим бота."""
+    _чистый_без_теста(окно)
+    окно.client.enabled = False
+    окно.новый_код_медиа()                        # новый код завёлся уже без связи
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    _тест_прошёл(окно)
+    assert окно.s_work.b_отправить.isEnabled()
+    assert окно.s_work.медиа_состояние.get("известно") is False

@@ -167,15 +167,13 @@ def current_kiosk(request: Request, db: DbSession = Depends(get_db)) -> Kiosk:
     сколько компьютеров на точке и когда каждый был на связи, а второй киоск не требует
     второго токена.
 
-    Второй путь оставлен на время перехода: токен самого киоска, выданный прежней версией
-    (она привязывалась общим ключом). Когда все точки перейдут на токен точки, его и
-    `/api/kiosk/register` можно убрать.
+    Токен лежит в базе текстом: точками управляют там же (TablePlus), веб-кассой не
+    пользуются, и показать токен один раз было бы попросту негде.
     """
-    token = request.headers.get(KIOSK_HEADER) or ""
+    token = (request.headers.get(KIOSK_HEADER) or "").strip()
     if not token:
         raise HTTPException(401, "Нет токена точки: введите его в программе")
-    хэш = _hash_token(token)
-    точка = db.scalar(select(Point).where(Point.token_hash == хэш))
+    точка = db.scalar(select(Point).where(Point.token == token))
     if точка is not None:
         if not точка.is_active:
             raise HTTPException(401, "Точка отключена администратором")
@@ -194,12 +192,7 @@ def current_kiosk(request: Request, db: DbSession = Depends(get_db)) -> Kiosk:
         k.last_seen_at = now()
         db.commit()
         return k
-    k = db.scalar(select(Kiosk).where(Kiosk.token_hash == хэш))
-    if not k or not k.is_active:
-        raise HTTPException(401, "Токен не опознан: введите токен точки в программе")
-    k.last_seen_at = now()
-    db.commit()
-    return k
+    raise HTTPException(401, "Токен не опознан: возьмите токен своей точки в базе")
 
 
 def секрет_машины(point_id: int, машина: str) -> str:

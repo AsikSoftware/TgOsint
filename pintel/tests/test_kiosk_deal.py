@@ -541,10 +541,17 @@ def test_the_first_launch_asks_for_the_point_token(окно_без_токена,
     окно.открыть_меню()
     assert окно.stack.currentWidget() is окно.s_token, "пока нет токена, меню не открываем"
 
-    ответ = {"точка": "Алматы-1", "настройки": {"point": "Алматы-1", "staff_name": "Асылбек",
-                                                "ocenka_bot": "PintelOlxBot"}}
+    # на первом экране выбирают точку из списка: это магазины Оценки с теми же id
+    окно.s_token.показать_точки([{"id": 14, "название": "16/38 Pintel", "литера": "U"},
+                                 {"id": 19, "название": "Апорт", "литера": "Z"}])
+    assert len(окно.s_token.кнопки) == 2
+    окно.s_token._выбрать({"id": 19, "название": "Апорт"})
+
+    ответ = {"точка": "Апорт", "точка_id": 19,
+             "настройки": {"point": "Апорт", "staff_name": "Асылбек", "ocenka_bot": "PintelOlxBot"}}
     monkeypatch.setattr(окно.client, "config", lambda: ответ)
-    окно.новый_токен("pk_новый_токен")
+    окно.s_token.поле.setText("pk_новый_токен")
+    окно.s_token._принять()
     for поток in окно.tasks:
         поток.wait(5000)
     for _ in range(50):
@@ -552,11 +559,12 @@ def test_the_first_launch_asks_for_the_point_token(окно_без_токена,
 
     assert окно.client.token == "pk_новый_токен" and окно.client.enabled
     assert kconfig.токен() == "pk_новый_токен", "токен переживёт перезапуск и обновление"
+    assert kconfig.точка_id() == 19, "id точки = id магазина в Оценке, он поедет в сделку"
     assert окно.stack.currentWidget() is окно.s_main
     # надпись в углу — ровно то, что в базе, а не то, что кто-то вписал в файл
-    assert "Алматы-1" in окно.s_main.point_label.text()
+    assert "Апорт" in окно.s_main.point_label.text()
     assert окно.cfg["ocenka_bot"] == "PintelOlxBot"      # настройки пришли с сервера и сохранены
-    assert kconfig.load()["point"] == "Алматы-1"
+    assert kconfig.load()["point"] == "Апорт"
 
 
 def test_a_wrong_token_says_so_instead_of_silence(окно_без_токена, monkeypatch):
@@ -568,7 +576,8 @@ def test_a_wrong_token_says_so_instead_of_silence(окно_без_токена, 
         raise ServerError("сервер ответил 401: Нет токена точки")
 
     monkeypatch.setattr(окно.client, "config", падает)
-    окно.новый_токен("pk_чужой")
+    окно.s_token._выбрать({"id": 19, "название": "Апорт"})
+    окно.новый_токен(19, "pk_чужой")
     for поток in окно.tasks:
         поток.wait(5000)
     for _ in range(50):
@@ -586,3 +595,22 @@ def test_the_admin_menu_is_hidden_behind_a_key_combination(окно, monkeypatch
     assert подписи["Сервер"] == окно.client.base and подписи["Токен"].endswith("…")
     окно.закрыть_меню()
     assert окно.stack.currentWidget() is окно.s_main
+
+
+def test_the_deal_carries_the_shop_id_of_ocenka(окно, monkeypatch):
+    """Точка у нас — это магазин Оценки с тем же id, и программа кладёт его прямо в посылку.
+    Поэтому в боте точку больше не спрашивают: он берёт готовый shop_id."""
+    import httpx
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001", "point_id": 14, "point": "16/38 Pintel"})
+    _чистый(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    ушло = {}
+    monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
+                        (ушло.update(files=files),
+                         httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))[1])
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
+    assert посылка["shop_id"] == 14 and посылка["точка"] == "16/38 Pintel"

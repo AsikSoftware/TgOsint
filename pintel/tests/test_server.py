@@ -16,7 +16,8 @@ from sqlalchemy import select
 
 from pintel_server.main import create_app
 from pintel_server.db import SessionLocal, init_db
-from pintel_server.models import AuditLog, Device, Evaluation, Kiosk, LoginEvent, User, ROLE_ADMIN, ROLE_CASHIER, ROLE_SENIOR
+from pintel_server.models import (AuditLog, Device, Evaluation, Kiosk, LoginEvent, Point, User,
+                                   ROLE_ADMIN, ROLE_CASHIER, ROLE_SENIOR)
 from pintel_server.auth import hash_password
 from pintel_server.services import price as price_service
 from pintel_server.services import references
@@ -40,6 +41,27 @@ def app():
 
 def loc(r):
     return unquote(r.headers.get("location", ""))
+
+
+def точка(имя, токен=None):
+    """Завести точку с токеном прямо в базе — так же, как это делают в TablePlus.
+
+    Киосков руками больше не заводят: токен принадлежит точке, а машина записывается сама
+    при первом запросе. → заголовки для программы на этой точке."""
+    from pintel_server.models import Point
+    токен = токен or ("pk_" + имя.encode("utf-8").hex()[:16])
+    db = SessionLocal()
+    try:
+        p = db.scalar(select(Point).where(Point.name == имя))
+        if p is None:
+            p = Point(name=имя, token=токен)
+            db.add(p)
+        else:
+            p.token = токен
+        db.commit()
+        return {"X-Kiosk-Token": токен, "X-Kiosk-Machine": "TEST-PC"}
+    finally:
+        db.close()
 
 
 def client_for(app, login=None, password=None):
@@ -88,15 +110,13 @@ def test_roles(app):
 def test_kiosk_flow_and_decisions(app, monkeypatch):
     admin = client_for(app, "admin", "admin123")
     assert admin.post("/settings/points", data={"name": "Алматы-1", "city": "Алматы"}).status_code == 303
-    r = admin.post("/settings/kiosks", data={"name": "Киоск-1", "point_id": "1"})
-    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
-    assert admin.get(f"/settings?t={token}").status_code == 200
+    H = точка("Алматы-1")                      # токен точки вписывают в базе, а не в кассе
 
     k = TestClient(app, follow_redirects=False)
     assert k.get("/api/kiosk/config").status_code == 401
-    H = {"X-Kiosk-Token": token}
     cfg = k.get("/api/kiosk/config", headers=H).json()
-    assert cfg["киоск"] == "Киоск-1" and cfg["точка"] == "Алматы-1" and cfg["прайс_версия"] is None
+    assert cfg["точка"] == "Алматы-1" and cfg["прайс_версия"] is None
+    assert "TEST-PC" in cfg["киоск"]           # машина записалась сама
     assert k.get("/api/kiosk/price", headers=H).status_code == 404
 
     # прайс: подменяем Google Таблицу
@@ -171,12 +191,9 @@ def test_sickw_via_server_uses_db_cache(app, monkeypatch):
         calls.append(params)
         return {"status": "success", "result": 'Model: iPhone 12 64GB Black [A2403]<br>Blacklist Status: <font color="green">CLEAN</font><br>iCloud Lock: <font color="red">ON</font><br>'}
     monkeypatch.setattr(sickw, "_get", fake_get)
-    db = SessionLocal(); token_hash = db.scalar(select(Kiosk)).token_hash; db.close()
     admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/kiosks", data={"name": "Киоск-2", "point_id": ""})
-    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
+    H = точка("Точка-2")
     k = TestClient(app)
-    H = {"X-Kiosk-Token": token}
     r = k.post("/api/kiosk/sickw", json={"imei": "490154203237518"}, headers=H).json()
     assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True and r["цвет"] == "чёрный"
     r = k.post("/api/kiosk/sickw", json={"imei": "490154203237518"}, headers=H).json()
@@ -208,9 +225,7 @@ def test_kiosk_intake_staff_entry_media_and_import(app, monkeypatch):
     затем импорт в Оценку."""
     admin = client_for(app, "admin", "admin123")
     admin.post("/settings/points", data={"name": "Интейк-город", "city": "Алматы"})
-    r = admin.post("/settings/kiosks", data={"name": "Интейк-киоск", "point_id": ""})
-    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
-    H = {"X-Kiosk-Token": token}
+    H = точка("Интейк-точка")
     k = TestClient(app)
     rep, snap = real_report()
 
@@ -268,9 +283,7 @@ def test_kiosk_intake_staff_entry_media_and_import(app, monkeypatch):
 
 def test_cashier_sees_client_data_media_and_import_button(app):
     admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/kiosks", data={"name": "Касса-киоск", "point_id": ""})
-    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
-    H = {"X-Kiosk-Token": token}
+    H = точка("Касса-точка")
     k = TestClient(app)
     rep, snap = real_report()
     resp = k.post("/api/kiosk/evaluations", json={"client_id": "cash-1", "report": rep, "snapshot": snap}, headers=H).json()
@@ -293,9 +306,7 @@ def test_staff_parts_check_gates_import(app, monkeypatch):
     """Без подтверждения Apple автоматика зелёного не даёт; сотрудник сверяет экран телефона
     («Об этом устройстве») и отмечает в карточке — только после этого сделка может уйти в Оценку."""
     admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/kiosks", data={"name": "Сверка-киоск", "point_id": ""})
-    token = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
-    H = {"X-Kiosk-Token": token}
+    H = точка("Сверка-точка")
     rep, snap = real_report()                        # iPhone 12, iOS 26: записи с нулями, сверки нет
     assert rep["детали_вердикт"]["итог"] == "кабель" and rep["итог"]["вердикт"] == "ПРОВЕРКА НЕПОЛНАЯ"
     ev_id = TestClient(app).post("/api/kiosk/evaluations", json={"client_id": "parts-1", "report": rep, "snapshot": snap},
@@ -353,8 +364,7 @@ def test_references_collect_themselves_from_every_phone(app):
     import zipfile
 
     admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/kiosks", data={"name": "Эталон-киоск", "point_id": ""})
-    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+    H = точка("Эталон-точка")
 
     snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
                                encoding="utf-8").read())
@@ -439,8 +449,7 @@ def test_the_phone_test_lives_on_our_domain(app):
     Строку заводит ТОЛЬКО касса: на выдуманный токен с улицы ничего не положить."""
     from pintel_core import phonetest
     admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/kiosks", data={"name": "Тест-киоск", "point_id": ""})
-    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+    H = точка("Тест-точка")
     k = TestClient(app)
     телефон = TestClient(app)                                  # чужой телефон: без токена киоска
 
@@ -463,10 +472,6 @@ def test_the_phone_test_lives_on_our_domain(app):
     assert готово["готов"] is True and готово["результат"]["speaker"] == "fail"
     assert "чужое" not in готово["результат"]                  # в базу ложатся только наши ключи
     assert телефон.post("/api/phone/QR123TEST", json={"мусор": 1}).status_code == 400
-    # результат чужого киоска не отдаём
-    r2 = admin.post("/settings/kiosks", data={"name": "Чужой киоск", "point_id": ""})
-    H2 = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r2)).group(1)}
-    assert k.get("/api/kiosk/phone/QR123TEST", headers=H2).status_code == 200   # читать можно
     assert k.get("/api/kiosk/phone/NETAKOGO", headers=H).status_code == 404
 
 
@@ -474,8 +479,7 @@ def test_the_receipt_is_on_our_domain(app):
     """Чек на домене — тот же документ, что печатают на точке: бумага теряется, ссылка
     остаётся. Собирает его тот же pintel_core.receipt, поэтому они не разойдутся."""
     admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/kiosks", data={"name": "Чек-киоск", "point_id": ""})
-    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+    H = точка("Чек-точка")
     k = TestClient(app)
     rep, snap = real_report()
     resp = k.post("/api/kiosk/evaluations", json={"client_id": "check-1", "report": rep, "snapshot": snap},
@@ -512,8 +516,7 @@ def test_old_snapshots_are_pruned_but_the_evaluation_stays(app):
     from pintel_server.db import now
     from pintel_server.services import evaluations as ev_service
     admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/kiosks", data={"name": "Уборка-киоск", "point_id": ""})
-    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+    H = точка("Уборка-точка")
     rep, snap = real_report()
     k = TestClient(app)
     ev_id = k.post("/api/kiosk/evaluations", json={"client_id": "prune-1", "report": rep, "snapshot": snap},
@@ -536,75 +539,113 @@ def test_old_snapshots_are_pruned_but_the_evaluation_stays(app):
     db.close()
 
 
-def test_a_kiosk_binds_itself_instead_of_being_handed_a_token(app):
-    """Токены по точкам руками больше не раздают: это осталось от версии, где каждый киоск
-    заводили отдельно, и ровно из-за этого ни одна точка не была подключена. Киоск приходит
-    с общим ключом привязки, получает свой токен и сразу виден администратору."""
-    from pintel_server.config import settings
+def test_the_receipt_is_on_our_domain(app):
+    """Чек на домене — тот же документ, что печатают на точке: бумага теряется, ссылка
+    остаётся. Собирает его тот же pintel_core.receipt, поэтому они не разойдутся."""
+    admin = client_for(app, "admin", "admin123")
+    H = точка("Чек-точка")
     k = TestClient(app)
-    тело = {"key": settings.kiosk_key, "machine": "KASSA-TEST-1", "point": "Привязка-город",
-            "version": "9.9.9"}
-    assert k.post("/api/kiosk/register", json={**тело, "key": "не тот"}).status_code == 403
-    assert k.post("/api/kiosk/register", json={**тело, "machine": ""}).status_code == 400
+    rep, snap = real_report()
+    resp = k.post("/api/kiosk/evaluations", json={"client_id": "check-1", "report": rep, "snapshot": snap},
+                  headers=H).json()
+    assert resp["ссылка_чека"].endswith("/check/" + resp["ссылка_отчёта"].rsplit("/", 1)[-1])
+    # киоск дослал чек и результат теста — то, что появилось уже после создания оценки
+    rep2 = {**rep, "чек": {"номер": "A-7", "клиент": "Зама", "телефон": "+77058837953",
+                           "сотрудник": "Асылбек", "точка": "16/38", "коробка": True,
+                           "ссылка": resp["ссылка_чека"]},
+            "тест_телефона": {"sensor": "ok", "speaker": "fail"}}
+    assert k.patch(f"/api/kiosk/evaluations/{resp['id']}", json={"report": rep2}, headers=H).status_code == 200
 
-    r = k.post("/api/kiosk/register", json=тело).json()
-    токен = r["токен"]
-    assert токен.startswith("pk_") and "KASSA-TEST-1" in r["киоск"]
-    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": токен}).status_code == 200
+    страница = TestClient(app).get(resp["ссылка_чека"].replace("http://testserver", ""))
+    assert страница.status_code == 200
+    for кусок in ("Зама", "Асылбек", "iPhone 12", "A-7"):
+        assert кусок in страница.text, кусок
+    assert "<svg" in страница.text                                 # QR на сам себя
+    assert TestClient(app).get("/check/нет-такого").status_code == 404
 
-    # та же машина второй раз (переустановка) — та же строка, новый токен, старый не работает
-    второй = k.post("/api/kiosk/register", json=тело).json()["токен"]
-    assert второй != токен
-    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": токен}).status_code == 401
-    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": второй}).status_code == 200
+    # оценка целиком лежит в базе: отчёт, слепок, чек и тест — всё вместе
     db = SessionLocal()
-    строки = db.scalars(select(Kiosk).where(Kiosk.machine == "KASSA-TEST-1")).all()
-    assert len(строки) == 1, "дубля киоска после переустановки быть не должно"
-    киоск_id = строки[0].id
+    ev = db.scalar(select(Evaluation).where(Evaluation.client_id == "check-1"))
+    assert ev.report["чек"]["клиент"] == "Зама" and ev.report["тест_телефона"]["speaker"] == "fail"
+    assert ev.snapshot and ev.verdict
     db.close()
 
-    # администратор видит новый киоск и может его отключить — тогда привязка отказывает
+
+def test_old_snapshots_are_pruned_but_the_evaluation_stays(app):
+    """«Все оценки сохраняются» — это про оценку, а не про сырой слепок. Паспорт, батарея,
+    вердикт, чек и тест лежат вечно; слепок весит около мегабайта на аппарат, и при двух
+    сотнях оценок в день база росла бы на 6 ГБ в месяц. Разбор по нему нужен первые недели,
+    дальше остаётся обезличенный эталон."""
+    from datetime import timedelta
+    from pintel_server.db import now
+    from pintel_server.services import evaluations as ev_service
     admin = client_for(app, "admin", "admin123")
-    assert "KASSA-TEST-1" in admin.get("/settings").text
-    admin.post(f"/settings/kiosks/{киоск_id}/toggle")
-    assert k.post("/api/kiosk/register", json=тело).status_code == 403
-    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": второй}).status_code == 401
-
-
-def test_the_point_token_is_the_whole_setup(app, tmp_path):
-    """Правильная структура: в базе заводят точку с токеном, и это всё. Программа на точке
-    приходит с этим токеном, получает оттуда же все настройки, шлёт журнал и эталоны.
-    Ни адреса, ни токена, ни настроек в файле у неё нет."""
-    admin = client_for(app, "admin", "admin123")
-    r = admin.post("/settings/points", data={"name": "Алматы-7", "city": "Алматы"})
-    assert r.status_code == 303 and "t=" in loc(r)
-    токен = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
-    assert "Алматы-7" in loc(r)                    # токен показывается один раз, с именем точки
-
+    H = точка("Уборка-точка")
+    rep, snap = real_report()
     k = TestClient(app)
-    H = {"X-Kiosk-Token": токен, "X-Kiosk-Machine": "KASSA-7"}
+    ev_id = k.post("/api/kiosk/evaluations", json={"client_id": "prune-1", "report": rep, "snapshot": snap},
+                   headers=H).json()["id"]
+    db = SessionLocal()
+    ev = db.get(Evaluation, ev_id)
+    assert ev.snapshot
+    ev.created_at = now() - timedelta(days=400)
+    db.commit()
+    assert ev_service.prune_snapshots(db, 0) == 0            # 0 — не чистить вовсе
+    assert ev_service.prune_snapshots(db, 60) == 1
+    db.expire_all()
+    ev = db.get(Evaluation, ev_id)
+    assert ev.snapshot is None                               # слепок ушёл
+    assert ev.report and ev.verdict and ev.model_name        # сама оценка на месте
+    assert ev_service.prune_snapshots(db, 60) == 0           # повторно чистить нечего
+    # эталон аппарата при этом не теряется: его файл точка прислала сразу после проверки
+    # и он чистится своим сроком, не завися от слепка
+    assert ev_service.prune_references(db, 60) == 0
+    db.close()
+
+
+def test_the_point_is_a_shop_of_ocenka_and_the_token_lives_in_the_base(app, monkeypatch):
+    """Правильная структура: точка — это магазин Оценки, с тем же id. Список точек не
+    набирают руками, его заводит `sync-shops` из `shops`. Токен лежит в базе текстом:
+    управляют точками там же, веб-кассой не пользуются.
+
+    Раз id совпадает, сделка несёт готовый shop_id, и спрашивать точку в боте не нужно."""
+    from pintel_server.services import points as points_service
+    магазины = [{"id": 14, "litera": "U", "shop_name": "16/38 Pintel"},
+                {"id": 19, "litera": "Z", "shop_name": "Апорт"}]
+    monkeypatch.setattr(points_service, "магазины_оценки", lambda: магазины)
+    db = SessionLocal()
+    итог = points_service.синхронизировать(db)
+    assert итог["создано"] >= 2 and итог["токенов_выдано"] >= 2
+    апорт = db.get(Point, 19)
+    assert апорт.name == "Апорт" and апорт.litera == "Z" and апорт.token.startswith("pk_")
+    токен = апорт.token
+    db.close()
+
+    # программа при первой настройке берёт список точек без всякого токена
+    k = TestClient(app)
+    точки = k.get("/api/kiosk/points").json()["точки"]
+    assert {"id": 19, "название": "Апорт", "литера": "Z", "город": None} in точки
+
+    H = {"X-Kiosk-Token": токен, "X-Kiosk-Machine": "KASSA-19"}
     assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": "pk_wrong"}).status_code == 401
     cfg = k.get("/api/kiosk/config", headers=H).json()
-    assert cfg["точка"] == "Алматы-7" and cfg["настройки"]["point"] == "Алматы-7"
-    assert cfg["настройки"]["apple_history_seconds"] == 90      # умолчание, пока не меняли
-    assert "KASSA-7" in cfg["киоск"]                            # машина завелась сама
+    assert cfg["точка"] == "Апорт" and cfg["точка_id"] == 19 and cfg["литера"] == "Z"
+    assert "KASSA-19" in cfg["киоск"]                    # машина записалась сама
+    assert cfg["настройки"]["apple_history_seconds"] == 90
 
-    # настройки меняются в кассе и доезжают до точки — объезжать компьютеры не нужно
+    # настройки на всю сеть и имя сотрудника точки доезжают до программы
+    admin = client_for(app, "admin", "admin123")
     admin.post("/settings/kiosk", data={"ocenka_bot": "PintelOlxBot", "apple_history_seconds": "120",
                                         "return_seconds": "60", "keep_days": "90",
                                         "reference_keep": "500", "phone_test_port": "8765",
                                         "sickw": "on", "rfs": "on", "sickw_services_sealed": "147",
                                         "update_repo": "AsikSoftware/TgOsint",
                                         "company_name": "Pintel.kz"})
-    point_id = db_точка(app, "Алматы-7").id
-    admin.post(f"/settings/points/{point_id}", data={"staff_name": "Асылбек", "city": "Алматы"})
-    cfg = k.get("/api/kiosk/config", headers=H).json()["настройки"]
-    assert cfg["ocenka_bot"] == "PintelOlxBot" and cfg["apple_history_seconds"] == 120
-    assert cfg["staff_name"] == "Асылбек" and cfg["rfs"] is True
-    assert cfg["sickw"] is True and cfg["archive_snapshots"] is False
-    # незаполненное вовсе не отправляем: «пусто» — это не «сотри то, что программа нашла
-    # у себя в старом файле», пока настройки переносят в базу
-    assert "ocenka_chat_id" not in cfg and "rfs_proxy" not in cfg
+    admin.post("/settings/points/19", data={"staff_name": "Асылбек", "city": "Алматы"})
+    н = k.get("/api/kiosk/config", headers=H).json()["настройки"]
+    assert н["ocenka_bot"] == "PintelOlxBot" and н["apple_history_seconds"] == 120
+    assert н["staff_name"] == "Асылбек"
+    assert "ocenka_chat_id" not in н, "незаполненное не шлём: это не «сотри то, что есть»"
 
     # журнал и эталоны с точки
     assert k.post("/api/kiosk/logs", json={"lines": ["связь есть", "оценка отправлена"]},
@@ -619,12 +660,18 @@ def test_the_point_token_is_the_whole_setup(app, tmp_path):
     assert k.post("/api/kiosk/reference", headers=H, data={"name": "не-эталон.txt"},
                   files={"file": ("bundle.zip", b"x", "application/zip")}).status_code == 400
 
-    # всё это видно в кассе
-    страница = admin.get("/статистика").text
-    assert "Алматы-7" in страница and "оценка отправлена" in страница
-    # точку можно отключить — программа на ней сразу перестаёт ходить
-    admin.post(f"/settings/points/{point_id}/toggle")
+    # повторная синхронизация ничего не ломает и токен не трогает
+    итог2 = points_service.синхронизировать(SessionLocal())
+    assert итог2["создано"] == 0 and итог2["токенов_выдано"] == 0
+    db = SessionLocal()
+    assert db.get(Point, 19).token == токен
+    db.close()
+
+    # отключённая точка в список не попадает и внутрь не пускает
+    admin.post("/settings/points/19/toggle")
+    assert 19 not in [т["id"] for т in k.get("/api/kiosk/points").json()["точки"]]
     assert k.get("/api/kiosk/config", headers=H).status_code == 401
+    admin.post("/settings/points/19/toggle")
 
 
 def db_точка(app, имя):

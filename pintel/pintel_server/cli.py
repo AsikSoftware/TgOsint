@@ -27,6 +27,8 @@ def main(argv=None):
     sub.add_parser("fetch-price")
     s_prune = sub.add_parser("prune")        # убрать сырые слепки у старых оценок
     s_prune.add_argument("--days", type=int, default=None)
+    sub.add_parser("sync-shops")             # завести точки по магазинам Оценки (те же id)
+    sub.add_parser("points")                 # показать точки и их токены
     s = sub.add_parser("run"); s.add_argument("--host", default="0.0.0.0"); s.add_argument("--port", type=int, default=8000)
     a = ap.parse_args(argv)
 
@@ -59,6 +61,18 @@ def main(argv=None):
         if a.cmd == "fetch-price":
             row = price_service.refresh(db)
             print(f"прайс: {row.models_count} моделей, {row.positions_count} позиций"); return 0
+        if a.cmd == "sync-shops":
+            from .services import points as points_service
+            итог = points_service.синхронизировать(db)
+            print(f"точки: создано {итог['создано']}, обновлено {итог['обновлено']}, "
+                  f"токенов выдано {итог['токенов_выдано']}")
+            a.cmd = "points"                 # сразу показываем, что получилось
+        if a.cmd == "points":
+            from .services import points as points_service
+            for p in points_service.список(db):
+                состояние = "" if p.is_active else "  (отключена)"
+                print(f"{p.id:>3}  {p.litera or '--':<3}  {p.name:<24}  {p.token or 'токена нет'}{состояние}")
+            return 0
         if a.cmd == "prune":
             from .services import evaluations as ev_service
             n = ev_service.prune_snapshots(db, a.days)

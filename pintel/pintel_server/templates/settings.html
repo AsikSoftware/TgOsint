@@ -7,7 +7,7 @@
 <div class="sec" style="border-color:var(--primary)">
   <h2>Токен {{ ('точки «' + для_точки + '»') if для_точки else 'нового киоска' }} — показывается один раз</h2>
   <div class="row"><code style="font-size:18px;padding:10px 14px;background:var(--bg);border-radius:10px">{{ new_token }}</code></div>
-  <div class="note">Введите его <b>в самой программе на точке</b>: она спросит токен при первом запуске, а потом его можно сменить в меню администратора (<b>Ctrl+Shift+A</b>). В <code>kiosk.toml</code> вписывать ничего не нужно — ни токен, ни адрес.</div>
+  <div class="note">Введите его <b>в самой программе на точке</b>: она спросит точку и её токен при первом запуске, а потом их можно сменить в меню администратора (<b>Ctrl+Shift+A</b>). Токен лежит в базе, в таблице <code>points</code> — если потеряется, его видно там.</div>
 </div>
 {% endif %}
 <div class="grid2">
@@ -38,13 +38,8 @@
       <span>{{ ('на связи ' + k.last_seen_at|dt) if k.last_seen_at else 'ещё не подключался' }}{% if k.version %} · v{{ k.version }}{% endif %}{% if not k.is_active %} · <span class="bad">отключён</span>{% endif %}
       {% if user.role == 'admin' %}<form method="post" action="/settings/kiosks/{{ k.id }}/toggle" style="display:inline"><button class="btn sm" type="submit">{{ 'Отключить' if k.is_active else 'Включить' }}</button></form>{% endif %}</span></div>
     {% else %}<div class="note">Киосков пока нет.</div>{% endfor %}
-    {% if user.role == 'admin' %}
-    <form method="post" action="/settings/kiosks" class="row" style="margin-top:8px">
-      <input type="text" name="name" placeholder="имя киоска, например Алматы-1" required style="width:240px">
-      <select name="point_id" style="width:200px"><option value="">точка не выбрана</option>{% for p in points %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
-      <button class="btn primary sm" type="submit">Создать киоск и выдать токен</button>
-    </form>
-    {% endif %}
+    <div class="note">Компьютеры записываются сами при первом запуске программы с токеном
+      своей точки — заводить их здесь не нужно.</div>
   </section>
   <section class="sec">
     <h2>Точки</h2>

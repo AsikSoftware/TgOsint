@@ -39,6 +39,21 @@ class Client:
         self.token = str(токен or "").strip()
         self.enabled = bool(self.base and self.token)
 
+    def точки(self) -> list:
+        """Список точек для первой настройки: без токена, его ещё не ввели.
+
+        Точка у нас — это магазин Оценки с тем же id, поэтому сотрудник выбирает её из
+        знакомого списка, а не придумывает имя."""
+        import httpx as _httpx
+        try:
+            with _httpx.Client(base_url=self.base, timeout=15) as c:
+                r = c.get("/api/kiosk/points")
+        except _httpx.HTTPError as e:
+            raise ServerError(f"нет связи с сервером: {type(e).__name__}")
+        if r.status_code >= 400:
+            raise ServerError(f"сервер ответил {r.status_code}")
+        return (r.json() or {}).get("точки") or []
+
     @staticmethod
     def машина() -> str:
         """Чем компьютер назовётся серверу. Имя машины стабильно и не требует файла.

@@ -10,56 +10,121 @@
 точку перевыпустили или компьютер переставили на другую.
 """
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLineEdit, QPushButton, QScrollArea,
+                               QVBoxLayout, QWidget)
 
 from .ui import C, FONT_HEAD, FONT_NUM, Screen, W, font, kicker, label
 from .ui_deal import QSS_DEAL, _карточка, _кнопка
 
+QSS_ТОЧКИ = """
+QPushButton#точка { background: #FFFFFF; color: %(ink)s; border: 2px solid %(border)s;
+    border-radius: 14px; font-size: 21px; font-weight: 700; min-height: 64px;
+    padding: 0 20px; text-align: left; }
+QPushButton#точка:checked { background: %(tint)s; border-color: %(action)s; color: %(brand)s; }
+QPushButton#точка:pressed { background: %(ground)s; }
+""" % C
+
 
 class TokenScreen(Screen):
-    """Первый запуск: программа ждёт токен точки и ничего больше не умеет."""
+    """Первая настройка: выбрать свою точку и ввести её токен.
 
-    принят = Signal(str)
+    Точка — это магазин Оценки, список приходит с сервера с теми же id. Поэтому сделка
+    потом несёт готовый `shop_id`, и в боте точку уже не спрашивают."""
+
+    принят = Signal(int, str)                 # id точки, токен
+    обновить_список = Signal()
 
     def __init__(self):
         super().__init__(gray=True)
-        self.setStyleSheet(QSS_DEAL)
-        self.root.setContentsMargins(56, 40, 56, 36)
-        self.root.addStretch(1)
-        карточка, вн = _карточка("ПЕРВЫЙ ЗАПУСК")
-        карточка.setMaximumWidth(900)
-        вн.addWidget(label("Введите токен точки", font_=font(FONT_HEAD, 40, W.Bold)))
-        вн.addWidget(label("Его выдают в кассе: Настройки → Точки → «Выдать токен». Показывается "
-                           "он один раз. Больше на этом компьютере настраивать нечего: имя точки, "
-                           "бот Оценки, сроки и реквизиты чека придут с сервера.",
-                           "muted", wrap=True))
+        self.setStyleSheet(QSS_DEAL + QSS_ТОЧКИ)
+        self.root.setContentsMargins(56, 36, 56, 32)
+        self.выбрана = None
+        self.кнопки = []
+
+        self.root.addWidget(label("Первая настройка", font_=font(FONT_HEAD, 40, W.Bold)))
+        self.root.addWidget(label("Выберите свою точку и введите её токен. Токен лежит в базе, "
+                                  "в таблице точек. Больше на этом компьютере настраивать нечего: "
+                                  "имя точки, бот Оценки, сроки и реквизиты чека придут с сервера.",
+                                  "muted", wrap=True))
+        self.root.addSpacing(14)
+
+        тело = QHBoxLayout()
+        тело.setSpacing(22)
+        слева, лв = _карточка("ТОЧКА")
+        прокрутка = QScrollArea()
+        прокрутка.setWidgetResizable(True)
+        прокрутка.setFrameShape(QFrame.NoFrame)
+        внутри = QWidget()
+        self.список = QVBoxLayout(внутри)
+        self.список.setSpacing(8)
+        self.список.addStretch(1)
+        прокрутка.setWidget(внутри)
+        лв.addWidget(прокрутка, 1)
+        тело.addWidget(слева, 3)
+
+        справа, пв = _карточка("ТОКЕН ТОЧКИ")
         self.поле = QLineEdit()
         self.поле.setPlaceholderText("pk_…")
         self.поле.setMinimumHeight(64)
         self.поле.returnPressed.connect(self._принять)
-        вн.addWidget(self.поле)
+        пв.addWidget(self.поле)
         self.ошибка = label("", wrap=True, color=C["badtext"])
-        вн.addWidget(self.ошибка)
+        пв.addWidget(self.ошибка)
+        пв.addStretch(1)
         ряд = QHBoxLayout()
+        обнов = _кнопка("Обновить список", "ghost")
+        обнов.clicked.connect(self.обновить_список.emit)
+        ряд.addWidget(обнов)
         ряд.addStretch(1)
-        self.кнопка = _кнопка("Сохранить и подключиться")
+        self.кнопка = _кнопка("Подключиться")
         self.кнопка.clicked.connect(self._принять)
         ряд.addWidget(self.кнопка)
-        вн.addLayout(ряд)
-        self.root.addWidget(карточка, 0, Qt.AlignHCenter)
-        self.root.addStretch(1)
+        пв.addLayout(ряд)
+        тело.addWidget(справа, 2)
+        self.root.addLayout(тело, 1)
+
+    def показать_точки(self, точки):
+        """Список с сервера → кнопки. Пусто — значит точки ещё не завели."""
+        while self.список.count() > 1:
+            w = self.список.takeAt(0).widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+        self.кнопки = []
+        for т in точки or []:
+            подпись = f"{т.get('название') or 'без имени'}"
+            если_литера = т.get("литера")
+            b = QPushButton(подпись + (f"   ·   {если_литера}" if если_литера else ""))
+            b.setObjectName("точка")
+            b.setCheckable(True)
+            b.clicked.connect(lambda _=False, точка=т, кнопка=None: self._выбрать(точка))
+            self.список.insertWidget(self.список.count() - 1, b)
+            self.кнопки.append((b, т))
+        if not точки:
+            self.список.insertWidget(0, label("Сервер не дал список точек. Проверьте связь или "
+                                              "заведите точки в базе: они берутся из магазинов "
+                                              "Оценки командой sync-shops.", "muted", wrap=True))
+
+    def _выбрать(self, точка):
+        self.выбрана = точка
+        for b, т in self.кнопки:
+            b.setChecked(т.get("id") == точка.get("id"))
+        self.поле.setFocus()
 
     def _принять(self):
         токен = self.поле.text().strip()
-        if len(токен) < 8:
-            self.ошибка.setText("Токен короткий — проверьте, что скопировали его целиком")
+        if not self.выбрана:
+            self.сказать("Сначала выберите точку в списке")
             return
-        self.ошибка.setText("")
-        self.принят.emit(токен)
+        if len(токен) < 6:
+            self.сказать("Токен короткий — проверьте, что скопировали его целиком")
+            return
+        self.сказать("Проверяем…", ошибка=False)
+        self.принят.emit(int(self.выбрана.get("id")), токен)
 
     def сказать(self, текст, ошибка=True):
         self.ошибка.setText(текст)
-        self.ошибка.setStyleSheet(f"color: {C['badtext'] if ошибка else C['ok']}")
+        self.ошибка.setStyleSheet(f"color: {C['badtext'] if ошибка else C['muted']}")
 
 
 class AdminScreen(Screen):

@@ -181,6 +181,7 @@ class KioskWindow(QMainWindow):
         for s in (self.s_main, self.s_start, self.s_work, self.s_token, self.s_admin):
             self.stack.addWidget(s)
         self.s_token.принят.connect(self.новый_токен)
+        self.s_token.обновить_список.connect(self.спросить_точки)
         self.s_admin.закрыть.connect(self.закрыть_меню)
         self.s_admin.сменить_токен.connect(self.новый_токен)
         self.s_admin.обновить.connect(self._проверить_обновление)
@@ -226,9 +227,10 @@ class KioskWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Q"), self, activated=self.close)
         QShortcut(QKeySequence("Ctrl+Shift+A"), self, activated=self.открыть_меню)
         if not self.client.enabled:
-            # первый запуск: токена нет, и спрашиваем его сразу — без него программа пустая
+            # первый запуск: токена нет, и спрашиваем сразу — без него программа пустая
             self.show_screen(self.s_token)
-            log_line("токен точки не задан — ждём ввода на экране")
+            self.спросить_точки()
+            log_line("токен точки не задан — ждём выбора точки на экране")
         elif not cfg.get("_настройки_с_сервера"):
             self.s_main.set_status("Настройки с сервера ещё не получены", ok=False)
         self._try_server_config()
@@ -360,6 +362,10 @@ class KioskWindow(QMainWindow):
         на каждой машине, и совпадала она с базой только на честном слове."""
         c = c or {}
         новые = config.сохранить_настройки(c.get("настройки") or {})
+        if c.get("точка_id"):
+            # сервер говорит, какой точке принадлежит токен: это и есть id магазина в Оценке
+            self.cfg["point_id"] = c["точка_id"]
+            config.запомнить_токен(self.client.token, c["точка_id"])
         # Пустое значение с сервера — это «ещё не заполнили», а не «сотри то, что есть».
         # Иначе первая же точка, обновившись раньше, чем настройки завели в базе, осталась
         # бы без бота Оценки и не смогла отправить сделку.
@@ -372,17 +378,26 @@ class KioskWindow(QMainWindow):
             self.show_screen(self.s_main)
 
     # ---------- токен точки и меню администратора ----------
-    def новый_токен(self, токен):
-        """Токен ввели на экране. Проверяем его сразу: сказать «не подошёл» надо здесь, а не
-        молчанием на первом же аппарате."""
+    def спросить_точки(self):
+        """Список точек для первого экрана. Точка — это магазин Оценки, список приходит с
+        сервера с теми же id, поэтому сотрудник выбирает знакомое название."""
+        self._run(self.client.точки, ok=self.s_token.показать_точки,
+                  err=lambda e: (self.s_token.показать_точки([]), log_line(f"точки не пришли: {e}")))
+
+    def новый_токен(self, point_id, токен=None):
+        """Точку выбрали, токен ввели. Проверяем сразу: сказать «не подошёл» надо здесь, а
+        не молчанием на первом же аппарате.
+
+        Из меню администратора приходит только токен — точку там не меняют, она определяется
+        самим токеном."""
+        if токен is None:
+            point_id, токен = self.cfg.get("point_id"), point_id
         токен = str(токен or "").strip()
         if not токен:
             return
-        config.запомнить_токен(токен)
+        config.запомнить_токен(токен, point_id)
         self.client.сменить_токен(токен)
-        self.cfg["token"] = токен
-        if self.stack.currentWidget() is self.s_token:
-            self.s_token.сказать("Проверяем токен…", ошибка=False)
+        self.cfg["token"], self.cfg["point_id"] = токен, point_id
         self._run(self.client.config, ok=self._токен_подошёл, err=self._токен_не_подошёл)
 
     def _токен_подошёл(self, c):
@@ -401,7 +416,8 @@ class KioskWindow(QMainWindow):
 
     def _сведения(self) -> dict:
         return {"Сервер": self.client.base or "—",
-                "Точка": self.cfg.get("point") or "сервер ещё не ответил",
+                "Точка": f"{self.cfg.get('point') or 'сервер ещё не ответил'}"
+                         + (f" (id {self.cfg['point_id']})" if self.cfg.get("point_id") else ""),
                 "Этот компьютер": self.client.машина(),
                 "Токен": (self.client.token[:6] + "…") if self.client.token else "не задан",
                 "Версия": __version__,
@@ -634,6 +650,7 @@ class KioskWindow(QMainWindow):
             self.s_work.ошибка.setText("Нет кода для медиа — нажмите «Другой код»")
             return
         клиент, код = {"имя": поля["имя"], "телефон": поля["телефон"]}, self.код_медиа
+        магазин = self.cfg.get("point_id")        # он же id магазина в Оценке
         тест = поля.get("тест") or self.тест_телефона
         тест_пропущен = поля.get("тест_пропущен") or ""
         тест_строкой = (f"Тест на телефоне пропущен: {тест_пропущен}" if тест_пропущен
@@ -652,6 +669,7 @@ class KioskWindow(QMainWindow):
                     sim=поля["sim"], коробка=поля["коробка"], шнур=поля["шнур"],
                     комментарий=поля["комментарий"], откуда=откуда, рфс=rep.get("рфс"),
                     отчёт=rep)
+                данные["shop_id"] = магазин
             else:
                 данные = {
                     "модель": пас.get("модель"), "код_модели": пас.get("код_модели"),
@@ -676,6 +694,7 @@ class KioskWindow(QMainWindow):
                     # деталей глазами закрывает пункт ручной диагностики в боте
                     "не_прочиталось": ocenka.незакрытое(rep),
                     "сверка_нужна": ocenka.сверка_нужна(rep),
+                    "shop_id": магазин,
                 }
             # тест на телефоне клиента: отметки едут в сделку как есть, их читает бот
             данные["тест_телефона"] = dict(тест)

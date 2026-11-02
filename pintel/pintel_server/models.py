@@ -23,7 +23,13 @@ STATUSES = {ST_NEW: "Новая", ST_VIEWED: "Клиент просто смот
 
 
 class Point(Base):
-    """Точка. Здесь же её токен: им программа на точке и опознаётся.
+    """Точка. **Её id — это id магазина в Оценке** (`shops.id`), и это главное свойство.
+
+    Поэтому сделка, уходящая в Оценку, несёт готовый `shop_id`, и спрашивать точку у
+    сотрудника в боте больше не нужно. Список точек заводится из `shops` командой
+    `pintel-server sync-shops`, руками его не набирают.
+
+    Здесь же токен точки: им программа на точке и опознаётся.
 
     Токен принадлежит ТОЧКЕ, а не отдельному компьютеру: на точке может стоять второй
     киоск или смениться машина, и каждый раз выдавать новый токен незачем. Машины
@@ -36,7 +42,11 @@ class Point(Base):
     name: Mapped[str] = mapped_column(String(80), unique=True)
     city: Mapped[Optional[str]] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=now)
-    token_hash: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    # Токен лежит текстом, а не хэшем, и это сделано намеренно: точками управляют прямо в
+    # базе (TablePlus), веб-кассой не пользуются. Хэш означал бы, что токен можно увидеть
+    # ровно один раз в интерфейсе, которого нет. Доступ к базе и так равен полному доступу.
+    token: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    litera: Mapped[Optional[str]] = mapped_column(String(8))           # буквенный код магазина в Оценке
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     staff_name: Mapped[Optional[str]] = mapped_column(String(80))      # кто у кассы — в чек клиенту
     settings: Mapped[Optional[dict]] = mapped_column(JSON)             # что переопределено для этой точки

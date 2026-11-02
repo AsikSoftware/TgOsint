@@ -40,11 +40,12 @@ def test_the_kiosk_starts_without_the_server(tmp_path):
 def test_the_token_and_the_settings_survive_an_update(tmp_path):
     """Папку программы сносит и обновление, и переустановка распаковкой поверх. Токен и
     настройки лежат рядом с данными, поэтому ехать на точку заново никто не станет."""
-    config.запомнить_токен("pk_точка1", str(tmp_path))
+    config.запомнить_токен("pk_точка1", 14, str(tmp_path))
     config.сохранить_настройки({"point": "Алматы-1", "staff_name": "Асылбек",
                                 "return_seconds": 45, "чужое": "выкинуть"}, str(tmp_path))
     cfg = config.load(str(tmp_path))
     assert cfg["token"] == "pk_точка1" and cfg["_настройки_с_сервера"] is True
+    assert cfg["point_id"] == 14, "id точки — это id магазина в Оценке, он нужен для сделки"
     assert cfg["point"] == "Алматы-1" and cfg["return_seconds"] == 45
     assert "чужое" not in cfg                      # храним только то, что умеем читать
 

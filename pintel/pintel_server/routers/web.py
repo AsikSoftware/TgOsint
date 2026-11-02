@@ -26,6 +26,7 @@ from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_ADMIN, ROLE_CASHIER, ROLES,
 from ..services import evaluations as ev_service
 from ..services import ocenka_import
 from ..services import kiosk_settings
+from ..services import points as points_service
 from ..services import stats
 from ..services import price as price_service
 from ..services import references as ref_service
@@ -524,8 +525,8 @@ def settings_point_create(name: str = Form(...), city: str = Form(""), user: Use
                           db: DbSession = Depends(get_db)):
     if db.scalar(select(Point).where(Point.name == name.strip())):
         return RedirectResponse("/settings?e=Точка с таким названием уже есть", 303)
-    токен, хэш = new_kiosk_token()
-    p = Point(name=name.strip()[:80], city=city.strip()[:80] or None, token_hash=хэш)
+    токен = points_service.новый_токен()
+    p = Point(name=name.strip()[:80], city=city.strip()[:80] or None, token=токен)
     db.add(p)
     db.flush()
     audit.log(db, user, "point.create", f"Добавлена точка «{p.name}», выдан токен", entity="point",
@@ -542,7 +543,7 @@ def settings_point_token(point_id: int, user: User = Depends(require_admin),
     p = db.get(Point, point_id)
     if not p:
         return RedirectResponse("/settings?e=Точка не найдена", 303)
-    токен, p.token_hash = new_kiosk_token()
+    токен = p.token = points_service.новый_токен()
     audit.log(db, user, "point.token", f"Точке «{p.name}» выдан новый токен", entity="point",
               entity_id=p.id)
     db.commit()
@@ -604,20 +605,6 @@ async def settings_kiosk_program(request: Request, user: User = Depends(require_
     audit.log(db, user, "kiosk.settings", "Изменены настройки программы на точках")
     db.commit()
     return RedirectResponse("/settings?m=Настройки программы сохранены", 303)
-
-
-@router.post("/settings/kiosks")
-def settings_kiosk_create(name: str = Form(...), point_id: str = Form(""), user: User = Depends(require_admin),
-                          db: DbSession = Depends(get_db)):
-    if db.scalar(select(Kiosk).where(Kiosk.name == name.strip())):
-        return RedirectResponse("/settings?e=Киоск с таким именем уже есть", 303)
-    token, h = new_kiosk_token()
-    k = Kiosk(name=name.strip()[:80], point_id=int(point_id) if point_id else None, token_hash=h)
-    db.add(k)
-    db.flush()
-    audit.log(db, user, "kiosk.create", f"Создан киоск «{k.name}», выдан токен", entity="kiosk", entity_id=k.id)
-    db.commit()
-    return RedirectResponse(f"/settings?t={token}&m=Киоск создан. Токен показывается один раз", 303)
 
 
 @router.post("/settings/kiosks/{kiosk_id}/toggle")

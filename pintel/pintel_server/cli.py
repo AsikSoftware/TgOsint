@@ -64,13 +64,17 @@ def main(argv=None):
         if a.cmd == "sync-shops":
             from .services import points as points_service
             итог = points_service.синхронизировать(db)
-            print(f"точки: создано {итог['создано']}, обновлено {итог['обновлено']}, "
-                  f"токенов выдано {итог['токенов_выдано']}")
+            for ключ, подпись in (("создано", "новые точки"), ("переименовано", "переименованы"),
+                                  ("пропали", "ПРОПАЛИ В ОЦЕНКЕ (работают, но проверьте)")):
+                if итог[ключ]:
+                    print(f"{подпись}: " + "; ".join(итог[ключ]))
+            print(f"токенов выдано: {итог['токенов_выдано']}")
             a.cmd = "points"                 # сразу показываем, что получилось
         if a.cmd == "points":
             from .services import points as points_service
             for p in points_service.список(db):
                 состояние = "" if p.is_active else "  (отключена)"
+                состояние += "  (в Оценке такого магазина нет)" if points_service.пропала(p) else ""
                 print(f"{p.id:>3}  {p.litera or '--':<3}  {p.name:<24}  {p.token or 'токена нет'}{состояние}")
             return 0
         if a.cmd == "prune":

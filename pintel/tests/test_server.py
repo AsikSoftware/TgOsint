@@ -615,7 +615,7 @@ def test_the_point_is_a_shop_of_ocenka_and_the_token_lives_in_the_base(app, monk
     monkeypatch.setattr(points_service, "магазины_оценки", lambda: магазины)
     db = SessionLocal()
     итог = points_service.синхронизировать(db)
-    assert итог["создано"] >= 2 and итог["токенов_выдано"] >= 2
+    assert len(итог["создано"]) >= 2 and итог["токенов_выдано"] >= 2
     апорт = db.get(Point, 19)
     assert апорт.name == "Апорт" and апорт.litera == "Z" and апорт.token.startswith("pk_")
     токен = апорт.token
@@ -662,9 +662,36 @@ def test_the_point_is_a_shop_of_ocenka_and_the_token_lives_in_the_base(app, monk
 
     # повторная синхронизация ничего не ломает и токен не трогает
     итог2 = points_service.синхронизировать(SessionLocal())
-    assert итог2["создано"] == 0 and итог2["токенов_выдано"] == 0
+    assert итог2["создано"] == [] and итог2["токенов_выдано"] == 0
+    # в базе живут и точки других тестов — их в списке магазинов нет, поэтому сверяем
+    # вхождением, а не равенством
     db = SessionLocal()
     assert db.get(Point, 19).token == токен
+    db.close()
+
+    # магазин переименовали в Оценке: имя у нас догоняет, токен остаётся прежним
+    магазины[1]["shop_name"] = "Апорт Южный"
+    итог3 = points_service.синхронизировать(SessionLocal())
+    assert итог3["переименовано"] == ['19 «Апорт» → «Апорт Южный»']
+    db = SessionLocal()
+    assert db.get(Point, 19).name == "Апорт Южный" and db.get(Point, 19).token == токен
+    db.close()
+    assert k.get("/api/kiosk/config", headers=H).json()["точка"] == "Апорт Южный"
+
+    # магазин пропал: точку не удаляем и не гасим молча — на ней висят оценки, а сотрудник
+    # у стойки не должен узнать об этом по отказу. Называем громко, решает человек.
+    магазины.pop()
+    итог4 = points_service.синхронизировать(SessionLocal())
+    assert "19 Апорт Южный" in итог4["пропали"]
+    db = SessionLocal()
+    assert points_service.пропала(db.get(Point, 19)) is True
+    db.close()
+    assert k.get("/api/kiosk/config", headers=H).status_code == 200, "точка продолжает работать"
+    # вернули обратно — пометка снимается сама
+    магазины.append({"id": 19, "litera": "Z", "shop_name": "Апорт Южный"})
+    points_service.синхронизировать(SessionLocal())
+    db = SessionLocal()
+    assert points_service.пропала(db.get(Point, 19)) is False
     db.close()
 
     # отключённая точка в список не попадает и внутрь не пускает

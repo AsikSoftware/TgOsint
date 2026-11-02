@@ -35,12 +35,31 @@ def _почистить_слепки():
         print(f"не удалось почистить слепки: {type(e).__name__}: {e}")
 
 
+def _синхронизировать_точки():
+    """Точки = магазины Оценки. Подтягиваем их при старте, чтобы переименование или новый
+    магазин доезжали сами, без похода на сервер руками.
+
+    Пропавшие магазины не гасим: на их точках висят оценки, а сотрудник у стойки не должен
+    узнать об этом по отказу. Их называет `cli points` и ответ `cli sync-shops`."""
+    from .db import SessionLocal
+    from .services import points as points_service
+    try:
+        db = SessionLocal()
+        итог = points_service.синхронизировать(db)
+        db.close()
+        if any(итог[k] for k in ("создано", "переименовано", "пропали")) or итог["токенов_выдано"]:
+            print(f"точки по магазинам Оценки: {итог}")
+    except Exception as e:                                       # noqa: BLE001 — не повод не стартовать
+        print(f"точки не синхронизировались: {type(e).__name__}: {e}")
+
+
 def create_app(init_sqlite=True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app):
         if init_sqlite and settings.is_sqlite:
             init_db()                    # для разработки; на сервере таблицы создаёт alembic
         _почистить_слепки()
+        _синхронизировать_точки()
         yield
 
     app = FastAPI(title="Pintel Server", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)

@@ -107,6 +107,15 @@ def test_both_sides_call_the_button_the_same():
     assert ocenka_tg.ПРЕФИКС_КНОПКИ == ядро().ПРЕФИКС_КНОПКИ
 
 
+def test_the_manual_checks_list_is_the_same_on_both_sides():
+    """Пункты ручной диагностики спрашивает бот на сервере, а показывает программа в exe:
+    обновляют их в разное время. Разойдутся — сотрудник проверит по экрану одно, а бот
+    спросит другое, и «без диагностики не пропускать» перестанет значить что-либо."""
+    from pintel_core.external import ocenka_media
+    assert ocenka_media.ПУНКТЫ == ядро().ПУНКТЫ
+    assert ocenka_media.пункты_словами().startswith("Экран · Касание")
+
+
 def test_send_says_what_telegram_answered(monkeypatch):
     """Отказ Telegram показываем словами: «не ушло» без причины сотруднику бесполезно."""
     monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(

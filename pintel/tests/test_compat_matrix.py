@@ -192,3 +192,135 @@ def test_report_says_plainly_that_ios15_cannot_confirm():
     assert rep["паспорт"]["ios"].startswith("15.2")
     assert rep["apple_подтверждение_возможно"] is False
     assert any("не подтверждает в принципе" in x for x in rep["не_прочиталось"]), rep["не_прочиталось"]
+
+
+# ---------------------------------------------------------------- молчание канала — не вердикт
+# Общее правило отчёта: «отсутствие данных НЕ превращается в вердикт». Ниже — места, где оно
+# нарушалось молча, то есть проверка выглядела целой, а часть её просто не состоялась.
+
+def test_a_missing_touch_key_is_not_zero_errors():
+    """num(None) = 0, и «ключа нет» выглядело как «критических ошибок нет»: тачскрин получал
+    зелёный из ничего, да ещё и подтверждал деталь «Экран» по кабелю. Apple уже переносила
+    ключи (ёмкости батареи в iOS 26) — молчание узла обязано читаться как «нет данных»."""
+    from pintel_core.analysis import pairing
+    assert pairing.touch({"Critical Errors": 0}) == (True, 0)
+    assert pairing.touch({"Critical Errors": 3}) == (False, 3)
+    assert pairing.touch({"ChipRevision": "B2"}) == (None, None)     # узел есть, ключа нет
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    snap["nodes"]["AppleMultitouchDevice"].pop("Critical Errors", None)
+    rep = report_mod.build(snap)
+    assert rep["сигналы"]["Тачскрин"]["ок"] is None
+    assert not any("критических ошибок нет" in str(d.get("почему")) 
+                   for d in rep["детали_вердикт"]["детали"])
+
+
+def test_a_battery_node_without_capacities_is_not_a_read_battery():
+    """Узел батареи есть, ёмкостей в нём нет: ни здоровья, ни проверки на подделку. Раньше
+    это давало «ёмкость в норме заводской» по детали «Аккумулятор» и ноль циклов — а ноль
+    циклов выбирает самую дорогую колонку прайса Оценки («100 (0-30)»)."""
+    from pintel_core.analysis import battery
+    from pintel_core.external import ocenka
+    пустой = battery.analyze({"Serial": "F8Y", "BatteryInstalled": 1})
+    assert пустой["есть_данные"] is False and пустой["узел_есть"] is True
+    assert пустой["циклы"] is None and пустой["здоровье_%"] is None
+    assert пустой["подделка"] == []                                  # и ложного стопа тоже нет
+    assert ocenka.акб_для_оценки(пустой["здоровье_%"], пустой["циклы"]) == ocenka.АКБ_НЕТ
+    assert ocenka.акб_для_оценки(100, пустой["циклы"]) == "100"      # не «100 (0-30)»
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    snap["nodes"]["AppleSmartBattery"] = {"Serial": "F8Y"}
+    rep = report_mod.build(snap)
+    assert any("батарея не прочиталась" in x for x in rep["не_прочиталось"])
+    assert rep["итог"]["вердикт"] == "ПРОВЕРКА НЕПОЛНАЯ"
+
+
+def test_one_size_source_is_not_an_agreement():
+    """«Объём сошёлся» при одном источнике было утверждением о сверке, которой не было:
+    узел NVMe не прочитался — и всё равно «сошёлся». Перепайку ловит расхождение."""
+    from pintel_core.analysis import storage
+    один = storage.analyze({"TotalDiskCapacity": 61000000000}, None)
+    assert один["объём_гб"] == 64 and один["объём_сошёлся"] is None
+
+
+def test_bases_that_were_never_asked_are_named_in_the_report():
+    """Непроверенный чёрный список — это НЕ чистый чёрный список. Шаг на экране киоска горел
+    оранжевым, а в отчёте о нём не было ни слова, и аппарат выглядел ровно как проверенный."""
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    snap["quality"]["не_проверено"] = {"чёрный список (Sickw)": "база IMEI недоступна",
+                                       "реестр РФС": "реестр РФС не проверялся — TimeoutError"}
+    rep = report_mod.build(snap)
+    assert any("чёрный список (Sickw)" in x for x in rep["не_прочиталось"])
+    assert any("реестр РФС" in x for x in rep["не_прочиталось"])
+    assert rep["итог"]["вердикт"] == "ПРОВЕРКА НЕПОЛНАЯ"
+
+
+def test_a_failed_node_read_does_not_stay_silent():
+    """На живом iPhone 14 Pro в сборке не оказалось wintun.dll: туннель не поднялся, и по
+    кабелю молча пропали цвет корпуса и серийники части модулей. Отказ чтения — это наш
+    канал, он идёт в «служебное»; но и вердикт после него полным называться не может.
+    Пустой ответ узла («пусто») — другое дело: у модели такого узла может не быть."""
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    snap["quality"]["не_прочиталось"] = {"product": "TimeoutError: нет ответа"}
+    rep = report_mod.build(snap)
+    assert any("product" in x for x in rep["служебное"])
+    assert any("не прочиталась" in x for x in rep["не_прочиталось"])
+    snap["quality"]["не_прочиталось"] = {"AIDBus": "пусто", "AppleProxHIDEventDriver": "пусто"}
+    rep = report_mod.build(snap)
+    assert not any("узлы телефона" in x for x in rep["служебное"])
+
+
+def test_the_line_a_person_can_close_is_kept_apart():
+    """Сверку деталей на телефоне закрывает сотрудник (пункт «Детали Apple» ручной
+    диагностики), а «батарея не прочиталась» не закрывает никто. Бот снимает автоцену по
+    второму списку, поэтому различать их по тексту нельзя — нужен отдельный ключ."""
+    from pintel_core.external import ocenka
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    rep = report_mod.build(snap)
+    assert rep["сверка_деталей"] and rep["сверка_деталей"] in rep["не_прочиталось"]
+    assert ocenka.сверка_нужна(rep) is True
+    assert ocenka.незакрытое(rep) == []                      # закрыть нечем — ничего
+    snap["nodes"]["AppleSmartBattery"] = {}
+    rep = report_mod.build(snap)
+    assert any("батарея" in x for x in ocenka.незакрытое(rep))
+
+
+def test_an_unrecognised_model_is_not_a_model_without_an_apple_section():
+    """`supported()` отвечает «нет» и про iPhone X (раздела правда нет), и про НЕ РАСПОЗНАННУЮ
+    модель. Во втором случае аппарат получал «все детали родные» вообще без участия Apple, а
+    клиенту писалось «у этой модели Apple историю деталей не ведёт» — утверждение, которого
+    никто не проверял. Не знаем модель — спрашиваем Apple строго."""
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    snap["root"]["ProductType"] = "iPhoneXX,9"              # паспорт не прочитался / новая модель
+    rep = report_mod.build(snap)
+    assert rep["детали_вердикт"]["итог"] != "родные", rep["детали_вердикт"]
+    assert any("модель не распознана" in x for x in rep["не_прочиталось"])
+    # а настоящий iPhone X так и остаётся моделью без раздела: там кабель — единственный канал
+    snap["root"]["ProductType"], snap["root"]["ProductVersion"] = "iPhone10,6", "16.7.10"
+    snap.pop("repair_history", None)
+    snap["repair_history_meta"] = {}
+    rep = report_mod.build(snap)
+    assert rep["apple_история_статус"] == "не поддерживается"
+    assert rep["детали_вердикт"]["итог"] == "родные"
+    assert not any("модель не распознана" in x for x in rep["не_прочиталось"])
+
+
+def test_a_broken_factory_seal_is_also_said_in_words():
+    """Нарушенную печать FDR вердикт по деталям учитывал, а «стоп» о ней молчал: заголовок
+    отчёта мог остаться ИДЕАЛ «проверенные детали на месте». Отчёт и вердикт обязаны
+    говорить одно и то же."""
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    assert not any("печать" in x for x in report_mod.build(snap)["стоп"])    # слепок чистый
+    snap["mobilegestalt"] = {"FDRSealingStatus": 0, "IsServicePart": 1}
+    rep = report_mod.build(snap)
+    assert rep["печать_деталей"]["печать_цела"] is False
+    assert any("печать деталей нарушена" in x for x in rep["стоп"])
+    assert any("сервисная деталь" in x for x in rep["внимание"])
+    assert rep["итог"]["вердикт"] == "ПРОБЛЕМНЫЙ"           # а был ИДЕАЛ «детали на месте»
+
+
+def test_a_journal_channel_that_died_is_not_a_silent_phone():
+    """После 30 обрывов подряд слушатель мёртв, а снаружи он выглядит ровно как ждущий
+    вердикта. Для оценщика это разные вещи: во втором случае ждать есть смысл."""
+    snap = _snap("iphone12_ios26_anon.snapshot.json")
+    snap["repair_history_meta"] = {**(snap.get("repair_history_meta") or {}), "канал_потерян": True}
+    rep = report_mod.build(snap)
+    assert any("оборвался" in x for x in rep["служебное"])

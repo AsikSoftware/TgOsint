@@ -87,6 +87,8 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
             had_cable = True
     # батарея: подделка/аутентификация
     if battery and battery.get("есть_данные"):
+        # «есть_данные» здесь обязано значить «прочитались ёмкости»: без них нет ни здоровья,
+        # ни проверки на подделку, и объявлять деталь родной нечем.
         had_cable = True
         if battery.get("подделка"):
             note("Battery", "bad", battery["подделка"][0], "батарея (кабель)")

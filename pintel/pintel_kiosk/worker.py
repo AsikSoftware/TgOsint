@@ -73,32 +73,36 @@ def убрать_старое(дней=90):
 
 
 def проверить_рфс(cfg, имеи, step):
-    """Реестр РФС РК по всем IMEI аппарата → результаты, или None (выключено, нечего).
+    """Реестр РФС РК по всем IMEI аппарата → (результаты, почему проверки не было).
 
     Один и тот же шаг для аппарата на кабеле и для запечатанного по коробке: гос-реестр
     отвечает по секунде на запрос, отказывает точечно, из-за рубежа может молчать —
-    всё это шаг показывает словами, а отчёт решает, что с этим делать."""
+    всё это шаг показывает словами, а отчёт решает, что с этим делать.
+
+    Вторым значением возвращается причина, по которой проверки НЕ было: шаг на экране
+    горел оранжевым, а в отчёт не попадало ничего, и аппарат с непроверенным реестром
+    выглядел ровно как проверенный и чистый."""
     имеи = [str(x or "").strip() for x in (имеи or []) if str(x or "").strip()]
     if not имеи:
         step("rfs", "warn", "у телефона нет IMEI")
-        return None
+        return None, "реестр РФС не проверялся — у телефона не прочитался IMEI"
     if not cfg.get("rfs", True):
         step("rfs", "warn", "выключена (kiosk.toml)")
-        return None
+        return None, "реестр РФС не проверялся — проверка выключена в kiosk.toml"
     step("rfs", "run", f"{len(имеи)} IMEI")
     try:
         итог = rfs.проверить(имеи, os.path.join(data_dir(), "cache", "rfs"), cfg.get("rfs_proxy") or None)
     except Exception as e:                                       # noqa: BLE001 — реестр не роняет приём
         step("rfs", "warn", "реестр недоступен")
         log_line(f"rfs: {e}")
-        return None
+        return None, f"реестр РФС не проверялся — {type(e).__name__}"
     св = rfs.сводка(итог)
     step("rfs",
          {rfs.BLOCKED: "fail", rfs.NOT_VERIFIED: "warn", rfs.UNKNOWN: "warn"}.get(св["вердикт"], "done"),
          {rfs.BLOCKED: "ЗАБЛОКИРОВАН",
           rfs.NOT_VERIFIED: "не верифицирован" + (f" · до {св['срок']}" if св.get("срок") else ""),
           rfs.UNKNOWN: "реестр не ответил"}.get(св["вердикт"], "верифицирован"))
-    return итог
+    return итог, ""
 
 
 class Pipeline(QThread):
@@ -213,29 +217,43 @@ class Pipeline(QThread):
         if self.cancel.is_set():
             return
 
-        # Sickw через сервер (ключ только там)
+        # Sickw через сервер (ключ только там). Непроверенный чёрный список — это НЕ чистый
+        # чёрный список: шаг горел оранжевым, а в отчёте о нём не было ни слова.
+        # Запрос блокирующий, поэтому в отдельный поток: иначе на всё время ожидания
+        # встаёт цикл событий и слушатель журнала не читает syslog — а именно там приходит
+        # ПОВТОРНАЯ печать записей Apple, в которой и появляются замены.
+        не_проверено = snap.setdefault("quality", {}).setdefault("не_проверено", {})
         imei = pas.get("imei") or ""
         if self.cfg.get("sickw", True) and (self.client.enabled or self.client.local_sickw) and sickw.luhn_ok(imei):
             self._step("sickw", "run")
             try:
-                snap["sickw"] = self.client.sickw(imei)
+                snap["sickw"] = await asyncio.to_thread(self.client.sickw, imei)
                 rep = report_mod.build(snap)
                 sk = rep.get("sickw") or {}
+                if sk.get("в_чёрном_списке") is None:
+                    # ответ пришёл, а поля чёрного списка в нём нет — «проверено» тут неправда
+                    не_проверено["чёрный список (Sickw)"] = "в ответе базы IMEI нет статуса чёрного списка"
                 self._step("sickw", "done" if sk.get("в_чёрном_списке") is not True else "fail",
                            "чисто" if sk.get("в_чёрном_списке") is False else (sk.get("чёрный_список") or "проверено"))
             except ServerError as e:
                 self._step("sickw", "warn", "база недоступна")
+                не_проверено["чёрный список (Sickw)"] = "база IMEI недоступна"
                 log_line(f"sickw: {e}")
         elif not sickw.luhn_ok(imei):
             self._step("sickw", "warn", "у телефона нет IMEI")
+            не_проверено["чёрный список (Sickw)"] = "у телефона не прочитался IMEI"
         else:
             self._step("sickw", "warn", "не настроена (kiosk.toml)")
+            не_проверено["чёрный список (Sickw)"] = "база IMEI не настроена (kiosk.toml)"
 
         # Реестр РФС РК — оба IMEI, при любой оценке
-        рфс = проверить_рфс(self.cfg, [pas.get("imei"), pas.get("imei2")], self._step)
+        рфс, рфс_нет = await asyncio.to_thread(
+            проверить_рфс, self.cfg, [pas.get("imei"), pas.get("imei2")], self._step)
+        if рфс_нет:
+            не_проверено["реестр РФС"] = рфс_нет
         if рфс is not None:
             snap["rfs"] = рфс
-            rep = report_mod.build(snap)
+        rep = report_mod.build(snap)
         if self.cancel.is_set():
             return
 
@@ -247,7 +265,8 @@ class Pipeline(QThread):
         payload = {"client_id": cid, "report": json.loads(snapshot.dumps(rep)),
                    "snapshot": json.loads(snapshot.dumps(snap))}
         self._step("upload", "run")
-        server = self.client.upload(payload)          # без связи кладёт в очередь сама
+        # в отдельный поток по той же причине: пока ждём сервер, журнал Apple должен читаться
+        server = await asyncio.to_thread(self.client.upload, payload)   # без связи кладёт в очередь сама
         if not server:
             server = {"номер": self.client.local_number(), "локально": True}
             self._step("upload", "done" if not self.client.enabled else "warn",
@@ -357,27 +376,33 @@ class SealedPipeline(QThread):
             self.failed.emit("IMEI с коробки не проходит контрольную цифру — проверьте цифры")
             return
         self._step("passport", "run", "по базе IMEI")
-        sk = None
+        sk, не_проверено = None, {}
         службы = [int(x) for x in (self.cfg.get("sickw_services_sealed") or [sickw.SERVICE_SEALED])]
         if self.cfg.get("sickw", True) and (self.client.enabled or self.client.local_sickw):
             self._step("sickw", "run", "служба " + ", ".join(map(str, службы)))
             try:
                 sk = self.client.sickw(имеи[0], services=службы)
+                if sk.get("в_чёрном_списке") is None:
+                    не_проверено["чёрный список (Sickw)"] = "в ответе базы IMEI нет статуса чёрного списка"
                 self._step("sickw", "done" if sk.get("в_чёрном_списке") is not True else "fail",
                            "чисто" if sk.get("в_чёрном_списке") is False
                            else (sk.get("чёрный_список") or "проверено"))
             except ServerError as e:
                 self._step("sickw", "warn", "база недоступна")
+                не_проверено["чёрный список (Sickw)"] = "база IMEI недоступна"
                 log_line(f"sickw: {e}")
         else:
             self._step("sickw", "warn", "не настроена (kiosk.toml)")
+            не_проверено["чёрный список (Sickw)"] = "база IMEI не настроена (kiosk.toml)"
         if sk and sk.get("модель"):
             self._step("passport", "done", f"{sk['модель']} · {sk.get('объём_гб') or '?'} ГБ")
         else:
             self._step("passport", "warn", "модель по базе не определилась")
 
-        рфс = проверить_рфс(self.cfg, имеи, self._step)
-        rep = sealed_mod.build(sk, имеи, рфс)
+        рфс, рфс_нет = проверить_рфс(self.cfg, имеи, self._step)
+        if рфс_нет:
+            не_проверено["реестр РФС"] = рфс_нет
+        rep = sealed_mod.build(sk, имеи, рфс, не_проверено=не_проверено)
         out = os.path.join(data_dir(), "out", f"{datetime.now():%Y%m%d_%H%M%S}_box_{имеи[0][-6:]}")
         os.makedirs(out, exist_ok=True)
         open(os.path.join(out, "report.json"), "w", encoding="utf-8").write(snapshot.dumps(rep))

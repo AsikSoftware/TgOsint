@@ -40,7 +40,10 @@ def analyze(disk, nvme=None):
 
     mk = marketed_gb(total)
     sources = [x for x in (mk, marketed_gb(nv_cap) if nv_cap else None, nv_model_gb) if x]
-    agree = (len(set(sources)) <= 1) if sources else None
+    # Сверять объём есть с чем только при ДВУХ источниках и больше: с одним «объём сошёлся»
+    # было утверждением о сверке, которой не было (узел NVMe не прочитался — и всё равно
+    # «сошёлся»). Перепайку памяти ловит именно расхождение источников.
+    agree = (len(set(sources)) <= 1) if len(sources) >= 2 else None
     return {
         "есть_данные": bool(d),
         "объём_гб": mk,

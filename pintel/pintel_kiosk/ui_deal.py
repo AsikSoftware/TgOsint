@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxL
                                QPushButton, QSizePolicy, QStackedWidget, QTextEdit, QVBoxLayout,
                                QWidget)
 
+from pintel_core.external import ocenka_media
+
 from .ui import (C, FONT_HEAD, FONT_NUM, FONT_TEXT, QrBlock, Screen, StepRow, STEPS, W, font,
                  kicker, label, point_text, qr_pixmap)
 
@@ -236,7 +238,7 @@ class WorkScreen(Screen):
         b_пропуск.clicked.connect(self.пропустить_apple.emit)
         ал.addWidget(b_пропуск, 0, Qt.AlignLeft)
 
-        медиа, мл = _карточка("ФОТО И ВИДЕО — ЧЕРЕЗ БОТА")
+        медиа, мл = _карточка("ФОТО, ВИДЕО И ДИАГНОСТИКА — ЧЕРЕЗ БОТА")
         self.qr = QrBlock()
         мл.addWidget(self.qr, 0, Qt.AlignHCenter)
         self.код = label("—", font_=font(FONT_NUM, 30, W.Bold))
@@ -250,6 +252,16 @@ class WorkScreen(Screen):
                            "muted", wrap=True)
         self.медиа.setAlignment(Qt.AlignHCenter)
         мл.addWidget(self.медиа)
+        # Последний шаг — ручная диагностика теми же кнопками в боте. Кабель не нажмёт
+        # кнопку, не послушает динамик и не посмотрит на следы воды в лотке; без отметок
+        # бот сделку не создаёт. Список держим на экране: телефон клиента в руках здесь, а
+        # не в чате, и проверять удобнее, пока он на столе.
+        мл.addWidget(label("ПОТОМ — РУЧНАЯ ДИАГНОСТИКА, ПО ПУНКТАМ", "muted",
+                           font_=font(FONT_TEXT, 17, W.Bold), wrap=True))
+        пункты = label(ocenka_media.пункты_словами(), "muted", wrap=True)
+        пункты.setAlignment(Qt.AlignHCenter)
+        мл.addWidget(пункты)
+        мл.addWidget(label("Без всех отметок бот сделку не создаёт.", "muted", wrap=True))
         мл.addStretch(1)
         b_код = QPushButton("Другой код")
         b_код.setObjectName("small")

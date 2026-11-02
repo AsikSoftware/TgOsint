@@ -265,21 +265,15 @@ def auto_truth(staff=None, раздел_открывали=None):
                           когда=str(s.get("когда") or datetime.now().isoformat()))
 
 
-# Запись журнала = строка, начинающаяся с метки времени; внутри записи бывают переводы строк
-_ENTRY_RE = re.compile(r"\n(?=(?:#\s*похожее:\s*)?[A-Z][a-z]{2}\s+\d+\s+\d\d:\d\d:\d\d\s)")
-
-
 def replay(raw):
     """Прогнать сырой журнал через слушатель заново — так же, как он шёл с телефона.
     → (записи, метаданные). Нужно, чтобы эталон проверял СЕГОДНЯШНИЙ разбор, а не тот,
-    что был в момент сбора."""
-    from .devicelink.repair_history import Listener
-    lst = Listener(None)
-    for entry in _ENTRY_RE.split(raw or ""):
-        entry = re.sub(r"^#\s*похожее:\s*", "", entry)
-        if entry.strip():
-            lst._feed(entry)
-    return lst.items, lst.meta
+    что был в момент сбора.
+
+    Сам прогон живёт рядом со слушателем (`repair_history.перечитать`): тем же перечитыванием
+    отчёт поднимает вердикт из слепка, у которого разобранных записей нет."""
+    from .devicelink.repair_history import перечитать
+    return перечитать(raw)
 
 
 def load_bundle(path, loads=json.loads):

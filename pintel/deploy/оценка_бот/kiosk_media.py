@@ -52,6 +52,9 @@ router_kiosk_media = Router()
 # работает в любой версии aiogram 3 и наверняка не перехватит чужой /start.
 СТАРТ = re.compile(r"^/start(?:@\w+)?\s+p([A-Z0-9]{4,12})\b")
 ТОЧКА = re.compile(r"^kmedia_shop_([A-Z0-9]{4,12})_(\d+)$")
+# пункт ручной диагностики: префикс, код сделки, ключ пункта (ASCII, из kiosk_core.ПУНКТЫ)
+ПУНКТ = re.compile(r"^kmchk_([A-Z0-9]{4,12})_([a-z]+)$")
+ГОТОВО_ДИАГ = re.compile(r"^kmchkok_([A-Z0-9]{4,12})$")
 
 
 class KioskMediaState(StatesGroup):
@@ -91,7 +94,7 @@ def _имя(user) -> str:
 async def _строка(код: str):
     async with async_session_factory() as session:
         res = await session.execute(text(
-            "SELECT id, video, photos, done, device_id, user_id, shop_id "
+            "SELECT id, video, photos, done, device_id, user_id, shop_id, chat_id, checks "
             "FROM kiosk_media WHERE code = :c"), {"c": код})
         return res.mappings().first()
 
@@ -107,6 +110,13 @@ async def _завести(код: str, user_id, chat_id: int, shop_id=None) -> N
             "ON CONFLICT (code) DO UPDATE SET user_id = :u, chat_id = :ch, "
             "shop_id = COALESCE(:s, kiosk_media.shop_id)"),
             {"c": код, "u": user_id, "ch": chat_id, "s": shop_id})
+        await session.commit()
+
+
+async def _поставить_диагностику(код: str, отметки: dict) -> None:
+    async with async_session_factory() as session:
+        await session.execute(text("UPDATE kiosk_media SET checks = :v WHERE code = :c"),
+                              {"v": kiosk_core.диагностика_сохранить(отметки), "c": код})
         await session.commit()
 
 
@@ -162,6 +172,67 @@ async def _кнопки_точек(код: str, user_id=None):
     return kb.as_markup()
 
 
+# ---------------------------------------------------------------- ручная диагностика
+
+ЗНАЧКИ = {None: "⬜", True: "✅", False: "❌"}
+
+
+def _кнопки_диагностики(код: str, отметки):
+    """Пункты по два в ряд: нажатие переключает ⬜ → ✅ → ❌ → ⬜.
+
+    Одно сообщение на всю диагностику, а не вопрос за вопросом: сотрудник держит телефон
+    клиента в руках, и двенадцать отдельных сообщений он просто не дочитает. Счётчик живёт
+    на кнопке «Готово» — тогда на каждое нажатие правится только клавиатура, одним запросом.
+    """
+    d = kiosk_core.диагностика_разобрать(отметки)
+    kb = InlineKeyboardBuilder()
+    for ключ in kiosk_core.КЛЮЧИ:
+        kb.button(text=f"{ЗНАЧКИ[d.get(ключ)]} {kiosk_core.КОРОТКО[ключ]}",
+                  callback_data=f"kmchk_{код}_{ключ}")
+    kb.button(text=("☑️ " if d.get(kiosk_core.ЗАПЕЧАТАН) else "📦 ") + "Запечатан — не вскрывали",
+              callback_data=f"kmchk_{код}_{kiosk_core.ЗАПЕЧАТАН}")
+    осталось = kiosk_core.не_отмечено(d)
+    kb.button(text="Готово" if not осталось else f"Готово · осталось {len(осталось)}",
+              callback_data=f"kmchkok_{код}")
+    kb.adjust(*([2] * (len(kiosk_core.КЛЮЧИ) // 2 + len(kiosk_core.КЛЮЧИ) % 2) + [1, 1]))
+    return kb.as_markup()
+
+
+def _текст_диагностики() -> str:
+    пункты = "\n".join(f"{n}. <b>{к}</b> — {п}" for n, (_, к, п) in enumerate(kiosk_core.ПУНКТЫ, 1))
+    return ("<b>Ручная диагностика</b> — последний шаг.\n"
+            "Кабель этого не видит: проверьте телефон руками и отметьте каждый пункт.\n\n"
+            + пункты
+            + "\n\n⬜ не отмечено · ✅ работает · ❌ не работает или не проверить\n"
+              "Нечем проверить — ставьте ❌: сделка уйдёт на оценку человеку.\n"
+              "Без всех отметок сделку не создам.")
+
+
+async def _дальше(отправить, код: str, шапка: str = "") -> None:
+    """Что сотруднику делать прямо сейчас: медиа → точка → ручная диагностика → отправка.
+
+    Одно место на все четыре входа (ссылка из QR, присланное медиа, выбор точки, кнопка
+    диагностики): порядок шагов не должен расходиться между ними.
+    """
+    строка = await _строка(код)
+    if строка is None:
+        return
+    осталось = kiosk_core.чего_не_хватает(строка)
+    if осталось:
+        await отправить(f"{шапка}Сейчас: {осталось[0]}")
+        return
+    if not строка["shop_id"]:
+        await отправить(f"{шапка}Медиа собраны. Выберите точку, где идёт оценка:",
+                        reply_markup=await _кнопки_точек(код, строка["user_id"]))
+        return
+    if not kiosk_core.диагностика_готова(строка["checks"]):
+        await отправить(шапка + _текст_диагностики(),
+                        reply_markup=_кнопки_диагностики(код, строка["checks"]))
+        return
+    await отправить(f"{шапка}Медиа собраны, диагностика пройдена. "
+                    "Отправьте оценку из программы — сделку создам по этому коду.")
+
+
 async def _добавить(код: str, file_id: str, видео: bool) -> None:
     """Видео одно — последнее присланное; фото копятся через «||», как в самой Оценке."""
     async with async_session_factory() as session:
@@ -200,15 +271,16 @@ async def открыть_приём(message: Message, state: FSMContext):
     await state.update_data(kmedia_code=код)
     точка = (f"Точка: <b>{await _имя_точки(shop_id)}</b> — ваша.\n" if shop_id
              else "Точку выберете кнопкой, когда пришлёте медиа.\n")
-    строка = await _строка(код)
-    осталось = kiosk_core.чего_не_хватает(строка)
     await message.answer(
-        f"Принимаю медиа для сделки, {сотрудник.first_name or 'коллега'}.\n"
+        f"Принимаю оценку с точки, {сотрудник.first_name or 'коллега'}.\n"
         f"{точка}\n"
-        f"{kiosk_core.шаги_списком()}\n\n"
-        f"Присылайте по одному, в этом порядке — приму только то, что нужно на шаге.\n"
-        f"Сейчас: {осталось[0]}"
+        f"{kiosk_core.шаги_списком()}\n"
+        f"{len(kiosk_core.ЭТАПЫ_ФОТО) + 2}. ручная диагностика по пунктам — кнопками, в конце\n\n"
+        f"Медиа присылайте по одному, в этом порядке — приму только то, что нужно на шаге."
     )
+    # что именно сейчас, считает одно место: ссылку открывают и повторно, когда медиа уже
+    # собраны, и тогда вместо «пришлите фото» нужна диагностика или отправка из программы
+    await _дальше(message.answer, код)
 
 
 @router_kiosk_media.message(KioskMediaState.приём, F.video | F.video_note | F.photo | F.document)
@@ -248,17 +320,9 @@ async def принять(message: Message, state: FSMContext):
         текст = (f"✅ Фото {n} из {надо} принято." if n <= надо
                  else f"✅ Ещё одно фото принято, всего {n}.")
 
-    осталось = kiosk_core.чего_не_хватает(строка)
-    if осталось:
-        await message.answer(f"{текст}\n\nСейчас: {осталось[0]}")
-        return
-    # всё собрано — и только теперь точка; на каждое фото список точек не шлём
-    if not строка["shop_id"]:
-        await message.answer(f"{текст}\n\nМедиа собраны. Выберите точку, где идёт оценка:",
-                             reply_markup=await _кнопки_точек(код, строка["user_id"]))
-        return
-    await message.answer(f"{текст}\n\nМедиа собраны. Отправьте оценку из программы — "
-                         "сделку создам по этому коду.")
+    # что дальше — точка, ручная диагностика или отправка из программы — решает _дальше:
+    # список точек и диагностику на каждое фото не шлём, только когда до них дошли
+    await _дальше(message.answer, код, шапка=f"{текст}\n\n")
 
 
 @router_kiosk_media.callback_query(F.data.startswith("kmedia_done_"))
@@ -272,19 +336,8 @@ async def что_принято(call: CallbackQuery):
     if строка is None:
         await call.answer("Код не найден", show_alert=True)
         return
-    осталось = kiosk_core.чего_не_хватает(строка)
     await call.answer()
-    if осталось:
-        await call.message.answer("Ещё не всё:\n" + "\n".join("• " + ш for ш in осталось))
-        return
-    if not строка["shop_id"]:
-        await call.message.answer("Осталось выбрать точку, где идёт оценка:",
-                                  reply_markup=await _кнопки_точек(код, строка["user_id"]))
-        return
-    await call.message.answer(
-        f"Принято: видео есть, фото {kiosk_core.сколько_фото(строка)}. "
-        f"Точка: <b>{await _имя_точки(строка['shop_id'])}</b>.\n"
-        "Отправьте оценку из программы — сделку создам по этому коду.")
+    await _дальше(call.message.answer, код)
 
 
 @router_kiosk_media.callback_query(F.data.startswith("kmedia_shop_"))
@@ -310,13 +363,70 @@ async def выбрать_точку(call: CallbackQuery):
     await _поставить_точку(код, shop_id)
     имя = await _имя_точки(shop_id)
     await call.answer(f"Точка: {имя}")
-    осталось = kiosk_core.чего_не_хватает(строка)
-    хвост = ("Отправьте оценку из программы — сделку создам по этому коду." if not осталось
-             else "Осталось прислать:\n" + "\n".join("• " + ш for ш in осталось))
     try:                                   # правим то же сообщение: список точек больше не нужен
-        await call.message.edit_text(f"Точка: <b>{имя}</b>.\n{хвост}")
-    except Exception:                      # noqa: BLE001 — не вышло править, просто ответим
-        await call.message.answer(f"Точка: <b>{имя}</b>.\n{хвост}")
+        await call.message.edit_text(f"Точка: <b>{имя}</b>.")
+    except Exception:                      # noqa: BLE001 — не вышло править, не беда
+        pass
+    await _дальше(call.message.answer, код)
+
+
+# ---------------------------------------------------------------- ручная диагностика: нажатия
+
+@router_kiosk_media.callback_query(F.data.regexp(ПУНКТ.pattern))
+async def отметить_пункт(call: CallbackQuery):
+    """Нажали на пункт диагностики: переключаем ⬜ → ✅ → ❌ → ⬜ и правим клавиатуру."""
+    совпало = ПУНКТ.match(call.data or "")
+    if not совпало:
+        await call.answer()
+        return
+    код, ключ = совпало.group(1), совпало.group(2)
+    if await _сотрудник(call.from_user.id) is None:
+        await call.answer("Диагностику отмечают сотрудники Pintel", show_alert=True)
+        return
+    строка = await _строка(код)
+    if строка is None:
+        await call.answer("Код не найден", show_alert=True)
+        return
+    if строка["device_id"]:
+        await call.answer(f"Сделка № {строка['device_id']} уже создана — отметки не меняю",
+                          show_alert=True)
+        return
+    отметки = kiosk_core.диагностика_переключить(строка["checks"], ключ)
+    await _поставить_диагностику(код, отметки)
+    знак = {None: "не отмечено", True: "работает", False: "НЕ работает"}
+    if ключ == kiosk_core.ЗАПЕЧАТАН:
+        await call.answer("Коробку не вскрывали" if отметки.get(kiosk_core.ЗАПЕЧАТАН)
+                          else "Отметка снята")
+    else:
+        await call.answer(f"{kiosk_core.КОРОТКО.get(ключ, ключ)}: {знак[отметки.get(ключ)]}")
+    try:
+        await call.message.edit_reply_markup(reply_markup=_кнопки_диагностики(код, отметки))
+    except Exception:                      # noqa: BLE001 — то же сообщение, Telegram иногда отказывает
+        pass
+
+
+@router_kiosk_media.callback_query(F.data.regexp(ГОТОВО_ДИАГ.pattern))
+async def подтвердить_диагностику(call: CallbackQuery):
+    """«Готово» под диагностикой: либо называем, чего не отметили, либо подтверждаем."""
+    совпало = ГОТОВО_ДИАГ.match(call.data or "")
+    if not совпало:
+        await call.answer()
+        return
+    код = совпало.group(1)
+    строка = await _строка(код)
+    if строка is None:
+        await call.answer("Код не найден", show_alert=True)
+        return
+    осталось = kiosk_core.не_отмечено(строка["checks"])
+    if осталось:
+        await call.answer("Не отмечено: " + ", ".join(осталось)[:170], show_alert=True)
+        return
+    плох = [имя for _, имя in kiosk_core.плохие(строка["checks"])]
+    await call.answer("Диагностика принята")
+    итог = ("НЕ работает: " + ", ".join(плох) + ".\nСделка уйдёт оценщику на ручную оценку."
+            if плох else "Всё работает.")
+    await call.message.answer(f"✅ Ручная диагностика принята. {итог}\n\n"
+                              "Отправьте оценку из программы — сделку создам по этому коду.")
 
 
 # ---------------------------------------------------------------- сама сделка
@@ -353,6 +463,17 @@ async def создать_сделку(call: CallbackQuery, bot: Bot):
         нет = kiosk_core.проверить(посылка, строка)
         if нет:
             await call.answer("Не хватает: " + "; ".join(нет)[:180], show_alert=True)
+            # Диагностику отмечают в личке у того, кто сдавал медиа, а кнопку жмут в группе:
+            # без этой подсказки сотрудник видит отказ и не знает, куда идти.
+            if not kiosk_core.диагностика_готова(строка["checks"]) and строка["chat_id"]:
+                try:
+                    await bot.send_message(
+                        chat_id=строка["chat_id"],
+                        text=f"Сделку по коду {код} не создал: нет ручной диагностики.\n\n"
+                             + _текст_диагностики(),
+                        reply_markup=_кнопки_диагностики(код, строка["checks"]))
+                except Exception as exc:                         # noqa: BLE001
+                    logging.getLogger(__name__).warning("kiosk: диагностика не ушла: %s", exc)
             return
         сделка = await _вставить(посылка, строка, нажал=нажал)
     except kiosk_core.ОшибкаПосылки as exc:
@@ -402,6 +523,11 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     shop_id = медиа["shop_id"]                 # у продавца своя точка, админ выбрал её в боте
     фото = [x for x in str(медиа["photos"] or "").split("||") if x]
     поля = kiosk_core.колонки(посылка)
+    # Ручная диагностика и неполнота проверки — в состояние сделки и в комментарий оценщика.
+    # Найденная руками поломка снимает автоцену, иначе диагностика осталась бы отчётом ни о чём.
+    отметки = kiosk_core.диагностика_разобрать(медиа["checks"])
+    неполно = kiosk_core.неполнота(посылка)
+    поля = kiosk_core.применить_диагностику(поля, отметки, неполно)
     поля.update({
         # цену и статус ставим после вставки: автоцену считает сама Оценка по своему
         # прайсу (utils/google_price.py), ровно как в её собственном потоке
@@ -430,7 +556,7 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
 
     цена = await _автоцена(device_id)
     статус = kiosk_core.статус_id({"phone_status": поля.get("phone_status"),
-                                   "price_grade_auto": цена})
+                                   "price_grade_auto": цена}, отметки, неполно)
     async with async_session_factory() as session:
         await session.execute(text(
             "UPDATE devices SET price_grade_auto = :p, status_id = :s WHERE id = :i"),

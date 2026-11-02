@@ -12,7 +12,7 @@ from ..external import rfs as rfs_mod
 ИТОГ_ДЕТАЛЕЙ = "запечатан"
 
 
-def build(sk, imeis, рфс=None):
+def build(sk, imeis, рфс=None, не_проверено=None):
     sk = dict(sk or {})
     имеи = [str(x or "").strip() for x in (imeis or []) if str(x or "").strip()]
     пас = {"модель": sk.get("модель") or "iPhone", "код_модели": None, "ios": None,
@@ -50,6 +50,10 @@ def build(sk, imeis, рфс=None):
     stop.extend(s)
     warn.extend(w)
     unknown.extend(u)
+    # Шаг мог не состояться вовсе (нет ключа, сеть, реестр молчит). Без этой строки
+    # запечатанный с непроверенным реестром выглядел как «по базе IMEI чист».
+    for ключ, почему in (не_проверено or {}).items():
+        unknown.append(f"{ключ}: {почему}")
 
     if stop:
         verdict = ("ПРОБЛЕМНЫЙ", "; ".join(stop[:3]))

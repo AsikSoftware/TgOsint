@@ -96,7 +96,13 @@ def touch(touch_node):
     t = touch_node or {}
     if not t:
         return None, None
-    errs = num(deep(t, "Critical Errors"))
+    сырое = deep(t, "Critical Errors")
+    if сырое is None:
+        # num(None) = 0, то есть «ключа нет» выглядело как «ошибок нет», и тачскрин получал
+        # зелёный из ничего. Apple уже переносила ключи (ёмкости батареи в iOS 26) — молчание
+        # узла обязано читаться как «нет данных», иначе сигнал подтверждает сам себя.
+        return None, None
+    errs = num(сырое)
     return errs == 0, errs
 
 

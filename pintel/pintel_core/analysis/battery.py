@@ -17,7 +17,8 @@ def analyze(node):
     b = node or {}
     design = num(deep(b, "DesignCapacity"))
     nominal = num(deep(b, "NominalChargeCapacity")) or num(deep(b, "AppleRawMaxCapacity"))
-    cycles = num(deep(b, "CycleCount"))
+    сырые_циклы = deep(b, "CycleCount")
+    cycles = num(сырые_циклы)
     op_h = num(deep(b, "TotalOperatingTime"))
     tmax = num(deep(b, "MaximumTemperature")) // 10
     serial = txt(deep(b, "Serial"))
@@ -36,17 +37,24 @@ def analyze(node):
         elif r < 0.45:
             flags.append(f"заявляет {nominal} мА·ч при заводских {design} — ниже рабочего предела")
     years = round(op_h / 8760, 1) if op_h else None
-    if cycles == 0 and years and years > 0.25:
+    if сырые_циклы is not None and cycles == 0 and years and years > 0.25:
         flags.append(f"ноль циклов при наработке {years} года — пак новее аппарата")
     if disconnects:
         doubts.append(f"шлейф батареи снимали {disconnects} раз(а) — аппарат вскрывали")
 
     return {
-        "есть_данные": bool(b),
+        # «Есть данные» — это есть ЦИФРЫ, а не «узел не пустой». Узел без DesignCapacity и
+        # NominalChargeCapacity (так бывает, когда Apple переносит ключи, и так было в iOS 26)
+        # не даёт ни здоровья, ни проверки на подделку — значит батарея не прочитана, и отчёт
+        # обязан сказать это, а не молча объявить ёмкость «в норме заводской».
+        "есть_данные": bool(design and nominal),
+        "узел_есть": bool(b),
         "здоровье_%": health,
         "ёмкость_мАч": nominal or None,
         "заводская_мАч": design or None,
-        "циклы": cycles if b else None,
+        # ноль циклов — самая дорогая колонка прайса Оценки («100 (0-30)»). Отсутствие
+        # ключа ею быть не должно.
+        "циклы": cycles if сырые_циклы is not None else None,
         "наработка_лет": years,
         "макс_температура": tmax if 0 < tmax <= 90 else None,
         "серийник": serial,

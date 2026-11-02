@@ -560,3 +560,48 @@ def test_opened_but_silent_section_gets_actionable_advice():
                                {"раздел_открыт": False}, apple_supported=True)
     if закрыт["итог"] == "кабель":
         assert "не открыт" in закрыт["почему"]
+
+
+# ---------------------------------------------------------------- iOS 16: вердикт словами из UI
+# Снято с живого iPhone 14 Pro Max на iOS 16.1.2 (эталон с ремонтного аппарата). На этой iOS
+# раздел говорит про деталь СЛОВАМИ, из UI Настроек, а не словарём состояния: «untrusted
+# component battery» — это и есть «Неизвестная запасная часть» на экране. Имена строчные.
+UNTRUSTED_UI = (
+    "Oct 27 10:00:01 iPhone Preferences(CoreRepairUI)[1] <Notice>: Do not need to show data "
+    "collection specifier for untrusted component battery\n"
+    "Oct 27 10:00:02 iPhone Preferences(CoreRepairUI)[1] <Notice>: Has infomation collection "
+    "specifier for component: Display\n")
+
+
+def test_ios16_untrusted_component_said_in_words_is_a_verdict():
+    """Строка UI — такой же вердикт, как словарь: деталь недоверенная, это СТОП.
+
+    Вторая строка нейтральна («у раздела есть данные по детали») и вердиктом быть не должна,
+    иначе любой открытый раздел обвинял бы исправный дисплей."""
+    comp = rh.parse_components(UNTRUSTED_UI)
+    assert comp["детали"]["Battery"]["неизвестная"] and comp["детали"]["Battery"]["меняли"]
+    assert comp["доверие"]["Battery"]["isTrustedForUI"] == 0
+    assert "Display" not in comp["детали"], comp["детали"]
+
+
+def test_ios16_untrusted_component_does_not_claim_an_apple_confirmation():
+    """Подтверждать подлинность эта строка не умеет: она только находит плохую деталь.
+    Иначе один аппарат с недоверенной батареей делал бы «родными» все прочие детали."""
+    from pintel_core.analysis import parts as parts_mod
+    lst = _прогнать([UNTRUSTED_UI])
+    в = parts_mod.verdict({}, {}, lst.items, {}, {}, lst.meta, apple_supported=True)
+    assert в["apple_подтверждено"] is False and в["итог"] == "замена"
+
+
+# ---------------------------------------------------------------- перечитывание сырого журнала
+
+def test_raw_journal_from_the_snapshot_is_reread_by_todays_parser():
+    """Разбор правится задним числом, когда телефона уже нет. Правка обязана доходить до
+    собранных слепков: иначе аппарат, на котором мы учились, навсегда остаётся «не
+    распознан», а его же эталон — зелёным, потому что эталоны перечитываются, а слепок нет.
+    Пометку «похожее» слушатель ставит сам — при перечитывании она снимается, иначе метка
+    времени оказывается не в начале и запись склеивается с предыдущей."""
+    raw = "# похожее: " + UNTRUSTED_UI.replace("\nOct 27 10:00:02", "\n# похожее: Oct 27 10:00:02")
+    записи, meta = rh.перечитать(raw)
+    assert записи["Battery"]["неизвестная"] and meta["раздел_открыт"] is True
+    assert rh.перечитать("") == ({}, {}) and rh.перечитать(None) == ({}, {})

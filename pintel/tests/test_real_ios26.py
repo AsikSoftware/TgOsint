@@ -61,9 +61,19 @@ def test_iphone17pro_usb_c():
     # нет AIDBus (USB-C) → MDM честно не определился, а не «нет»
     assert leg["mdm"] is None
     assert any("MDM" in x for x in rep["сделать"])
-    # криптопривязка Face ID по кабелю не читается, но история Apple говорит «не меняли»
+    # Криптопривязка Face ID по кабелю не читается (у 17 Pro нет FrontIRCameraSerialNumber).
+    # Закрыть эту дыру могла бы Apple, но в слепке только записи обслуживания с нулями, а они
+    # подтверждением не считаются — ровно по той же причине, по которой ниже не даётся зелёный
+    # вердикт по деталям (демо iPhone 15 Pro: нули в записях при «неизвестной» детали на
+    # экране). Поэтому сигнал честно «нет данных», а не «ок» со ссылкой на Apple.
     sig = rep["сигналы"]
-    assert sig["Face ID ↔ плата"]["ок"] is True and sig["Face ID ↔ плата"].get("источник") == "Apple"
+    assert sig["Face ID ↔ плата"]["ок"] is None
+    снап2 = load("iphone17pro_anon")
+    снап2["repair_history_meta"] = {"формат": "сверка с заводской печатью", "дельта": []}
+    снап2["repair_history"] = {k: {**v, "источник": "сверка с заводской печатью"}
+                               for k, v in (снап2.get("repair_history") or {}).items()}
+    с_печатью = report_mod.build(снап2)["сигналы"]["Face ID ↔ плата"]
+    assert с_печатью["ок"] is True and с_печатью["источник"] == "Apple"   # сверка — закрывает
     assert sig["Taptic ↔ плата"]["ок"] is True and sig["Телефото"]["ок"] is True
     assert sig["Датчик приближения"]["ок"] is None                      # у 17 Pro свой драйвер, данных пока нет
     assert len(rep["apple_история"]) == 7 and "BackGlass" in rep["apple_история"]

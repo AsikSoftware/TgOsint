@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, null, select
+from sqlalchemy import and_, func, null, or_, select
 
 from .. import audit
 from ..config import settings
@@ -264,13 +264,22 @@ def prune_snapshots(db, days: int | None = None) -> int:
     ради них всё и затевалось. Уходит только сырой слепок телефона, около мегабайта на
     аппарат: он нужен, чтобы чинить разбор по живому случаю, а это первые недели. Дальше
     от него остаётся обезличенный эталон, который весит сотню килобайт.
+
+    Но эталон из аппарата делается ровно из этого слепка (`services/references.py`), и
+    аппарат, из которого эталон ещё НЕ собрали, уборка съедать не должна: именно такие —
+    с нераспознанным форматом журнала — и учат разбор. Поэтому после срока чистим только
+    уже выгруженные в эталоны, а невыгруженные держим вдвое дольше: иначе, если выгрузку
+    не нажимать месяцами, база всё равно росла бы без предела.
     """
     дней = settings.snapshot_keep_days if days is None else int(days)
     if дней <= 0:
         return 0
     порог = now() - timedelta(days=дней)
-    строки = db.scalars(select(Evaluation).where(Evaluation.created_at < порог,
-                                                 Evaluation.snapshot.is_not(None))).all()
+    предел = now() - timedelta(days=дней * 2)
+    строки = db.scalars(select(Evaluation).where(
+        Evaluation.snapshot.is_not(None),
+        or_(and_(Evaluation.created_at < порог, Evaluation.reference_at.is_not(None)),
+            Evaluation.created_at < предел))).all()
     for ev in строки:
         # именно null(), а не None: тип JSON в SQLAlchemy по умолчанию пишет питоновский None
         # как JSON-значение null, и строка остаётся «непустой» — вторая уборка нашла бы её снова

@@ -524,10 +524,22 @@ def test_old_snapshots_are_pruned_but_the_evaluation_stays(app):
     ev.created_at = now() - timedelta(days=400)
     db.commit()
     assert ev_service.prune_snapshots(db, 0) == 0            # 0 — не чистить вовсе
+    # из этого аппарата эталон ещё не собирали — уборка его не трогает: такие и учат разбор
+    assert ev_service.prune_snapshots(db, 365) == 0
+    ev.reference_at = now()
+    db.commit()
     assert ev_service.prune_snapshots(db, 180) == 1
     db.expire_all()
     ev = db.get(Evaluation, ev_id)
     assert ev.snapshot is None                               # слепок ушёл
     assert ev.report and ev.verdict and ev.model_name        # сама оценка на месте
     assert ev_service.prune_snapshots(db, 180) == 0          # повторно чистить нечего
+    # невыгруженный, но совсем старый — всё же чистим: иначе база растёт без предела
+    ev2_id = k.post("/api/kiosk/evaluations", json={"client_id": "prune-2", "report": rep, "snapshot": snap},
+                    headers=H).json()["id"]
+    ev2 = db.get(Evaluation, ev2_id)
+    ev2.created_at = now() - timedelta(days=400)
+    db.commit()
+    assert ev2.reference_at is None
+    assert ev_service.prune_snapshots(db, 180) == 1
     db.close()

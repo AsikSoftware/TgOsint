@@ -107,10 +107,12 @@ jobs:
       - name: Дымовой тест киоска (импорт без экрана)
         shell: pwsh
         run: |
-          Copy-Item kiosk.example.toml dist\pintel-kiosk\kiosk.example.toml
+          # Примера настроек в сборке больше нет: на точке ничего не заполняют, адрес зашит
+          # в программу, токен вводят в ней самой, остальное приходит с сервера.
           $size = (Get-ChildItem dist\pintel-kiosk -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
           Write-Host ("pintel-kiosk: {0:N0} MB" -f $size)
           if (-not (Test-Path dist\pintel-kiosk\pintel-kiosk.exe)) { throw "exe киоска не собрался" }
+          if (-not (Test-Path dist\pintel-kiosk\_internal\pintel_core\assets\diag.html)) { throw "в сборке нет страницы теста телефона" }
           Compress-Archive -Path dist\pintel-kiosk -DestinationPath pintel-kiosk_Windows_x64.zip
 
       - uses: actions/upload-artifact@v4

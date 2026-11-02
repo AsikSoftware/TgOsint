@@ -602,6 +602,9 @@ def test_the_point_token_is_the_whole_setup(app, tmp_path):
     assert cfg["ocenka_bot"] == "PintelOlxBot" and cfg["apple_history_seconds"] == 120
     assert cfg["staff_name"] == "Асылбек" and cfg["rfs"] is True
     assert cfg["sickw"] is True and cfg["archive_snapshots"] is False
+    # незаполненное вовсе не отправляем: «пусто» — это не «сотри то, что программа нашла
+    # у себя в старом файле», пока настройки переносят в базу
+    assert "ocenka_chat_id" not in cfg and "rfs_proxy" not in cfg
 
     # журнал и эталоны с точки
     assert k.post("/api/kiosk/logs", json={"lines": ["связь есть", "оценка отправлена"]},

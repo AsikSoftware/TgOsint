@@ -448,7 +448,12 @@ def test_the_test_goes_through_our_domain_when_the_server_is_there(окно, mon
                         lambda токен, ev_id=None: f"https://kiosk.pintelkz.com/t/{токен}")
     monkeypatch.setattr(окно.client, "результат_теста", lambda токен: {})
     окно.новый_код_теста()
-    assert окно.тест_через_сервер and len(окно.код_теста) == 16
+    assert len(окно.код_теста) == 16
+    for поток in окно.tasks:                              # домен спрашивается в отдельном потоке:
+        поток.wait(5000)                                  # сделка начинается с нажатия, окно ждать не может
+    for _ in range(50):
+        QApplication.processEvents()
+    assert окно.тест_через_сервер
     assert "kiosk.pintelkz.com" in окно.s_work.тест_ссылка.text()
     assert окно.тест_опрос.isActive()
     окно.state = "work"                                   # опрос идёт, только пока идёт сделка
@@ -472,6 +477,10 @@ def test_the_test_goes_through_our_domain_when_the_server_is_there(окно, mon
 
     monkeypatch.setattr(окно.client, "открыть_тест", падает)
     окно.новый_код_теста()
+    for поток in окно.tasks:
+        поток.wait(5000)
+    for _ in range(50):
+        QApplication.processEvents()
     assert окно.тест_через_сервер is False and not окно.тест_опрос.isActive()
 
 

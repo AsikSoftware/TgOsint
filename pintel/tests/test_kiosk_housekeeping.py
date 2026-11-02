@@ -81,11 +81,11 @@ def test_without_a_server_nothing_is_queued(точка):
     """Сервера нет — досылать некуда (flush_queue работает только при настроенном
     сервере), а слепок и отчёт уже лежат в out. Копия по мегабайту на оценку росла бы
     вечно: ровно это и съедало диск."""
-    клиент = Client({**kconfig.DEFAULTS, "server": "", "token": ""})
+    клиент = Client({**kconfig.УМОЛЧАНИЯ, "server": "", "token": ""})
     assert клиент.upload({"client_id": "phone-1", "report": {}, "snapshot": {}}) is None
     assert клиент.queued() == 0
 
-    настроенный = Client({**kconfig.DEFAULTS, "server": "https://x.kz", "token": "pk_1"})
+    настроенный = Client({**kconfig.УМОЛЧАНИЯ, "server": "https://x.kz", "token": "pk_1"})
     assert настроенный.upload({"client_id": "phone-2", "report": {}, "snapshot": {}}) is None
     assert настроенный.queued() == 1          # сервер есть, но молчит — копим на досылку
 

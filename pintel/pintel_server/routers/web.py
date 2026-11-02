@@ -25,6 +25,8 @@ from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_ADMIN, ROLE_CASHIER, ROLES,
                       Kiosk, LoginEvent, PhoneTest, Point, PriceGrid, User)
 from ..services import evaluations as ev_service
 from ..services import ocenka_import
+from ..services import kiosk_settings
+from ..services import stats
 from ..services import price as price_service
 from ..services import references as ref_service
 from ..services import sickw_service
@@ -445,7 +447,25 @@ def settings_page(request: Request, user: User = Depends(require_senior), db: Db
     return render(request, "settings.html", user, grid=grid, kiosks=kiosks, points=points,
                   sickw_key_set=bool(settings.sickw_key), gservice_set=os.path.isfile(settings.gservice_json),
                   error=request.query_params.get("e"), new_token=request.query_params.get("t"),
+                  для_точки=request.query_params.get("p"),
+                  программа=kiosk_settings.общие(db), поля=kiosk_settings.УМОЛЧАНИЯ,
                   balance=request.query_params.get("b"), now=now())
+
+
+# ---------- статистика: что происходит на точках ----------
+
+@router.get("/статистика", response_class=HTMLResponse)
+def stats_page(request: Request, user: User = Depends(require_senior), db: DbSession = Depends(get_db)):
+    """Сколько аппаратов посмотрели, сколько оказались чистыми, сколько сделок доехало до
+    Оценки и где точка стоит без связи. Всё из того, что точки уже присылают."""
+    период = request.query_params.get("p") or "week"
+    дней = dict((k, d) for k, _, d in stats.ПЕРИОДЫ).get(период, 7)
+    точка_id = request.query_params.get("точка")
+    точка_id = int(точка_id) if str(точка_id or "").isdigit() else None
+    return render(request, "stats.html", user, период=период, периоды=stats.ПЕРИОДЫ,
+                  свод=stats.свод(db, дней), точки=stats.по_точкам(db, дней),
+                  логи=stats.последние_логи(db, 200, точка_id),
+                  выбрана=db.get(Point, точка_id) if точка_id else None)
 
 
 # ---------- эталоны: учим проверку на живых аппаратах ----------
@@ -504,11 +524,86 @@ def settings_point_create(name: str = Form(...), city: str = Form(""), user: Use
                           db: DbSession = Depends(get_db)):
     if db.scalar(select(Point).where(Point.name == name.strip())):
         return RedirectResponse("/settings?e=Точка с таким названием уже есть", 303)
-    p = Point(name=name.strip()[:80], city=city.strip()[:80] or None)
+    токен, хэш = new_kiosk_token()
+    p = Point(name=name.strip()[:80], city=city.strip()[:80] or None, token_hash=хэш)
     db.add(p)
-    audit.log(db, user, "point.create", f"Добавлена точка «{p.name}»", entity="point")
+    db.flush()
+    audit.log(db, user, "point.create", f"Добавлена точка «{p.name}», выдан токен", entity="point",
+              entity_id=p.id)
     db.commit()
-    return RedirectResponse("/settings?m=Точка добавлена", 303)
+    # токен показывается один раз: его вводят в программе на точке, в файле настроек его нет
+    return RedirectResponse(f"/settings?t={quote(токен)}&p={quote(p.name)}", 303)
+
+
+@router.post("/settings/points/{point_id}/token")
+def settings_point_token(point_id: int, user: User = Depends(require_admin),
+                        db: DbSession = Depends(get_db)):
+    """Перевыпустить токен точки: прежний сразу перестаёт работать."""
+    p = db.get(Point, point_id)
+    if not p:
+        return RedirectResponse("/settings?e=Точка не найдена", 303)
+    токен, p.token_hash = new_kiosk_token()
+    audit.log(db, user, "point.token", f"Точке «{p.name}» выдан новый токен", entity="point",
+              entity_id=p.id)
+    db.commit()
+    return RedirectResponse(f"/settings?t={quote(токен)}&p={quote(p.name)}", 303)
+
+
+@router.post("/settings/points/{point_id}")
+def settings_point_edit(point_id: int, staff_name: str = Form(""), city: str = Form(""),
+                        user: User = Depends(require_admin), db: DbSession = Depends(get_db)):
+    """Что видно на экране точки: её город и кто у кассы (это имя уходит в чек клиенту)."""
+    p = db.get(Point, point_id)
+    if not p:
+        return RedirectResponse("/settings?e=Точка не найдена", 303)
+    p.staff_name = staff_name.strip()[:80] or None
+    p.city = city.strip()[:80] or None
+    audit.log(db, user, "point.edit", f"Точка «{p.name}»: сотрудник «{p.staff_name or '—'}»",
+              entity="point", entity_id=p.id)
+    db.commit()
+    return RedirectResponse("/settings?m=Точка изменена", 303)
+
+
+@router.post("/settings/points/{point_id}/toggle")
+def settings_point_toggle(point_id: int, user: User = Depends(require_admin),
+                          db: DbSession = Depends(get_db)):
+    p = db.get(Point, point_id)
+    if not p:
+        return RedirectResponse("/settings?e=Точка не найдена", 303)
+    p.is_active = not p.is_active
+    audit.log(db, user, "point.toggle", f"Точка «{p.name}» {'включена' if p.is_active else 'отключена'}",
+              entity="point", entity_id=p.id)
+    db.commit()
+    return RedirectResponse("/settings?m=Готово", 303)
+
+
+@router.post("/settings/kiosk")
+async def settings_kiosk_program(request: Request, user: User = Depends(require_admin),
+                                 db: DbSession = Depends(get_db)):
+    """Настройки программы на точках — одной формой на всю сеть.
+
+    В `kiosk.toml` на точках ничего этого больше нет: программа забирает настройки отсюда
+    при запуске. Раньше менять их значило объехать девятнадцать компьютеров."""
+    форма = await request.form()
+    данные = {}
+    for ключ, умолчание in kiosk_settings.УМОЛЧАНИЯ.items():
+        if ключ not in форма:
+            if isinstance(умолчание, bool):
+                данные[ключ] = False          # снятая галочка в форму не попадает
+            continue
+        сырое = str(форма.get(ключ) or "").strip()
+        if isinstance(умолчание, bool):
+            данные[ключ] = сырое not in ("", "0", "off", "false")
+        elif isinstance(умолчание, int):
+            данные[ключ] = int(сырое) if сырое.lstrip("-").isdigit() else умолчание
+        elif isinstance(умолчание, list):
+            данные[ключ] = [int(x) for x in сырое.replace(";", ",").split(",") if x.strip().isdigit()] or умолчание
+        else:
+            данные[ключ] = сырое
+    kiosk_settings.сохранить_общие(db, данные)
+    audit.log(db, user, "kiosk.settings", "Изменены настройки программы на точках")
+    db.commit()
+    return RedirectResponse("/settings?m=Настройки программы сохранены", 303)
 
 
 @router.post("/settings/kiosks")

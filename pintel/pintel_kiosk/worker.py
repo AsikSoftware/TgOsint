@@ -5,6 +5,7 @@
 кабеле, и если клиент открыл раздел позже — приходит `history`, карточка и
 сервер обновляются. Всё на pintel_core, ничего не дублируем."""
 import asyncio
+import collections
 import glob
 import json
 import os
@@ -30,17 +31,31 @@ from .config import data_dir
 
 ЛОГ_МАКС = 5 * 1024 * 1024               # дальше заводим kiosk.log.1, старый перезаписываем
 
+# Очередь строк на сервер: их забирает фоновый поток связи. Файл на точке остаётся полным
+# журналом, а это копия последних строк — чтобы журнал можно было читать, не приезжая.
+_НА_СЕРВЕР = collections.deque(maxlen=2000)
+
 
 def log_line(text):
+    строка = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {text}"
+    _НА_СЕРВЕР.append(строка)
     try:
         путь = os.path.join(data_dir(), "logs", "kiosk.log")
         with open(путь, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {text}\n")
+            f.write(строка + "\n")
             велик = f.tell() > ЛОГ_МАКС
         if велик:                        # лог на точке никто не чистит — делаем это сами
             os.replace(путь, путь + ".1")
     except Exception:                                            # noqa: BLE001
         pass
+
+
+def забрать_логи(предел=300) -> list:
+    """Забрать накопленные строки для отправки. Не ушли — не беда: файл на точке полный."""
+    строки = []
+    while _НА_СЕРВЕР and len(строки) < предел:
+        строки.append(_НА_СЕРВЕР.popleft())
+    return строки
 
 
 def убрать_старое(дней=90):

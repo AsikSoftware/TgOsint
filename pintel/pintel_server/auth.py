@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from .config import settings
 from .db import get_db, now
-from .models import ROLE_ADMIN, ROLE_CASHIER, ROLE_SENIOR, Kiosk, LoginEvent, Session, User
+from .models import ROLE_ADMIN, ROLE_CASHIER, ROLE_SENIOR, Kiosk, LoginEvent, Point, Session, User
 
 COOKIE = "pintel_session"
 KIOSK_HEADER = "x-kiosk-token"
@@ -150,16 +150,59 @@ require_staff = require_role(ROLE_ADMIN, ROLE_SENIOR, ROLE_CASHIER)
 # ---------- киоски ----------
 
 def new_kiosk_token() -> tuple[str, str]:
-    """→ (токен для киоска, его хэш для базы). Токен показывается один раз."""
+    """→ (токен, его хэш для базы). Токен показывается один раз, в базе только хэш."""
     token = "pk_" + secrets.token_urlsafe(24)
     return token, _hash_token(token)
 
 
+МАШИНА_HEADER = "X-Kiosk-Machine"
+
+
 def current_kiosk(request: Request, db: DbSession = Depends(get_db)) -> Kiosk:
+    """Кто на связи. → строка киоска (машины); её точка — `kiosk.point`.
+
+    Главный путь: в заголовке **токен ТОЧКИ**. Его вводят в программе один раз, при первом
+    запуске, и меняют через меню администратора — в файле настроек на точке токена больше
+    нет. Машину под этой точкой заводим сами, по имени из `X-Kiosk-Machine`: так видно,
+    сколько компьютеров на точке и когда каждый был на связи, а второй киоск не требует
+    второго токена.
+
+    Второй путь оставлен на время перехода: токен самого киоска, выданный прежней версией
+    (она привязывалась общим ключом). Когда все точки перейдут на токен точки, его и
+    `/api/kiosk/register` можно убрать.
+    """
     token = request.headers.get(KIOSK_HEADER) or ""
-    k = db.scalar(select(Kiosk).where(Kiosk.token_hash == _hash_token(token))) if token else None
+    if not token:
+        raise HTTPException(401, "Нет токена точки: введите его в программе")
+    хэш = _hash_token(token)
+    точка = db.scalar(select(Point).where(Point.token_hash == хэш))
+    if точка is not None:
+        if not точка.is_active:
+            raise HTTPException(401, "Точка отключена администратором")
+        from urllib.parse import unquote
+        машина = unquote(request.headers.get(МАШИНА_HEADER) or "").strip()[:80] or "без имени"
+        k = db.scalar(select(Kiosk).where(Kiosk.machine == машина, Kiosk.point_id == точка.id))
+        if k is None:
+            имя = f"{точка.name} · {машина}"[:80]
+            if db.scalar(select(Kiosk).where(Kiosk.name == имя)):
+                имя = f"{имя[:72]} {secrets.token_hex(3)}"
+            k = Kiosk(name=имя, machine=машина, point_id=точка.id, token_hash=_hash_token(
+                "machine:" + секрет_машины(точка.id, машина)))
+            db.add(k)
+        elif not k.is_active:
+            raise HTTPException(401, "Этот компьютер отключён администратором")
+        k.last_seen_at = now()
+        db.commit()
+        return k
+    k = db.scalar(select(Kiosk).where(Kiosk.token_hash == хэш))
     if not k or not k.is_active:
-        raise HTTPException(401, "Киоск не опознан: проверьте токен в kiosk.toml")
+        raise HTTPException(401, "Токен не опознан: введите токен точки в программе")
     k.last_seen_at = now()
     db.commit()
     return k
+
+
+def секрет_машины(point_id: int, машина: str) -> str:
+    """Строка-заполнитель для `token_hash` машины: сама по себе она ничего не открывает —
+    машина ходит под токеном точки, но колонка в базе обязательная и уникальная."""
+    return f"{point_id}:{машина}:{secrets.token_hex(8)}"

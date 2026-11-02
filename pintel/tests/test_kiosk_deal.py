@@ -36,8 +36,8 @@ def окно(monkeypatch):
     QApplication.instance() or QApplication([])
     monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
     monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
-    w = kapp.KioskWindow({**kconfig.DEFAULTS, "point": "16/38", "_path": None,
-                          "staff_name": "Асылбек"})
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_тест",
+                          "point": "16/38", "staff_name": "Асылбек"})
     yield w
     # потоки гасим ДО закрытия окна: QThread, разрушенный на ходу, роняет весь прогон
     for поток in (w.poller, w.net):
@@ -109,7 +109,7 @@ def test_deal_starts_with_the_intake_then_one_window(окно):
     assert окно.state == "intake" and окно.stack.currentWidget() is окно.s_start
     окно.анкета_готова({**АНКЕТА, "имя": "Зама", "телефон": "+77058837953"})
     assert окно.state == "work" and окно.stack.currentWidget() is окно.s_work
-    assert окно.stack.count() == 3, "экранов ровно три: ожидание, анкета, работа"
+    assert окно.stack.count() == 5, "ожидание, анкета, работа плюс токен и меню администратора"
 
 
 def test_client_is_taken_before_the_phone_is_read(окно):
@@ -511,3 +511,78 @@ def test_the_receipt_carries_a_link_to_itself(окно, monkeypatch):
     for поток in окно.tasks:
         поток.wait(5000)
     assert дослано.get("id") == 77 and дослано["report"]["чек"]["клиент"] == "Зама"
+
+
+# ---------------------------------------------------------------- токен точки и меню администратора
+
+@pytest.fixture
+def окно_без_токена(monkeypatch, tmp_path):
+    """Первый запуск на новой точке: токена нет, настроек с сервера тоже."""
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    monkeypatch.setattr(kapp.config, "data_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(kconfig, "data_dir", lambda: str(tmp_path))
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": ""})
+    yield w
+    for поток in (w.poller, w.net):
+        поток.stop()
+        поток.wait(2000)
+    w.close()
+    w.deleteLater()
+
+
+def test_the_first_launch_asks_for_the_point_token(окно_без_токена, monkeypatch):
+    """На точке не настраивают ничего, кроме токена, и спрашивают его здесь, а не в файле.
+    Токен проверяется сразу: сказать «не подошёл» надо у стойки, а не молчанием на первом
+    же аппарате."""
+    окно = окно_без_токена
+    assert окно.stack.currentWidget() is окно.s_token
+    окно.открыть_меню()
+    assert окно.stack.currentWidget() is окно.s_token, "пока нет токена, меню не открываем"
+
+    ответ = {"точка": "Алматы-1", "настройки": {"point": "Алматы-1", "staff_name": "Асылбек",
+                                                "ocenka_bot": "PintelOlxBot"}}
+    monkeypatch.setattr(окно.client, "config", lambda: ответ)
+    окно.новый_токен("pk_новый_токен")
+    for поток in окно.tasks:
+        поток.wait(5000)
+    for _ in range(50):
+        QApplication.processEvents()
+
+    assert окно.client.token == "pk_новый_токен" and окно.client.enabled
+    assert kconfig.токен() == "pk_новый_токен", "токен переживёт перезапуск и обновление"
+    assert окно.stack.currentWidget() is окно.s_main
+    # надпись в углу — ровно то, что в базе, а не то, что кто-то вписал в файл
+    assert "Алматы-1" in окно.s_main.point_label.text()
+    assert окно.cfg["ocenka_bot"] == "PintelOlxBot"      # настройки пришли с сервера и сохранены
+    assert kconfig.load()["point"] == "Алматы-1"
+
+
+def test_a_wrong_token_says_so_instead_of_silence(окно_без_токена, monkeypatch):
+    """Опечатались в токене — об этом говорят на экране сразу."""
+    окно = окно_без_токена
+    from pintel_kiosk.client import ServerError
+
+    def падает():
+        raise ServerError("сервер ответил 401: Нет токена точки")
+
+    monkeypatch.setattr(окно.client, "config", падает)
+    окно.новый_токен("pk_чужой")
+    for поток in окно.tasks:
+        поток.wait(5000)
+    for _ in range(50):
+        QApplication.processEvents()
+    assert окно.stack.currentWidget() is окно.s_token
+    assert "Не подошёл" in окно.s_token.ошибка.text()
+
+
+def test_the_admin_menu_is_hidden_behind_a_key_combination(окно, monkeypatch):
+    """Меню администратора не видно с экрана: у стойки стоит клиент. Открывается
+    сочетанием клавиш, и в нём же меняют токен, когда точку перевыпустили."""
+    окно.открыть_меню()
+    assert окно.stack.currentWidget() is окно.s_admin
+    подписи = окно._сведения()
+    assert подписи["Сервер"] == окно.client.base and подписи["Токен"].endswith("…")
+    окно.закрыть_меню()
+    assert окно.stack.currentWidget() is окно.s_main

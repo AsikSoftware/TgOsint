@@ -108,24 +108,23 @@ def test_unpack_without_the_exe_is_an_error(tmp_path):
         updater.распаковать(str(архив), str(tmp_path / "н"))
 
 
-def test_update_keeps_the_settings_of_the_point(tmp_path):
-    """Самая дорогая поломка обновления: оно стирало kiosk.toml.
+def test_update_keeps_what_the_point_put_next_to_the_exe(tmp_path):
+    """Подмена уносит папку программы целиком.
 
-    Подмена уносит папку целиком, а в сборке с GitHub лежит только kiosk.example.toml.
-    На точке токены и chat_id заполняют руками один раз — ехать туда и заполнять заново
-    никто не станет."""
+    Токен точки и настройки лежат не здесь, а рядом с данными, и обновление им не страшно.
+    Но на точке могли положить что-то своё рядом с exe — его переносим: правило простое и
+    не требует списка имён, своё это всё, чего в новой сборке нет."""
     установлена, новая = tmp_path / "Pintel", tmp_path / "new"
     установлена.mkdir(), новая.mkdir()
-    (установлена / "kiosk.toml").write_text("ocenka_chat_id = -100500\n", encoding="utf-8")
     (установлена / "pintel-kiosk.exe").write_text("старая", encoding="utf-8")
     (установлена / "принтер.ini").write_text("своё", encoding="utf-8")   # что угодно своё
     (новая / "pintel-kiosk.exe").write_text("новая", encoding="utf-8")
-    (новая / "kiosk.example.toml").write_text("пример", encoding="utf-8")
+    (новая / "ПРОЧТИ.txt").write_text("из сборки", encoding="utf-8")
 
     перенесли = updater.перенести_своё(str(установлена), str(новая))
 
-    assert "kiosk.toml" in перенесли and "принтер.ini" in перенесли
-    assert (новая / "kiosk.toml").read_text(encoding="utf-8") == "ocenka_chat_id = -100500\n"
+    assert "принтер.ini" in перенесли
+    assert (новая / "принтер.ini").read_text(encoding="utf-8") == "своё"
     assert (новая / "pintel-kiosk.exe").read_text(encoding="utf-8") == "новая"  # exe не трогаем
     assert "pintel-kiosk.exe" not in перенесли
 

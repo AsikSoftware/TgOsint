@@ -23,11 +23,23 @@ STATUSES = {ST_NEW: "Новая", ST_VIEWED: "Клиент просто смот
 
 
 class Point(Base):
+    """Точка. Здесь же её токен: им программа на точке и опознаётся.
+
+    Токен принадлежит ТОЧКЕ, а не отдельному компьютеру: на точке может стоять второй
+    киоск или смениться машина, и каждый раз выдавать новый токен незачем. Машины
+    записываются отдельно (`Kiosk`), чтобы было видно, сколько их и когда каждая была на
+    связи. Настройки точки лежат тут же и уезжают в программу: в её файле настроек ничего
+    этого больше нет.
+    """
     __tablename__ = "points"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(80), unique=True)
     city: Mapped[Optional[str]] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=now)
+    token_hash: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    staff_name: Mapped[Optional[str]] = mapped_column(String(80))      # кто у кассы — в чек клиенту
+    settings: Mapped[Optional[dict]] = mapped_column(JSON)             # что переопределено для этой точки
 
 
 class User(Base):
@@ -223,6 +235,37 @@ class PhoneTest(Base):
     answered_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime)
     result: Mapped[Optional[dict]] = mapped_column(JSON)        # ответы по тестам, pintel_core.phonetest
     device: Mapped[Optional[str]] = mapped_column(String(200))  # что за телефон открыл страницу
+
+
+class KioskLog(Base):
+    """Журнал программы на точке, доставленный на сервер.
+
+    Раньше он лежал только на самой точке, и посмотреть его можно было, лишь приехав туда.
+    Теперь строки уезжают пачками: по ним видно, что происходило у аппарата, когда сделка
+    не сложилась."""
+    __tablename__ = "kiosk_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    point_id: Mapped[Optional[int]] = mapped_column(ForeignKey("points.id"), index=True)
+    kiosk_id: Mapped[Optional[int]] = mapped_column(ForeignKey("kiosks.id"), index=True)
+    at: Mapped[datetime] = mapped_column(TZDateTime, default=now, index=True)
+    line: Mapped[str] = mapped_column(Text)
+
+
+class ReferenceBundle(Base):
+    """Эталон, присланный точкой: обезличенный слепок, сырой журнал Apple и наш вердикт.
+
+    Лежит файлом в media_dir, в базе — только карточка. Хранится 60 дней: за это время по
+    нему успевают починить разбор, а дальше он место занимает зря."""
+    __tablename__ = "reference_bundles"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    point_id: Mapped[Optional[int]] = mapped_column(ForeignKey("points.id"), index=True)
+    kiosk_id: Mapped[Optional[int]] = mapped_column(ForeignKey("kiosks.id"))
+    name: Mapped[str] = mapped_column(String(160), unique=True)        # имя файла эталона
+    size: Mapped[Optional[int]] = mapped_column(Integer)
+    model_name: Mapped[Optional[str]] = mapped_column(String(64))
+    ios: Mapped[Optional[str]] = mapped_column(String(16))
+    verdict: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=now, index=True)
 
 
 class PriceGrid(Base):

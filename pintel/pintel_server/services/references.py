@@ -30,6 +30,17 @@ from ..models import Evaluation
             1: "сверка сотрудника подтвердила разбор", 0: "обычный аппарат"}
 
 
+def из_имени(имя: str) -> tuple:
+    """«эталон_iPhone-14-Pro_iOS26.5_20261102_084500.zip» → (модель, iOS, None).
+
+    Разбирать содержимое ради карточки незачем: имя эталон собирает сам
+    (`pintel_core.reference.bundle_name`), и в нём уже есть всё, что нужно для списка."""
+    куски = str(имя or "").removesuffix(".zip").split("_")
+    модель = куски[1].replace("-", " ") if len(куски) > 1 else None
+    ios = куски[2].removeprefix("iOS") if len(куски) > 2 else None
+    return (модель or None), (ios or None), None
+
+
 def снимок(ev):
     """Слепок из базы как его видит pintel_core: в JSON байтовые значения лежат как
     {"__b64__": …}, и без обратного превращения отчёт по ним не пересобрать."""

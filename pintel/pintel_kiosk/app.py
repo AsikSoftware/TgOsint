@@ -19,10 +19,10 @@ from pintel_core.external import ocenka
 
 from . import phoneweb
 
-from . import __version__, config, ui, ui_deal, ui_start
+from . import __version__, config, ui, ui_admin, ui_deal, ui_start
 from .client import Client, ServerError
 from .config import data_dir
-from .worker import Pipeline, SealedPipeline, log_line, убрать_старое
+from .worker import Pipeline, SealedPipeline, log_line, забрать_логи, убрать_старое
 
 
 class Poller(QThread):
@@ -66,7 +66,15 @@ class NetThread(QThread):
                     sent = self.client.flush_queue()
                     self.client.heartbeat({"драйвер": self.device_state != NO_DRIVER, "телефон": self.device_state,
                                            "в_очереди": self.client.queued(), "версия": __version__})
-                    self.status.emit(True, "сервер на связи" + (f", дослано {sent}" if sent else ""))
+                    # журнал и эталоны — туда же: раньше они лежали только на этой машине
+                    строк = self.client.отправить_логи(забрать_логи())
+                    эталоны = self.client.отправить_эталоны(
+                        os.path.join(data_dir(), "эталоны"),
+                        os.path.join(data_dir(), "cache", "эталоны_на_сервер.json"))
+                    хвост = "".join([f", дослано {sent}" if sent else "",
+                                     f", журнала {строк}" if строк else "",
+                                     f", эталонов {эталоны['ушло']}" if эталоны["ушло"] else ""])
+                    self.status.emit(True, "сервер на связи" + хвост)
                 except ServerError as e:
                     self.status.emit(False, str(e))
                 except Exception as e:                           # noqa: BLE001
@@ -166,8 +174,16 @@ class KioskWindow(QMainWindow):
         self.s_main = ui.MainScreen(точка)
         self.s_start = ui_start.StartScreen(точка)
         self.s_work = ui_deal.WorkScreen(точка)
-        for s in (self.s_main, self.s_start, self.s_work):
+        # Токен точки вводят здесь, а не в файле настроек: программа — внешняя часть, всё
+        # остальное приходит с сервера. Меню администратора скрыто от клиента сочетанием клавиш.
+        self.s_token = ui_admin.TokenScreen()
+        self.s_admin = ui_admin.AdminScreen()
+        for s in (self.s_main, self.s_start, self.s_work, self.s_token, self.s_admin):
             self.stack.addWidget(s)
+        self.s_token.принят.connect(self.новый_токен)
+        self.s_admin.закрыть.connect(self.закрыть_меню)
+        self.s_admin.сменить_токен.connect(self.новый_токен)
+        self.s_admin.обновить.connect(self._проверить_обновление)
         self.s_main.начать.connect(self.начать_сделку)
         self.s_main.обновить.connect(self.обновиться)
         self.s_start.далее.connect(self.анкета_готова)
@@ -208,14 +224,13 @@ class KioskWindow(QMainWindow):
         self.net.start()
         QShortcut(QKeySequence("Escape"), self, activated=self.toggle_fullscreen)
         QShortcut(QKeySequence("Ctrl+Q"), self, activated=self.close)
-        if cfg.get("_ошибка"):
-            # сломанный или недописанный kiosk.toml виден сразу, а не в виде «ничего не работает»
-            self.s_main.set_status(cfg["_ошибка"], ok=False)
-            log_line(cfg["_ошибка"])
-        elif not self.client.enabled:
-            # адрес сервера зашит в сборку, пустым он бывает только если его стёрли руками
-            self.s_main.set_status("В kiosk.toml стёрт адрес сервера — оценки никуда не уйдут",
-                                   ok=False)
+        QShortcut(QKeySequence("Ctrl+Shift+A"), self, activated=self.открыть_меню)
+        if not self.client.enabled:
+            # первый запуск: токена нет, и спрашиваем его сразу — без него программа пустая
+            self.show_screen(self.s_token)
+            log_line("токен точки не задан — ждём ввода на экране")
+        elif not cfg.get("_настройки_с_сервера"):
+            self.s_main.set_status("Настройки с сервера ещё не получены", ok=False)
         self._try_server_config()
         self._убрать_старое()
         self._выгрузить_архив()
@@ -339,13 +354,67 @@ class KioskWindow(QMainWindow):
                   err=lambda e: log_line(f"сервер не ответил на запрос настроек: {e}"))
 
     def _настройки_сервера(self, c):
+        """Сервер прислал настройки: кладём их в копию и раскладываем по экранам.
+
+        Надпись в углу берётся отсюда же, из имени точки в базе: раньше её писали в файле
+        на каждой машине, и совпадала она с базой только на честном слове."""
         c = c or {}
-        if c.get("точка"):
-            self.s_main.set_point(c["точка"])
-            self.s_start.set_point(c["точка"])
-            self.s_work.set_point(c["точка"])
-        self.cfg["return_seconds"] = c.get("возврат_с") or self.cfg["return_seconds"]
-        self.cfg["apple_history_seconds"] = c.get("история_apple_с") or self.cfg["apple_history_seconds"]
+        новые = config.сохранить_настройки(c.get("настройки") or {})
+        self.cfg.update(новые)
+        точка = новые.get("point") or c.get("точка") or ""
+        for экран in (self.s_main, self.s_start, self.s_work):
+            экран.set_point(точка)
+        self.s_main.set_status(f"Готов к работе · {точка}" if точка else "Готов к работе", ok=True)
+        if self.stack.currentWidget() is self.s_token:
+            self.show_screen(self.s_main)
+
+    # ---------- токен точки и меню администратора ----------
+    def новый_токен(self, токен):
+        """Токен ввели на экране. Проверяем его сразу: сказать «не подошёл» надо здесь, а не
+        молчанием на первом же аппарате."""
+        токен = str(токен or "").strip()
+        if not токен:
+            return
+        config.запомнить_токен(токен)
+        self.client.сменить_токен(токен)
+        self.cfg["token"] = токен
+        if self.stack.currentWidget() is self.s_token:
+            self.s_token.сказать("Проверяем токен…", ошибка=False)
+        self._run(self.client.config, ok=self._токен_подошёл, err=self._токен_не_подошёл)
+
+    def _токен_подошёл(self, c):
+        log_line(f"токен принят, точка «{(c or {}).get('точка') or '—'}»")
+        self._настройки_сервера(c)
+        if self.stack.currentWidget() is self.s_admin:
+            self.s_admin.ответ.setText("Токен принят: " + ((c or {}).get("точка") or "точка без имени"))
+            self.s_admin.показать(self._сведения())
+
+    def _токен_не_подошёл(self, текст):
+        log_line(f"токен не подошёл: {текст}")
+        if self.stack.currentWidget() is self.s_admin:
+            self.s_admin.ответ.setText("Не подошёл: " + str(текст))
+        else:
+            self.s_token.сказать("Не подошёл: " + str(текст))
+
+    def _сведения(self) -> dict:
+        return {"Сервер": self.client.base or "—",
+                "Точка": self.cfg.get("point") or "сервер ещё не ответил",
+                "Этот компьютер": self.client.машина(),
+                "Токен": (self.client.token[:6] + "…") if self.client.token else "не задан",
+                "Версия": __version__,
+                "Оценок в очереди": self.client.queued(),
+                "Бот Оценки": self.cfg.get("ocenka_bot") or "не задан"}
+
+    def открыть_меню(self):
+        if self.stack.currentWidget() is self.s_token:
+            return                                   # сначала токен, меню потом
+        self.s_admin.показать(self._сведения())
+        self._экран_до_меню = self.stack.currentWidget()
+        self.show_screen(self.s_admin)
+
+    def закрыть_меню(self):
+        назад = getattr(self, "_экран_до_меню", None) or self.s_main
+        self.show_screen(назад if назад is not self.s_admin else self.s_main)
 
     def _run(self, fn, ok=None, err=None):
         """Сетевое действие в отдельном потоке.

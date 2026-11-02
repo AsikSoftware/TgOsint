@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% set active = 'stats' %}
+{% block title %}Статистика{% endblock %}
+{% block content %}
+<h1>Что происходит на точках</h1>
+
+<div class="row">
+  {% for ключ, подпись, дней in периоды %}
+  <a class="btn sm {{ 'primary' if ключ == период else '' }}" href="/статистика?p={{ ключ }}">{{ подпись }}</a>
+  {% endfor %}
+  <span class="note">считается по тому, что прислали точки: отчёт, вердикт, тест телефона и отметка о сделке в Оценке</span>
+</div>
+
+<div class="grid4" style="margin-top:12px">
+  <div class="sig"><span>Оценок</span><span>{{ свод.оценок }}</span></div>
+  <div class="sig"><span>Без вопросов</span><span class="ok">{{ свод.идеальных }}</span></div>
+  <div class="sig"><span>С вопросами</span><span class="{{ 'warn' if свод.с_вопросами else '' }}">{{ свод.с_вопросами }}</span></div>
+  <div class="sig"><span>Дошло до Оценки</span><span>{{ свод.дошло_до_бота }}</span></div>
+</div>
+
+<div class="grid2" style="margin-top:12px">
+  <section class="sec">
+    <h2>Вердикты</h2>
+    {% for имя, сколько in свод.по_вердикту %}
+    <div class="kv"><span>{{ имя or 'без вердикта' }}</span><span>{{ сколько }}</span></div>
+    {% endfor %}
+    {% if свод.батарея_средняя %}<div class="kv"><span>Средний износ батареи</span><span>{{ свод.батарея_средняя }}%</span></div>{% endif %}
+  </section>
+  <section class="sec">
+    <h2>Тест на телефоне клиента</h2>
+    <div class="kv"><span>Ссылок открыто</span><span>{{ свод.тестов_открыто }}</span></div>
+    <div class="kv"><span>Телефон ответил</span><span>{{ свод.тестов_отвечено }}</span></div>
+    <div class="kv"><span>Прошёл целиком</span><span class="ok">{{ свод.тест_прошёл }}</span></div>
+    <div class="kv"><span>Не прошёл</span><span class="{{ 'bad' if свод.тест_не_прошёл else '' }}">{{ свод.тест_не_прошёл }}</span></div>
+    <div class="kv"><span>Оценок с чеком</span><span>{{ свод.с_чеком }}</span></div>
+    <div class="kv"><span>Эталонов прислано</span><span>{{ свод.эталонов }}</span></div>
+  </section>
+</div>
+
+<section class="sec">
+  <h2>По точкам</h2>
+  <table class="tbl">
+    <thead><tr><th>Точка</th><th>Оценок</th><th>Дошло до Оценки</th><th>Компьютеров</th><th>Последняя оценка</th><th></th></tr></thead>
+    <tbody>
+    {% for r in точки %}
+    <tr>
+      <td><span class="dot {{ '' if r.на_связи else 'off' }}"></span>{{ r.точка.name if r.точка else 'без точки' }}
+        {% if r.точка and not r.токен %}<span class="warn">· токен не выдан</span>{% endif %}
+        {% if r.точка and not r.точка.is_active %}<span class="bad">· отключена</span>{% endif %}</td>
+      <td>{{ r.оценок }}</td>
+      <td>{{ r.дошло }}</td>
+      <td>{{ r.на_связи }} из {{ r.машин }}</td>
+      <td>{{ (r.последняя|dt) if r.последняя else '—' }}</td>
+      <td>{% if r.точка %}<a class="btn sm" href="/статистика?p={{ период }}&точка={{ r.точка.id }}">журнал</a>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="note">Точек пока нет.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="sec">
+  <h2>Журнал программы{% if выбрана %} · {{ выбрана.name }}{% endif %}</h2>
+  <div class="note">Последние строки, присланные точками. Раньше этот журнал лежал только на самом
+    компьютере, и прочитать его можно было, лишь приехав туда.</div>
+  {% if логи %}
+  <pre style="max-height:420px;overflow:auto">{% for l in логи %}{{ l.at|dt }}  {{ l.line }}
+{% endfor %}</pre>
+  {% else %}<div class="note">Строк пока нет.</div>{% endif %}
+</section>
+{% endblock %}

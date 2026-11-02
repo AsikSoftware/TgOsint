@@ -265,25 +265,41 @@ def prune_snapshots(db, days: int | None = None) -> int:
     аппарат: он нужен, чтобы чинить разбор по живому случаю, а это первые недели. Дальше
     от него остаётся обезличенный эталон, который весит сотню килобайт.
 
-    Но эталон из аппарата делается ровно из этого слепка (`services/references.py`), и
-    аппарат, из которого эталон ещё НЕ собрали, уборка съедать не должна: именно такие —
-    с нераспознанным форматом журнала — и учат разбор. Поэтому после срока чистим только
-    уже выгруженные в эталоны, а невыгруженные держим вдвое дольше: иначе, если выгрузку
-    не нажимать месяцами, база всё равно росла бы без предела.
+    Эталон при этом не теряется: обезличенный файл точка присылает сразу после проверки
+    (`/api/kiosk/reference`), он лежит отдельно и чистится тем же сроком. Раньше эталон
+    собирался из слепка задним числом, и уборка могла съесть материал, из которого его ещё
+    не сделали; теперь такой зависимости нет.
     """
     дней = settings.snapshot_keep_days if days is None else int(days)
     if дней <= 0:
         return 0
     порог = now() - timedelta(days=дней)
-    предел = now() - timedelta(days=дней * 2)
     строки = db.scalars(select(Evaluation).where(
-        Evaluation.snapshot.is_not(None),
-        or_(and_(Evaluation.created_at < порог, Evaluation.reference_at.is_not(None)),
-            Evaluation.created_at < предел))).all()
+        Evaluation.snapshot.is_not(None), Evaluation.created_at < порог)).all()
     for ev in строки:
         # именно null(), а не None: тип JSON в SQLAlchemy по умолчанию пишет питоновский None
         # как JSON-значение null, и строка остаётся «непустой» — вторая уборка нашла бы её снова
         ev.snapshot = null()
+    if строки:
+        db.commit()
+    return len(строки)
+
+
+def prune_references(db, days: int | None = None) -> int:
+    """Убрать эталоны старше срока: и файл, и карточку. → сколько убрали."""
+    import os
+    from ..models import ReferenceBundle
+    дней = settings.snapshot_keep_days if days is None else int(days)
+    if дней <= 0:
+        return 0
+    порог = now() - timedelta(days=дней)
+    строки = db.scalars(select(ReferenceBundle).where(ReferenceBundle.created_at < порог)).all()
+    for b in строки:
+        try:
+            os.remove(os.path.join(settings.media_dir, "эталоны", b.name))
+        except OSError:
+            pass                                   # файла нет — карточку всё равно убираем
+        db.delete(b)
     if строки:
         db.commit()
     return len(строки)

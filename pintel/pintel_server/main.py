@@ -26,9 +26,11 @@ def _почистить_слепки():
     try:
         db = SessionLocal()
         убрано = ev_service.prune_snapshots(db)
+        эталонов = ev_service.prune_references(db)
         db.close()
-        if убрано:
-            print(f"слепки старше {settings.snapshot_keep_days} дней убраны у {убрано} оценок")
+        if убрано or эталонов:
+            print(f"старше {settings.snapshot_keep_days} дней: убрано слепков {убрано}, "
+                  f"эталонов {эталонов}")
     except Exception as e:                                       # noqa: BLE001 — уборка не повод не стартовать
         print(f"не удалось почистить слепки: {type(e).__name__}: {e}")
 

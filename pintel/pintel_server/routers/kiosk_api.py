@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """API киоска. Авторизация — заголовок X-Kiosk-Token (токен выдаёт администратор в Настройках)."""
-from fastapi import APIRouter, Depends, HTTPException
+import os
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
@@ -11,8 +13,10 @@ from .. import audit
 from ..auth import current_kiosk, new_kiosk_token
 from ..config import settings
 from ..db import get_db, now
-from ..models import Evaluation, Kiosk, PhoneTest, Point
+from ..models import Evaluation, Kiosk, KioskLog, PhoneTest, Point, ReferenceBundle
 from ..services import evaluations as ev_service
+from ..services import kiosk_settings
+from ..services import references as ref_service
 from ..services import ocenka_import
 from ..services import price as price_service
 from ..services import sickw_service
@@ -103,16 +107,74 @@ def register(body: RegisterIn, db: DbSession = Depends(get_db)):
 
 @router.get("/config")
 def config(kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Все настройки программы на точке. В её файле ничего этого больше нет.
+
+    Имя бота Оценки и его токен тоже здесь: программа отдаёт сделку через него, а держать
+    этот токен на девятнадцати компьютерах и менять его объездом — то же самое, от чего мы
+    и уходим. Канал закрыт HTTPS и токеном точки.
+    """
     grid = price_service.current(db)
+    из_базы = kiosk_settings.для_точки(db, kiosk.point)
     return {
-        "киоск": kiosk.name, "точка": kiosk.point.name if kiosk.point else None,
-        "валюта": settings.currency, "возврат_с": settings.kiosk_return_seconds,
-        "история_apple_с": settings.apple_history_seconds,
+        "киоск": kiosk.name, "точка": из_базы["point"],
+        "валюта": settings.currency,
         "прайс_обновлён": grid.fetched_at.isoformat() if grid else None,
         "прайс_версия": grid.id if grid else None,
-        "sickw": bool(settings.sickw_key), "время_сервера": now().isoformat(),
+        "sickw_ключ_есть": bool(settings.sickw_key), "время_сервера": now().isoformat(),
         "публичный_адрес": settings.public_url,
+        "настройки": из_базы,
+        # прежние имена: их читают сборки до 56-й, пусть не ломаются об обновление сервера
+        "возврат_с": из_базы["return_seconds"], "история_apple_с": из_базы["apple_history_seconds"],
+        "sickw": bool(settings.sickw_key),
     }
+
+
+class LogsIn(BaseModel):
+    lines: list[str]
+
+
+@router.post("/logs")
+def logs(body: LogsIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Журнал программы с точки. Раньше он лежал только там, и прочитать его можно было,
+    лишь приехав: теперь видно, что происходило у аппарата, когда сделка не сложилась."""
+    взято = 0
+    for строка in (body.lines or [])[:500]:
+        текст = str(строка or "").strip()[:1000]
+        if текст:
+            db.add(KioskLog(point_id=kiosk.point_id, kiosk_id=kiosk.id, line=текст))
+            взято += 1
+    db.commit()
+    return {"принято": взято}
+
+
+@router.post("/reference")
+async def reference_upload(file: UploadFile = File(...), name: str = Form(""),
+                           kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Эталон с точки: обезличенный слепок, сырой журнал Apple и наш вердикт.
+
+    Складываем файлом рядом с медиа, в базе — карточка. Повторная присылка того же имени
+    не плодит копий: точка досылает всё, что у неё накопилось, и не помнит, что уже ушло."""
+    # Имя эталона кириллическое («эталон_iPhone-14-Pro_iOS26.5_…zip»), а в заголовке
+    # multipart такое имя не проходит: httpx кодирует заголовки в ascii и падает. Поэтому
+    # настоящее имя едет отдельным полем, а файл — под служебным.
+    имя = os.path.basename(name or file.filename or "")[:160]
+    имя = имя.replace("/", "_").replace("\\", "_")
+    if not имя.endswith(".zip"):
+        raise HTTPException(400, "эталон присылают zip-файлом")
+    данные = await file.read()
+    if not данные or len(данные) > 5 * 1024 * 1024:
+        raise HTTPException(413, "эталон пустой или слишком большой")
+    if db.scalar(select(ReferenceBundle).where(ReferenceBundle.name == имя)):
+        return {"принят": False, "почему": "такой эталон уже есть"}
+    папка = os.path.join(settings.media_dir, "эталоны")
+    os.makedirs(папка, exist_ok=True)
+    with open(os.path.join(папка, имя), "wb") as fh:
+        fh.write(данные)
+    модель, ios, вердикт = ref_service.из_имени(имя)
+    db.add(ReferenceBundle(point_id=kiosk.point_id, kiosk_id=kiosk.id, name=имя, size=len(данные),
+                           model_name=модель, ios=ios, verdict=вердикт))
+    db.commit()
+    return {"принят": True}
 
 
 @router.get("/price")

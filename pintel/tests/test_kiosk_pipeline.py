@@ -148,7 +148,8 @@ class ФейкHTTP:
     def request(self, method, path, **kw):
         import httpx
         ФейкHTTP.запросы.append({"метод": method, "путь": path, "токен": self.headers.get("X-Kiosk-Token"),
-                                 "тело": kw.get("json")})
+                                 "машина": self.headers.get("X-Kiosk-Machine"),
+                                 "тело": kw.get("json"), "файлы": kw.get("files")})
         код, тело = ФейкHTTP.ответы.get(path, (200, {"ок": True}))
         if callable(тело):
             тело = тело(len([x for x in ФейкHTTP.запросы if x["путь"] == path]))
@@ -160,61 +161,57 @@ class ФейкHTTP:
         return self.request("POST", path, json=json, **kw)
 
 
-def test_the_kiosk_binds_itself_to_the_one_server(monkeypatch, tmp_path):
-    """Ни адреса, ни токена на точке не настраивают: адрес в сборке, токен киоск получает
-    сам. Раздача токенов по точкам осталась от прежней версии, и ровно из-за неё ни одна
-    точка не была подключена — общей базы оценок не получалось."""
+def test_the_point_token_is_the_only_thing_a_human_types(monkeypatch, tmp_path):
+    """На точке не настраивают ничего, кроме токена: адрес зашит в сборку, остальное
+    приходит с сервера. Машина называет себя отдельным заголовком — так видно, сколько
+    компьютеров на точке, а второй киоск не требует второго токена."""
     from pintel_kiosk import client as kclient
     from pintel_kiosk import config as kconfig
     for sub in ("queue", "cache"):
         os.makedirs(tmp_path / sub, exist_ok=True)
     monkeypatch.setattr(kclient, "data_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(kclient, "app_dir", lambda: str(tmp_path))
     monkeypatch.setattr(kclient.httpx, "Client", ФейкHTTP)
-    ФейкHTTP.запросы, ФейкHTTP.ответы = [], {
-        "/api/kiosk/register": (200, {"токен": "pk_первый", "киоск": "16/38 · KASSA-1"}),
-        "/api/kiosk/sickw": (200, {"в_чёрном_списке": False}),
-    }
-    c = kclient.Client({**kconfig.DEFAULTS, "point": "16/38"})
-    assert c.enabled and c.base == kconfig.СЕРВЕР and not c.token
+    ФейкHTTP.запросы, ФейкHTTP.ответы = [], {"/api/kiosk/sickw": (200, {"в_чёрном_списке": False})}
 
+    без_токена = kclient.Client({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": ""})
+    assert not без_токена.enabled
+    with pytest.raises(kclient.ServerError) as e:
+        без_токена.sickw("490154203237518")
+    assert "токен" in str(e.value)
+
+    c = kclient.Client({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_точка"})
+    assert c.enabled and c.base == kconfig.СЕРВЕР
     assert c.sickw("490154203237518")["в_чёрном_списке"] is False
-    привязка = [x for x in ФейкHTTP.запросы if x["путь"] == "/api/kiosk/register"]
-    assert len(привязка) == 1 and привязка[0]["тело"]["key"] == kconfig.КЛЮЧ_ПРИВЯЗКИ
-    assert привязка[0]["тело"]["machine"] and привязка[0]["тело"]["point"] == "16/38"
-    assert [x for x in ФейкHTTP.запросы if x["путь"] == "/api/kiosk/sickw"][0]["токен"] == "pk_первый"
-    # токен сохранён рядом с остальными файлами киоска: второй раз привязываться незачем
-    assert kclient.Client({**kconfig.DEFAULTS}).token == "pk_первый"
-
-    # сервер завели заново и наш токен протух — привязываемся сами и повторяем запрос
-    ФейкHTTP.запросы = []
-    ФейкHTTP.ответы["/api/kiosk/register"] = (200, {"токен": "pk_второй"})
-    ФейкHTTP.ответы["/api/kiosk/sickw"] = (lambda n: 401 if n == 1 else 200, {"в_чёрном_списке": True})
-    c2 = kclient.Client({**kconfig.DEFAULTS})
-    assert c2.sickw("490154203237518")["в_чёрном_списке"] is True
-    пути = [x["путь"] for x in ФейкHTTP.запросы]
-    assert пути == ["/api/kiosk/sickw", "/api/kiosk/register", "/api/kiosk/sickw"]
-    assert ФейкHTTP.запросы[-1]["токен"] == "pk_второй"
+    запрос = ФейкHTTP.запросы[-1]
+    assert запрос["токен"] == "pk_точка" and запрос["машина"]
+    # токен сменили в меню администратора — дальше ходим с новым
+    c.сменить_токен("pk_другая")
+    c.sickw("490154203237518")
+    assert ФейкHTTP.запросы[-1]["токен"] == "pk_другая"
 
 
-def test_without_a_server_address_nothing_is_lost_silently(monkeypatch, tmp_path):
-    """Адрес стёрли руками — киоск об этом говорит, а не делает вид, что всё хорошо.
-    База IMEI теперь только через сервер: ключу на точках делать нечего."""
+def test_the_log_and_the_bundles_go_to_the_server(monkeypatch, tmp_path):
+    """Журнал и эталоны раньше лежали только на точке: прочитать их можно было, лишь
+    приехав туда. Что уже ушло, помним — обрыв связи не должен терять эталон."""
     from pintel_kiosk import client as kclient
-    for sub in ("queue", "cache"):
+    from pintel_kiosk import config as kconfig
+    for sub in ("queue", "cache", "эталоны"):
         os.makedirs(tmp_path / sub, exist_ok=True)
     monkeypatch.setattr(kclient, "data_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(kclient, "app_dir", lambda: str(tmp_path))
-    c = kclient.Client({"server": "", "point": "16/38"})
-    assert not c.enabled
-    with pytest.raises(kclient.ServerError) as e:
-        c.sickw("490154203237518")
-    assert "адрес сервера" in str(e.value)
-    assert not hasattr(c, "price"), "прайса у киоска больше нет — цену считает бот Оценки"
-    assert [c.local_number(), c.local_number()] == [1, 2]
-    # сервера нет вовсе — в очередь не копим: досылать некуда, а слепок и отчёт уже
-    # лежат в out. Копия весит около мегабайта на оценку и росла бы вечно.
-    assert c.upload({"client_id": "x1", "report": {}}) is None and c.queued() == 0
+    monkeypatch.setattr(kclient.httpx, "Client", ФейкHTTP)
+    ФейкHTTP.запросы, ФейкHTTP.ответы = [], {"/api/kiosk/logs": (200, {"принято": 2}),
+                                             "/api/kiosk/reference": (200, {"принят": True})}
+    c = kclient.Client({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_точка"})
+
+    assert c.отправить_логи(["первая", "вторая"]) == 2
+    assert c.отправить_логи([]) == 0 and len([x for x in ФейкHTTP.запросы
+                                              if x["путь"] == "/api/kiosk/logs"]) == 1
+
+    папка, отметка = tmp_path / "эталоны", tmp_path / "cache" / "ушло.json"
+    (папка / "эталон_iPhone-12_iOS26.5_20261102_100000.zip").write_bytes(b"PK\x03\x04" + "эталон".encode())
+    итог = c.отправить_эталоны(str(папка), str(отметка))
+    assert итог == {"ушло": 1, "осталось": 0, "ошибка": ""}
+    assert c.отправить_эталоны(str(папка), str(отметка))["ушло"] == 0, "второй раз не шлём"
 
 
 def test_pipeline_saves_reference_for_every_phone(fake_core):

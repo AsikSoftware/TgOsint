@@ -51,8 +51,8 @@ button:active{transform:scale(.96)}
 #gridHud{position:fixed;left:0;right:0;bottom:26px;z-index:11;text-align:center;
   pointer-events:none}
 #gridHud b{font-size:40px;font-weight:300}
-#gridBtns{position:fixed;left:0;right:0;top:20px;z-index:12;text-align:center}
-#gridBtns button{pointer-events:auto}
+#gridBtns{position:fixed;left:0;right:0;top:20px;z-index:12;text-align:center;pointer-events:none}
+#gridBtns button{pointer-events:auto;opacity:.85}
 #colorbox{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;
   justify-content:center;padding-bottom:50px}
 #colorbox span{color:rgba(128,128,128,.85);font-size:15px;background:rgba(0,0,0,.35);
@@ -205,18 +205,25 @@ function mark(ключ, ответ, дальше){
 }
 
 /* ─── 1. сенсор: тач-сетка, автозачёт ─── */
-var cells=[], hit=0;
+var cells=[], hit=0, cols=8, rows=0;
 function buildGrid(){
   var g=document.getElementById("grid");
-  var cols=8, rows=Math.round(cols*innerHeight/innerWidth);
+  cols=8; rows=Math.round(cols*innerHeight/innerWidth);
   g.style.gridTemplateColumns="repeat("+cols+",1fr)";
   g.style.gridTemplateRows="repeat("+rows+",1fr)";
   g.innerHTML=""; cells=[]; hit=0;
   for(var i=0;i<cols*rows;i++){var d=document.createElement("div");g.appendChild(d);cells.push(d);}
+  /* Клетку считаем по координатам, а не по тому, что под пальцем: кнопка и подпись сверху
+     перекрывали сетку, elementFromPoint возвращал их, и те клетки закрасить было нельзя —
+     тест не доходил до ста процентов никогда. */
   function paint(t){
+    var r=g.getBoundingClientRect();
     for(var i=0;i<t.length;i++){
-      var el=document.elementFromPoint(t[i].clientX,t[i].clientY);
-      if(el&&el.parentNode===g&&!el.classList.contains("hit")){el.classList.add("hit");hit++;}
+      var cx=Math.floor((t[i].clientX-r.left)/(r.width/cols));
+      var cy=Math.floor((t[i].clientY-r.top)/(r.height/rows));
+      if(cx<0||cy<0||cx>=cols||cy>=rows) continue;
+      var el=cells[cy*cols+cx];
+      if(el&&!el.classList.contains("hit")){el.classList.add("hit");hit++;}
     }
     document.getElementById("gridPct").textContent=Math.round(100*hit/cells.length)+"%";
     if(hit===cells.length){setTimeout(function(){mark("sensor","ok",2)},350);}
@@ -253,20 +260,39 @@ function startColors(){
 }
 
 /* ─── 4. динамик ─── */
+/* Мелодию собираем в WAV и проигрываем обычным <audio>: на iPhone это единственный путь,
+   который работает всегда. WebAudio там заводится не с первого касания и по http молчит —
+   сотрудник жал кнопку и не слышал ничего. Если и <audio> не стартовал, говорим об этом,
+   а не показываем вопрос «слышно ли?», на который нечего ответить. */
+var мелодия=null;
+function wav(){
+  var sr=22050, ноты=[523,659,784,1047], длина=0.22, всего=Math.floor(sr*длина*ноты.length);
+  var буф=new ArrayBuffer(44+всего*2), v=new DataView(буф), i;
+  function строка(поз,т){for(i=0;i<т.length;i++)v.setUint8(поз+i,т.charCodeAt(i));}
+  строка(0,"RIFF"); v.setUint32(4,36+всего*2,true); строка(8,"WAVEfmt ");
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*2,true); v.setUint16(32,2,true);
+  v.setUint16(34,16,true); строка(36,"data"); v.setUint32(40,всего*2,true);
+  for(i=0;i<всего;i++){
+    var n=Math.min(ноты.length-1,Math.floor(i/(sr*длина))), t=i/sr;
+    var огиб=Math.min(1,(i%(sr*длина))/(sr*0.01))*Math.max(0,1-(i%(sr*длина))/(sr*длина));
+    v.setInt16(44+i*2, Math.round(Math.sin(2*Math.PI*ноты[n]*t)*огиб*22000), true);
+  }
+  var б=new Blob([буф],{type:"audio/wav"});
+  return URL.createObjectURL(б);
+}
 function playTone(){
+  var показать=function(){document.getElementById("s4q").style.display="flex"};
   try{
-    var ctx=new (window.AudioContext||window.webkitAudioContext)();
-    var notes=[523,659,784,1047], t=ctx.currentTime;
-    for(var i=0;i<notes.length;i++){
-      var o=ctx.createOscillator(), g=ctx.createGain();
-      o.frequency.value=notes[i]; o.connect(g); g.connect(ctx.destination);
-      g.gain.setValueAtTime(0.0001,t+i*0.22);
-      g.gain.exponentialRampToValueAtTime(0.6,t+i*0.22+0.03);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+i*0.22+0.2);
-      o.start(t+i*0.22); o.stop(t+i*0.22+0.22);
-    }
-  }catch(e){ заметки.push("звук не запустился: "+e); }
-  document.getElementById("s4q").style.display="flex";
+    if(!мелодия) мелодия=wav();
+    var a=new Audio(мелодия);
+    a.play().then(показать).catch(function(e){
+      заметки.push("звук не запустился: "+e.name);
+      document.getElementById("s4").querySelector(".sub").textContent=
+        "Телефон не дал проиграть звук. Включите любую мелодию в телефоне и послушайте динамик.";
+      показать();
+    });
+  }catch(e){ заметки.push("звук не собрался: "+e); показать(); }
 }
 
 /* ─── 5. микрофон ─── */

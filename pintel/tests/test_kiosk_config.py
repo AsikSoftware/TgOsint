@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""kiosk.toml: его читает каждая точка при запуске, и ошибка здесь останавливает работу.
+"""Настройки точки: их никто не вписывает руками.
 
-Проверяется то, что ломается у клиента, а не у нас: что файл, который мы кладём в
-сборку, вообще разбирается, что все ключи записываемы в TOML, и что испорченный файл не
-роняет программу — на точке нужен экран с причиной, а не окно Windows с traceback.
+Файла `kiosk.toml` больше нет. Программа — внешняя часть: адрес сервера зашит в сборку,
+токен точки вводят в самой программе, настройки приходят с сервера и складываются в копию
+рядом с данными. Проверяется то, что ломается у клиента: что программа поднимется и без
+связи, что токен переживёт обновление и что страница теста попадёт в сборку.
 """
 import os
-import shutil
 import re
-import tomllib
 
 import pytest
 
@@ -16,61 +15,47 @@ from pintel_kiosk import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 КОРЕНЬ = os.path.dirname(HERE)
-ГОЛЫЙ_КЛЮЧ = re.compile(r"[A-Za-z0-9_-]+")
 
 
-def test_every_setting_can_be_written_in_toml():
-    """В TOML голый ключ — только ASCII-буквы, цифры, «_» и «-». Ключ «сотрудник»
-    кириллицей роняет tomllib на этой строке, и киоск не поднимается вовсе."""
-    плохие = [k for k in config.DEFAULTS if not ГОЛЫЙ_КЛЮЧ.fullmatch(k)]
-    assert not плохие, "эти ключи нельзя записать в kiosk.toml: " + ", ".join(плохие)
+def test_the_point_configures_nothing_by_hand():
+    """Ни адреса, ни токена, ни настроек в файле у exe: ровно это и просили убрать.
+    Адрес один на всю сеть и лежит в сборке."""
+    assert config.СЕРВЕР.startswith("https://")
+    assert not os.path.exists(os.path.join(КОРЕНЬ, "kiosk.example.toml")), \
+        "пример настроек больше не нужен: на точке ничего не заполняют"
+    for ключ in ("server", "token", "server_key"):
+        assert ключ not in config.УМОЛЧАНИЯ, f"{ключ} приходит не из настроек"
 
 
-def test_shipped_example_parses_and_matches_the_code():
-    """kiosk.example.toml едет в сборку, и на точке его переименовывают в kiosk.toml.
-    Если он не разбирается — программа не запустится ни на одной точке."""
-    путь = os.path.join(КОРЕНЬ, "kiosk.example.toml")
-    with open(путь, "rb") as f:
-        данные = tomllib.load(f)
-    лишние = sorted(set(данные) - set(config.DEFAULTS))
-    assert not лишние, "в примере ключи, которых нет в коде: " + ", ".join(лишние)
-    assert данные.get("ocenka_bot"), "без имени бота QR на медиа собрать не из чего"
+def test_the_kiosk_starts_without_the_server(tmp_path):
+    """Первый запуск или нет связи: программа поднимается на умолчаниях и знает, что
+    настроек с сервера у неё ещё нет."""
+    cfg = config.load(str(tmp_path))
+    assert cfg["_настройки_с_сервера"] is False
+    assert cfg["server"] == config.СЕРВЕР and cfg["token"] == ""
+    assert cfg["fullscreen"] is True and cfg["apple_history_seconds"] == 90
+    assert cfg["point"] == ""                      # имя точки говорит сервер, а не файл
 
 
-@pytest.mark.parametrize("имя", ["config.example.toml", "server.example.toml"])
-def test_other_shipped_examples_parse(имя):
-    with open(os.path.join(КОРЕНЬ, имя), "rb") as f:
-        tomllib.load(f)
+def test_the_token_and_the_settings_survive_an_update(tmp_path):
+    """Папку программы сносит и обновление, и переустановка распаковкой поверх. Токен и
+    настройки лежат рядом с данными, поэтому ехать на точку заново никто не станет."""
+    config.запомнить_токен("pk_точка1", str(tmp_path))
+    config.сохранить_настройки({"point": "Алматы-1", "staff_name": "Асылбек",
+                                "return_seconds": 45, "чужое": "выкинуть"}, str(tmp_path))
+    cfg = config.load(str(tmp_path))
+    assert cfg["token"] == "pk_точка1" and cfg["_настройки_с_сервера"] is True
+    assert cfg["point"] == "Алматы-1" and cfg["return_seconds"] == 45
+    assert "чужое" not in cfg                      # храним только то, что умеем читать
 
 
-def test_broken_file_does_not_kill_the_kiosk(tmp_path):
-    """Точка правит kiosk.toml руками. Опечатка не должна превращаться в неработающий
-    киоск: поднимаемся на умолчаниях и говорим, в какой строке беда."""
-    битый = tmp_path / "kiosk.toml"
-    битый.write_text('point = "16/38"\nсотрудник = "Асылбек"\n', encoding="utf-8")
-    cfg = config.load(str(битый))
-    assert "line 2" in cfg["_ошибка"], cfg["_ошибка"]      # tomllib называет строку — она и нужна
-    assert cfg["point"] == config.DEFAULTS["point"]        # умолчания, а не полуразобранный файл
-    assert cfg["fullscreen"] is True
-
-
-def test_unknown_key_is_named_not_swallowed(tmp_path):
-    """Опечатка в имени ключа раньше проглатывалась молча — выглядело как «настройка
-    не работает»."""
-    файл = tmp_path / "kiosk.toml"
-    файл.write_text('point = "16/38"\nocenka_chatid = "-100500"\n', encoding="utf-8")
-    cfg = config.load(str(файл))
-    assert "ocenka_chatid" in cfg["_ошибка"]
-    assert cfg["point"] == "16/38"                         # остальное всё равно применилось
-
-
-def test_good_file_is_silent(tmp_path):
-    файл = tmp_path / "kiosk.toml"
-    файл.write_text('point = "16/38"\nstaff_name = "Асылбек"\nserver = "https://x.kz/"\n',
-                    encoding="utf-8")
-    cfg = config.load(str(файл))
-    assert cfg["_ошибка"] == "" and cfg["staff_name"] == "Асылбек"
-    assert cfg["server"] == "https://x.kz"                 # хвостовой слэш убираем сами
+def test_a_broken_cache_does_not_kill_the_kiosk(tmp_path):
+    """Файл копии побился (точку выключили на записи) — программа всё равно поднимается:
+    у стойки нужен работающий киоск, а не окно Windows с traceback."""
+    (tmp_path / config.ФАЙЛ_НАСТРОЕК).write_text("{это не json", encoding="utf-8")
+    (tmp_path / config.ФАЙЛ_ТОКЕНА).write_text("тоже не json", encoding="utf-8")
+    cfg = config.load(str(tmp_path))
+    assert cfg["token"] == "" and cfg["point"] == "" and cfg["fullscreen"] is True
 
 
 def test_build_workflow_stays_parseable():
@@ -89,43 +74,11 @@ def test_build_workflow_stays_parseable():
     assert "Метка сборки" in шаги, "без метки программа не узнает о новой версии"
 
 
-def test_settings_are_kept_outside_the_program_folder(tmp_path):
-    """Копия настроек переживает снос папки программы.
-
-    Папку сносит не только обновление: переустановка распаковкой поверх делает то же
-    самое. Настройки точки заполняют руками один раз."""
-    папка, данные = tmp_path / "Pintel", tmp_path / "data"
-    папка.mkdir(), данные.mkdir()
-    настройки = папка / "kiosk.toml"
-    настройки.write_text('staff_name = "Данияр"\n', encoding="utf-8")
-
-    assert config.сберечь(str(настройки), str(данные))
-    shutil.rmtree(папка)                      # обновление унесло папку целиком
-    папка.mkdir()
-
-    assert config.вернуть(str(настройки), str(данные)) is True
-    assert настройки.read_text(encoding="utf-8") == 'staff_name = "Данияр"\n'
-
-
-def test_existing_settings_are_never_overwritten_by_the_copy(tmp_path):
-    """Файл на месте — копия к нему не лезет: на точке его могли поправить руками."""
-    папка, данные = tmp_path / "Pintel", tmp_path / "data"
-    папка.mkdir(), данные.mkdir()
-    настройки = папка / "kiosk.toml"
-    настройки.write_text("старое\n", encoding="utf-8")
-    config.сберечь(str(настройки), str(данные))
-    настройки.write_text("поправили руками\n", encoding="utf-8")
-
-    assert config.вернуть(str(настройки), str(данные)) is False
-    assert настройки.read_text(encoding="utf-8") == "поправили руками\n"
-
-
-def test_nothing_to_restore_is_not_an_error(tmp_path):
-    """Первый запуск на новой точке: ни настроек, ни копии — это не поломка."""
-    папка, данные = tmp_path / "Pintel", tmp_path / "data"
-    папка.mkdir(), данные.mkdir()
-    assert config.вернуть(str(папка / "kiosk.toml"), str(данные)) is False
-    assert config.сберечь(str(папка / "kiosk.toml"), str(данные)) == ""
+@pytest.mark.parametrize("имя", ["config.example.toml", "server.example.toml"])
+def test_other_shipped_examples_parse(имя):
+    import tomllib
+    with open(os.path.join(КОРЕНЬ, имя), "rb") as f:
+        tomllib.load(f)
 
 
 def test_the_phone_test_ships_with_the_build():
@@ -136,4 +89,15 @@ def test_the_phone_test_ships_with_the_build():
     # страница общая: её отдаёт и мини-сервер киоска, и наш сервер на домене
     assert "('pintel_core/assets', 'pintel_core/assets')" in спека, "страница лежит в assets ядра"
     assert os.path.exists(os.path.join(КОРЕНЬ, "pintel_core", "assets", "diag.html"))
-    assert config.DEFAULTS["phone_test_port"] == 8765
+    assert config.УМОЛЧАНИЯ["phone_test_port"] == 8765
+
+
+def test_the_settings_names_match_the_server():
+    """Сервер присылает ровно этот набор ключей. Разойдутся — настройка молча не доедет,
+    и понять это можно будет только по жалобе с точки."""
+    спис = open(os.path.join(КОРЕНЬ, "pintel_server", "services", "kiosk_settings.py"),
+                encoding="utf-8").read()
+    серверные = set(re.findall(r'^    "([a-z_]+)":', спис, re.M))
+    наши = set(config.УМОЛЧАНИЯ) - {"point", "staff_name"}     # их сервер добавляет отдельно
+    assert наши <= серверные, "эти ключи программа ждёт, а сервер не присылает: " + \
+        ", ".join(sorted(наши - серверные))

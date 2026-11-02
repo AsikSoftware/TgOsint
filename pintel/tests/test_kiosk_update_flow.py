@@ -26,7 +26,8 @@ def окно(monkeypatch):
     QApplication.instance() or QApplication([])
     monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
     monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
-    w = kapp.KioskWindow({**kconfig.DEFAULTS, "point": "16/38", "_path": None})
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_тест",
+                          "point": "16/38"})
     yield w
     for поток in (w.poller, w.net):
         поток.stop()

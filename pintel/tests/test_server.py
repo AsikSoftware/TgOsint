@@ -524,24 +524,15 @@ def test_old_snapshots_are_pruned_but_the_evaluation_stays(app):
     ev.created_at = now() - timedelta(days=400)
     db.commit()
     assert ev_service.prune_snapshots(db, 0) == 0            # 0 — не чистить вовсе
-    # из этого аппарата эталон ещё не собирали — уборка его не трогает: такие и учат разбор
-    assert ev_service.prune_snapshots(db, 365) == 0
-    ev.reference_at = now()
-    db.commit()
-    assert ev_service.prune_snapshots(db, 180) == 1
+    assert ev_service.prune_snapshots(db, 60) == 1
     db.expire_all()
     ev = db.get(Evaluation, ev_id)
     assert ev.snapshot is None                               # слепок ушёл
     assert ev.report and ev.verdict and ev.model_name        # сама оценка на месте
-    assert ev_service.prune_snapshots(db, 180) == 0          # повторно чистить нечего
-    # невыгруженный, но совсем старый — всё же чистим: иначе база растёт без предела
-    ev2_id = k.post("/api/kiosk/evaluations", json={"client_id": "prune-2", "report": rep, "snapshot": snap},
-                    headers=H).json()["id"]
-    ev2 = db.get(Evaluation, ev2_id)
-    ev2.created_at = now() - timedelta(days=400)
-    db.commit()
-    assert ev2.reference_at is None
-    assert ev_service.prune_snapshots(db, 180) == 1
+    assert ev_service.prune_snapshots(db, 60) == 0           # повторно чистить нечего
+    # эталон аппарата при этом не теряется: его файл точка прислала сразу после проверки
+    # и он чистится своим сроком, не завися от слепка
+    assert ev_service.prune_references(db, 60) == 0
     db.close()
 
 
@@ -578,3 +569,65 @@ def test_a_kiosk_binds_itself_instead_of_being_handed_a_token(app):
     admin.post(f"/settings/kiosks/{киоск_id}/toggle")
     assert k.post("/api/kiosk/register", json=тело).status_code == 403
     assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": второй}).status_code == 401
+
+
+def test_the_point_token_is_the_whole_setup(app, tmp_path):
+    """Правильная структура: в базе заводят точку с токеном, и это всё. Программа на точке
+    приходит с этим токеном, получает оттуда же все настройки, шлёт журнал и эталоны.
+    Ни адреса, ни токена, ни настроек в файле у неё нет."""
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/points", data={"name": "Алматы-7", "city": "Алматы"})
+    assert r.status_code == 303 and "t=" in loc(r)
+    токен = re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)
+    assert "Алматы-7" in loc(r)                    # токен показывается один раз, с именем точки
+
+    k = TestClient(app)
+    H = {"X-Kiosk-Token": токен, "X-Kiosk-Machine": "KASSA-7"}
+    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": "pk_wrong"}).status_code == 401
+    cfg = k.get("/api/kiosk/config", headers=H).json()
+    assert cfg["точка"] == "Алматы-7" and cfg["настройки"]["point"] == "Алматы-7"
+    assert cfg["настройки"]["apple_history_seconds"] == 90      # умолчание, пока не меняли
+    assert "KASSA-7" in cfg["киоск"]                            # машина завелась сама
+
+    # настройки меняются в кассе и доезжают до точки — объезжать компьютеры не нужно
+    admin.post("/settings/kiosk", data={"ocenka_bot": "PintelOlxBot", "apple_history_seconds": "120",
+                                        "return_seconds": "60", "keep_days": "90",
+                                        "reference_keep": "500", "phone_test_port": "8765",
+                                        "sickw": "on", "rfs": "on", "sickw_services_sealed": "147",
+                                        "update_repo": "AsikSoftware/TgOsint",
+                                        "company_name": "Pintel.kz"})
+    point_id = db_точка(app, "Алматы-7").id
+    admin.post(f"/settings/points/{point_id}", data={"staff_name": "Асылбек", "city": "Алматы"})
+    cfg = k.get("/api/kiosk/config", headers=H).json()["настройки"]
+    assert cfg["ocenka_bot"] == "PintelOlxBot" and cfg["apple_history_seconds"] == 120
+    assert cfg["staff_name"] == "Асылбек" and cfg["rfs"] is True
+    assert cfg["sickw"] is True and cfg["archive_snapshots"] is False
+
+    # журнал и эталоны с точки
+    assert k.post("/api/kiosk/logs", json={"lines": ["связь есть", "оценка отправлена"]},
+                  headers=H).json()["принято"] == 2
+    имя = "эталон_iPhone-14-Pro_iOS26.5_20261102_084500.zip"
+    ответ = k.post("/api/kiosk/reference", headers=H, data={"name": имя},
+                   files={"file": ("bundle.zip", b"PK\x03\x04" + b"x" * 100, "application/zip")})
+    assert ответ.status_code == 200 and ответ.json()["принят"] is True
+    assert k.post("/api/kiosk/reference", headers=H, data={"name": имя},
+                  files={"file": ("bundle.zip", b"PK\x03\x04", "application/zip")}
+                  ).json()["принят"] is False
+    assert k.post("/api/kiosk/reference", headers=H, data={"name": "не-эталон.txt"},
+                  files={"file": ("bundle.zip", b"x", "application/zip")}).status_code == 400
+
+    # всё это видно в кассе
+    страница = admin.get("/статистика").text
+    assert "Алматы-7" in страница and "оценка отправлена" in страница
+    # точку можно отключить — программа на ней сразу перестаёт ходить
+    admin.post(f"/settings/points/{point_id}/toggle")
+    assert k.get("/api/kiosk/config", headers=H).status_code == 401
+
+
+def db_точка(app, имя):
+    from pintel_server.models import Point
+    db = SessionLocal()
+    try:
+        return db.scalar(select(Point).where(Point.name == имя))
+    finally:
+        db.close()

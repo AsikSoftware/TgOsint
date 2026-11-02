@@ -62,7 +62,8 @@ def main(argv=None):
         if a.cmd == "prune":
             from .services import evaluations as ev_service
             n = ev_service.prune_snapshots(db, a.days)
-            print(f"сырые слепки убраны у {n} оценок (сами оценки остались)"); return 0
+            e = ev_service.prune_references(db, a.days)
+            print(f"убрано: слепков у {n} оценок, эталонов {e} (сами оценки остались)"); return 0
     finally:
         db.close()
     return 0

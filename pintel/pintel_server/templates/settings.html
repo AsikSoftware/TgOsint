@@ -5,9 +5,9 @@
 <h1>Настройки</h1>
 {% if new_token %}
 <div class="sec" style="border-color:var(--primary)">
-  <h2>Токен нового киоска — показывается один раз</h2>
+  <h2>Токен {{ ('точки «' + для_точки + '»') if для_точки else 'нового киоска' }} — показывается один раз</h2>
   <div class="row"><code style="font-size:18px;padding:10px 14px;background:var(--bg);border-radius:10px">{{ new_token }}</code></div>
-  <div class="note">Впишите его в <b>kiosk.toml</b> рядом с pintel-kiosk.exe: <code>token = "{{ new_token }}"</code>, и адрес сервера <code>server = "{{ settings.public_url }}"</code>.</div>
+  <div class="note">Введите его <b>в самой программе на точке</b>: она спросит токен при первом запуске, а потом его можно сменить в меню администратора (<b>Ctrl+Shift+A</b>). В <code>kiosk.toml</code> вписывать ничего не нужно — ни токен, ни адрес.</div>
 </div>
 {% endif %}
 <div class="grid2">
@@ -48,15 +48,73 @@
   </section>
   <section class="sec">
     <h2>Точки</h2>
-    {% for p in points %}<div class="kv"><span>{{ p.name }}</span><span>{{ p.city or '' }}</span></div>{% else %}<div class="note">Точек пока нет — добавьте первую, чтобы привязывать киоски и сотрудников.</div>{% endfor %}
+    {% for p in points %}
+    <div class="kv"><span><span class="dot {{ '' if p.is_active else 'off' }}"></span>{{ p.name }}{% if not p.token_hash %} · <span class="warn">токен не выдан</span>{% endif %}{% if not p.is_active %} · <span class="bad">отключена</span>{% endif %}</span>
+      <span>{{ p.city or '' }}{% if p.staff_name %} · {{ p.staff_name }}{% endif %}</span></div>
+    {% if user.role == 'admin' %}
+    <form method="post" action="/settings/points/{{ p.id }}" class="row" style="margin:4px 0 10px 0">
+      <input type="text" name="staff_name" value="{{ p.staff_name or '' }}" placeholder="кто у кассы — в чек" style="width:190px">
+      <input type="text" name="city" value="{{ p.city or '' }}" placeholder="город" style="width:120px">
+      <button class="btn sm" type="submit">Сохранить</button>
+    </form>
+    <div class="row" style="margin-bottom:12px">
+      <form method="post" action="/settings/points/{{ p.id }}/token" style="display:inline"><button class="btn sm" type="submit">{{ 'Перевыпустить токен' if p.token_hash else 'Выдать токен' }}</button></form>
+      <form method="post" action="/settings/points/{{ p.id }}/toggle" style="display:inline"><button class="btn sm" type="submit">{{ 'Отключить точку' if p.is_active else 'Включить точку' }}</button></form>
+    </div>
+    {% endif %}
+    {% else %}<div class="note">Точек пока нет — добавьте первую, её токен вводят в программе на точке.</div>{% endfor %}
     {% if user.role == 'admin' %}
     <form method="post" action="/settings/points" class="row" style="margin-top:8px">
       <input type="text" name="name" placeholder="название, например Алматы-1" required style="width:220px">
       <input type="text" name="city" placeholder="город" style="width:160px">
-      <button class="btn primary sm" type="submit">Добавить точку</button>
+      <button class="btn primary sm" type="submit">Добавить точку и выдать токен</button>
     </form>
     {% endif %}
-    <div class="kv" style="margin-top:10px"><span>Сервер</span><span>{{ settings.public_url }} · часовой пояс {{ settings.tz }} · возврат киоска {{ settings.kiosk_return_seconds }} с</span></div>
+    <div class="kv" style="margin-top:10px"><span>Сервер</span><span>{{ settings.public_url }} · часовой пояс {{ settings.tz }} · сырьё хранится {{ settings.snapshot_keep_days }} дней</span></div>
   </section>
 </div>
+
+<section class="sec">
+  <h2>Программа на точках</h2>
+  <div class="note">Это настройки для всех точек сразу: программа забирает их при запуске и держит
+    последнюю копию у себя, чтобы подняться и без связи. В <code>kiosk.toml</code> на точках ничего
+    этого больше нет — раньше любое изменение значило объехать все компьютеры.</div>
+  {% if user.role == 'admin' %}
+  <form method="post" action="/settings/kiosk">
+    <div class="grid2">
+      <div>
+        <h3>Оценка (сделку создаёт её бот)</h3>
+        <div class="row"><input type="text" name="ocenka_bot" value="{{ программа.ocenka_bot }}" placeholder="имя бота без @" style="width:200px"></div>
+        <div class="row"><input type="text" name="ocenka_bot_token" value="{{ программа.ocenka_bot_token }}" placeholder="токен бота" style="width:280px"></div>
+        <div class="row"><input type="text" name="ocenka_chat_id" value="{{ программа.ocenka_chat_id }}" placeholder="chat_id рабочей группы" style="width:200px"></div>
+        <h3>Проверки</h3>
+        <div class="row"><label class="chk"><input type="checkbox" name="sickw" {{ 'checked' if программа.sickw }}>база IMEI</label>
+          <label class="chk"><input type="checkbox" name="rfs" {{ 'checked' if программа.rfs }}>реестр РФС</label></div>
+        <div class="row"><input type="text" name="rfs_proxy" value="{{ программа.rfs_proxy }}" placeholder="прокси KZ для реестра" style="width:280px"></div>
+        <div class="row"><input type="text" name="sickw_services_sealed" value="{{ программа.sickw_services_sealed|join(', ') }}" placeholder="службы для запечатанного" style="width:200px"></div>
+        <h3>Обновление программы</h3>
+        <div class="row"><input type="text" name="update_repo" value="{{ программа.update_repo }}" placeholder="владелец/репозиторий" style="width:240px"></div>
+        <div class="row"><input type="text" name="update_token" value="{{ программа.update_token }}" placeholder="токен GitHub только на чтение" style="width:280px"></div>
+        <div class="row"><input type="text" name="update_asset" value="{{ программа.update_asset }}" placeholder="имя архива" style="width:280px"></div>
+      </div>
+      <div>
+        <h3>Сроки и пороги</h3>
+        <div class="row"><input type="number" name="apple_history_seconds" value="{{ программа.apple_history_seconds }}" style="width:90px"> <span class="note">секунд ждать раздел Apple</span></div>
+        <div class="row"><input type="number" name="return_seconds" value="{{ программа.return_seconds }}" style="width:90px"> <span class="note">секунд до возврата к началу</span></div>
+        <div class="row"><input type="number" name="keep_days" value="{{ программа.keep_days }}" style="width:90px"> <span class="note">дней хранить оценки на точке</span></div>
+        <div class="row"><input type="number" name="reference_keep" value="{{ программа.reference_keep }}" style="width:90px"> <span class="note">эталонов держать на точке</span></div>
+        <div class="row"><input type="number" name="phone_test_port" value="{{ программа.phone_test_port }}" style="width:90px"> <span class="note">порт теста в локальной сети</span></div>
+        <div class="row"><label class="chk"><input type="checkbox" name="fullscreen" {{ 'checked' if программа.fullscreen }}>во весь экран</label></div>
+        <h3>Реквизиты в чеке клиента</h3>
+        <div class="row"><input type="text" name="company_name" value="{{ программа.company_name }}" placeholder="название" style="width:200px"></div>
+        <div class="row"><input type="text" name="company_phone" value="{{ программа.company_phone }}" placeholder="телефон" style="width:200px"></div>
+        <div class="row"><input type="text" name="company_site" value="{{ программа.company_site }}" placeholder="сайт" style="width:200px"></div>
+        <div class="row"><input type="text" name="company_address" value="{{ программа.company_address }}" placeholder="адрес" style="width:280px"></div>
+        <div class="row"><input type="text" name="company_bin" value="{{ программа.company_bin }}" placeholder="БИН" style="width:160px"></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="btn primary" type="submit">Сохранить настройки программы</button></div>
+  </form>
+  {% else %}<div class="note">Менять настройки программы может администратор.</div>{% endif %}
+</section>
 {% endblock %}

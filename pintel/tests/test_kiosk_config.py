@@ -101,3 +101,23 @@ def test_the_settings_names_match_the_server():
     наши = set(config.УМОЛЧАНИЯ) - {"point", "staff_name"}     # их сервер добавляет отдельно
     assert наши <= серверные, "эти ключи программа ждёт, а сервер не присылает: " + \
         ", ".join(sorted(наши - серверные))
+
+
+def test_the_old_file_still_feeds_what_is_not_in_the_base_yet(tmp_path, monkeypatch):
+    """Мост на время перехода. До этой версии бот Оценки с его токеном жил в kiosk.toml на
+    точке. Если точка обновится раньше, чем настройки заведут в базе, она останется без бота
+    и не сможет отправить сделку — поэтому такие ключи дочитываем из старого файла, пока
+    сервер не пришлёт свои. Сервер всегда главнее: что пришло оттуда, то и побеждает."""
+    программа = tmp_path / "Pintel"
+    программа.mkdir()
+    (программа / "kiosk.toml").write_text(
+        'ocenka_bot = "PintelOlxBot"\nocenka_bot_token = "123:ABC"\nocenka_chat_id = "-1001"\n'
+        'point = "это сервер скажет сам"\n', encoding="utf-8")
+    monkeypatch.setattr(config, "app_dir", lambda: str(программа))
+
+    cfg = config.load(str(tmp_path))
+    assert cfg["ocenka_bot"] == "PintelOlxBot" and cfg["ocenka_chat_id"] == "-1001"
+    assert cfg["point"] == "", "имя точки берём только из базы, а не из файла"
+
+    config.сохранить_настройки({"ocenka_bot": "ДругойБот"}, str(tmp_path))
+    assert config.load(str(tmp_path))["ocenka_bot"] == "ДругойБот"   # сервер главнее файла

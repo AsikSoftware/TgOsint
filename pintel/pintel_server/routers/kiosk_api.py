@@ -99,6 +99,18 @@ def config(kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db
     }
 
 
+@router.get("/media/{code}")                   # имя в адресе латиницей: Starlette не видит
+def media(code: str, kiosk: Kiosk = Depends(current_kiosk)):
+    """Дошли ли до бота фото, видео и отметки диагностики по этому коду обмена.
+
+    Касса спрашивает это, пока открыт экран сделки, и не даёт отправить оценку, пока медиа
+    не собраны: раньше карточка уходила в рабочую группу без них, а отказ прилетал от бота
+    минутой позже — с телефоном клиента в руках это значит начинать заново.
+    """
+    from ..services import ocenka_media as media_service
+    return media_service.состояние(code)
+
+
 class LogsIn(BaseModel):
     lines: list[str]
 

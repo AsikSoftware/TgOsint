@@ -210,6 +210,11 @@ class KioskWindow(QMainWindow):
         self._тест_спрашиваем = False
         self.тест_опрос = QTimer(self)
         self.тест_опрос.timeout.connect(self._спросить_тест)
+        # Фото и видео сотрудник шлёт боту, а не нам: в базу Оценки с точки хода нет.
+        # Поэтому про них спрашиваем сервер — он стоит рядом с ней и видит их.
+        self._медиа_спрашиваем = False
+        self.медиа_опрос = QTimer(self)
+        self.медиа_опрос.timeout.connect(self._спросить_медиа)
         self.веб_телефона = phoneweb.запустить(int(cfg.get("phone_test_port") or phoneweb.ПОРТ))
         if self.веб_телефона is None:
             log_line(f"тест на телефоне: порт {cfg.get('phone_test_port') or phoneweb.ПОРТ} занят")
@@ -628,7 +633,7 @@ class KioskWindow(QMainWindow):
         self._классифицировать(rep)
         self.новый_код_медиа()
         if not (rep.get("память") or {}).get("объём_гб") or not (rep.get("паспорт") or {}).get("модель"):
-            self.s_work.ошибка.setText("База IMEI не назвала модель или объём — без них сделку не "
+            self.s_work.сказать("База IMEI не назвала модель или объём — без них сделку не "
                                        "собрать. Проверьте IMEI и службу sickw_services_sealed.")
 
     def on_sealed_failed(self, text):
@@ -643,11 +648,11 @@ class KioskWindow(QMainWindow):
         rep = (self.last or {}).get("report") or {}
         пас, cfg = rep.get("паспорт") or {}, self.cfg
         if not (cfg.get("ocenka_bot_token") and cfg.get("ocenka_chat_id")):
-            self.s_work.ошибка.setText("В kiosk.toml не заданы ocenka_bot_token и "
+            self.s_work.сказать("В настройках точки не заданы ocenka_bot_token и "
                                        "ocenka_chat_id — отправлять некуда")
             return
         if not self.код_медиа:
-            self.s_work.ошибка.setText("Нет кода для медиа — нажмите «Другой код»")
+            self.s_work.сказать("Нет кода для медиа — нажмите «Другой код»")
             return
         клиент, код = {"имя": поля["имя"], "телефон": поля["телефон"]}, self.код_медиа
         магазин = self.cfg.get("point_id")        # он же id магазина в Оценке
@@ -721,6 +726,33 @@ class KioskWindow(QMainWindow):
                                   "лицевая, задняя, потом видео — и примет только то, что "
                                   "нужно на шаге. Последним — ручная диагностика кнопками. "
                                   "Кто прислал — тот и оценщик.")
+        self.s_work.set_медиа({})
+        self._медиа_спрашиваем = False
+        if self.client.enabled:
+            self.медиа_опрос.start(3000)        # что дошло до бота, видно на экране кассы
+
+    def _спросить_медиа(self):
+        """Пока сотрудник шлёт боту фото и видео, касса спрашивает сервер, что уже дошло.
+
+        Иначе «Отправить в Оценку» нажималась бы вслепую: бот без видео сделку не создаёт,
+        и отказ приходил бы, когда телефон клиента уже отдан. Запрос сетевой — в отдельном
+        потоке и не больше одного зараз."""
+        if not (self.client.enabled and self.код_медиа) or self._медиа_спрашиваем:
+            return
+        if self.s_work.отправлено or self.state not in ("work", "intake", "scanning"):
+            self.медиа_опрос.stop()
+            return
+        self._медиа_спрашиваем = True
+        код = self.код_медиа
+        self._run(lambda: self.client.медиа(код), ok=self._медиа_спросили,
+                  err=lambda e: self._медиа_спросили({"известно": False, "почему": str(e)[:80]}))
+
+    def _медиа_спросили(self, состояние):
+        self._медиа_спрашиваем = False
+        self.s_work.set_медиа(состояние)
+        if (состояние or {}).get("готово"):
+            self.медиа_опрос.stop()
+            log_line(f"медиа по коду {self.код_медиа}: фото и видео собраны, диагностика пройдена")
 
     def _дослать_на_сервер(self, добавка: dict):
         """Дописать в сохранённую на сервере оценку то, что появилось ПОСЛЕ её создания:
@@ -825,7 +857,7 @@ class KioskWindow(QMainWindow):
         log_line("тест на телефоне: " + phonetest.словами(res))
         if плох:
             # найденное руками кабель не видит, и состояние сделки обязано это учесть
-            self.s_work.ошибка.setText("Тест на телефоне не прошёл: " + ", ".join(плох)
+            self.s_work.сказать("Тест на телефоне не прошёл: " + ", ".join(плох)
                                        + ". Сделка уйдёт на оценку человеку.")
 
     def тест_не_будет(self):
@@ -838,7 +870,7 @@ class KioskWindow(QMainWindow):
 
     def отправка_не_удалась(self, текст):
         self.s_work.занято("")
-        self.s_work.ошибка.setText("Не ушло: " + текст)
+        self.s_work.сказать("Не ушло: " + текст)
 
     def сделка_ушла(self, итог):
         поля = self.s_work.данные()
@@ -855,6 +887,7 @@ class KioskWindow(QMainWindow):
                        # чек живёт и на домене: QR на бумаге ведёт на ту же страницу
                        "ссылка": сервер.get("ссылка_чека") or ""}
         self._дослать_на_сервер({"чек": dict(self.сделка)})
+        self.медиа_опрос.stop()                 # карточка ушла, следить больше не за чем
         self.s_work.ушло(код)
 
     def _фирма(self):
@@ -884,6 +917,7 @@ class KioskWindow(QMainWindow):
     def go_home(self):
         phoneweb.закрыть()                      # ссылка из прошлой сделки больше не работает
         self.тест_опрос.stop()
+        self.медиа_опрос.stop()
         self.return_timer.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен

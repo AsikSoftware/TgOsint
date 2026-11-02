@@ -51,7 +51,6 @@ router_kiosk_media = Router()
 # переходов на бота. Фильтруем по тексту, а не параметрами CommandStart: так обработчик
 # работает в любой версии aiogram 3 и наверняка не перехватит чужой /start.
 СТАРТ = re.compile(r"^/start(?:@\w+)?\s+p([A-Z0-9]{4,12})\b")
-ТОЧКА = re.compile(r"^kmedia_shop_([A-Z0-9]{4,12})_(\d+)$")
 # пункт ручной диагностики: префикс, код сделки, ключ пункта (ASCII, из kiosk_core.ПУНКТЫ)
 ПУНКТ = re.compile(r"^kmchk_([A-Z0-9]{4,12})_([a-z]+)$")
 ГОТОВО_ДИАГ = re.compile(r"^kmchkok_([A-Z0-9]{4,12})$")
@@ -127,17 +126,6 @@ async def _магазины() -> list:
         return [dict(r) for r in res.mappings()]
 
 
-async def _последняя_точка(user_id):
-    """Где этот человек оформлял прошлый раз. Админ ездит по точкам, но подряд обычно
-    работает на одной — пусть она будет первой кнопкой, а не одной из двух десятков."""
-    if not user_id:
-        return None
-    async with async_session_factory() as session:
-        return (await session.execute(text(
-            "SELECT shop_id FROM kiosk_media WHERE user_id = :u AND shop_id IS NOT NULL "
-            "ORDER BY id DESC LIMIT 1"), {"u": user_id})).scalar()
-
-
 async def _поставить_точку(код: str, shop_id: int) -> None:
     async with async_session_factory() as session:
         await session.execute(text("UPDATE kiosk_media SET shop_id = :s WHERE code = :c"),
@@ -151,25 +139,6 @@ async def _имя_точки(shop_id):
     async with async_session_factory() as session:
         return (await session.execute(text("SELECT shop_name FROM shops WHERE id = :i"),
                                       {"i": shop_id})).scalar() or ""
-
-
-async def _кнопки_точек(код: str, user_id=None):
-    """Список магазинов Оценки. Прошлая точка этого человека — первой строкой."""
-    магазины = await _магазины()
-    прошлая = await _последняя_точка(user_id)
-    kb = InlineKeyboardBuilder()
-    первая = next((м for м in магазины if м["id"] == прошлая), None)
-    if первая:
-        kb.button(text="⭐ " + первая["shop_name"], callback_data=f"kmedia_shop_{код}_{первая['id']}")
-    for м in магазины:
-        if первая and м["id"] == первая["id"]:
-            continue
-        kb.button(text=м["shop_name"], callback_data=f"kmedia_shop_{код}_{м['id']}")
-    if первая:
-        kb.adjust(1, 2)                    # прошлая точка — своей строкой, остальные по две
-    else:
-        kb.adjust(2)
-    return kb.as_markup()
 
 
 # ---------------------------------------------------------------- ручная диагностика
@@ -209,10 +178,14 @@ def _текст_диагностики() -> str:
 
 
 async def _дальше(отправить, код: str, шапка: str = "") -> None:
-    """Что сотруднику делать прямо сейчас: медиа → точка → ручная диагностика → отправка.
+    """Что сотруднику делать прямо сейчас: медиа → ручная диагностика → отправка.
 
-    Одно место на все четыре входа (ссылка из QR, присланное медиа, выбор точки, кнопка
-    диагностики): порядок шагов не должен расходиться между ними.
+    Одно место на все три входа (ссылка из QR, присланное медиа, кнопка диагностики):
+    порядок шагов не должен расходиться между ними.
+
+    Точку здесь не спрашивают. Она приходит готовой в посылке: программа на точке знает
+    свой `shop_id` (это тот же магазин Оценки, с тем же id), и кнопка «выберите точку»
+    после медиа была лишним шагом, на котором ещё и ошибались.
     """
     строка = await _строка(код)
     if строка is None:
@@ -220,10 +193,6 @@ async def _дальше(отправить, код: str, шапка: str = "") -
     осталось = kiosk_core.чего_не_хватает(строка)
     if осталось:
         await отправить(f"{шапка}Сейчас: {осталось[0]}")
-        return
-    if not строка["shop_id"]:
-        await отправить(f"{шапка}Медиа собраны. Выберите точку, где идёт оценка:",
-                        reply_markup=await _кнопки_точек(код, строка["user_id"]))
         return
     if not kiosk_core.диагностика_готова(строка["checks"]):
         await отправить(шапка + _текст_диагностики(),
@@ -269,8 +238,10 @@ async def открыть_приём(message: Message, state: FSMContext):
     await _завести(код, сотрудник.id, message.chat.id, shop_id)
     await state.set_state(KioskMediaState.приём)
     await state.update_data(kmedia_code=код)
+    # Точку не спрашиваем вовсе: её присылает программа (её `shop_id` — это тот же магазин
+    # Оценки). Свою называем просто для спокойствия — видно, что бот понял, откуда сделка.
     точка = (f"Точка: <b>{await _имя_точки(shop_id)}</b> — ваша.\n" if shop_id
-             else "Точку выберете кнопкой, когда пришлёте медиа.\n")
+             else "Точку возьму из программы — выбирать её не нужно.\n")
     await message.answer(
         f"Принимаю оценку с точки, {сотрудник.first_name or 'коллега'}.\n"
         f"{точка}\n"
@@ -342,32 +313,12 @@ async def что_принято(call: CallbackQuery):
 
 @router_kiosk_media.callback_query(F.data.startswith("kmedia_shop_"))
 async def выбрать_точку(call: CallbackQuery):
-    """Админ работает на разных точках, поэтому выбирает сам. Продавца не спрашиваем —
-    у него точка одна, она проставилась сама."""
-    совпало = ТОЧКА.match(call.data or "")
-    if not совпало:
-        await call.answer()
-        return
-    код, shop_id = совпало.group(1), int(совпало.group(2))
-    if await _сотрудник(call.from_user.id) is None:
-        await call.answer("Точку выбирают сотрудники Pintel", show_alert=True)
-        return
-    строка = await _строка(код)
-    if строка is None:
-        await call.answer("Код не найден", show_alert=True)
-        return
-    if строка["device_id"]:
-        await call.answer(f"По этому коду сделка № {строка['device_id']} уже создана",
-                          show_alert=True)
-        return
-    await _поставить_точку(код, shop_id)
-    имя = await _имя_точки(shop_id)
-    await call.answer(f"Точка: {имя}")
-    try:                                   # правим то же сообщение: список точек больше не нужен
-        await call.message.edit_text(f"Точка: <b>{имя}</b>.")
-    except Exception:                      # noqa: BLE001 — не вышло править, не беда
-        pass
-    await _дальше(call.message.answer, код)
+    """Точку больше не выбирают: она приходит в посылке из программы.
+
+    Обработчик оставлен для кнопок в прежних сообщениях — они остались в чатах, и нажатие
+    не должно висеть без ответа."""
+    await call.answer("Точку больше не выбирают: её присылает программа с точки",
+                      show_alert=True)
 
 
 # ---------------------------------------------------------------- ручная диагностика: нажатия
@@ -460,14 +411,13 @@ async def создать_сделку(call: CallbackQuery, bot: Bot):
         посылка = kiosk_core.разобрать(буфер.getvalue())
         if посылка["код"] != код:
             raise kiosk_core.ОшибкаПосылки("код в файле не совпадает с кнопкой")
-        # Точка: сначала та, что уже выбрана в боте, иначе — из самой посылки. Имя точки
-        # программа берёт из нашей базы (сервер говорит ей, где она стоит), поэтому
-        # спрашивать его у сотрудника незачем, если такой магазин у Оценки есть.
-        if not строка["shop_id"]:
-            свой = kiosk_core.точка_из_посылки(посылка, await _магазины())
-            if свой:
-                await _поставить_точку(код, свой)
-                строка = await _строка(код)
+        # Точка сделки — та, где стоит программа: её `shop_id` приходит в посылке и это тот
+        # же магазин Оценки, с тем же id. Она главнее магазина сотрудника: медиа мог сдать
+        # администратор, закреплённый за другой точкой, а сделка случилась здесь.
+        свой = kiosk_core.точка_из_посылки(посылка, await _магазины())
+        if свой and свой != строка["shop_id"]:
+            await _поставить_точку(код, свой)
+            строка = await _строка(код)
         нет = kiosk_core.проверить(посылка, строка)
         if нет:
             await call.answer("Не хватает: " + "; ".join(нет)[:180], show_alert=True)
@@ -562,7 +512,13 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
             {"d": device_id, "c": посылка["код"]})
         await session.commit()
 
-    цена = await _автоцена(device_id)
+    # Цену считаем ТОЛЬКО там, где автооценка вообще положена: б/у в нормальном состоянии,
+    # не был в ремонте, и проверка полная. Остальным колонка остаётся пустой — иначе в
+    # карточке запечатанного или ремонтного аппарата стояла бы цена из прайса, которой
+    # клиенту никто не называл, и её легко принять за оценку.
+    можно = kiosk_core.автоцена_положена({"phone_status": поля.get("phone_status")},
+                                         отметки, посылка)
+    цена = await _автоцена(device_id) if можно else None
     статус = kiosk_core.статус_id({"phone_status": поля.get("phone_status"),
                                    "price_grade_auto": цена}, отметки, посылка)
     async with async_session_factory() as session:

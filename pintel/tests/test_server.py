@@ -712,3 +712,59 @@ def db_точка(app, имя):
         return db.scalar(select(Point).where(Point.name == имя))
     finally:
         db.close()
+
+
+def test_the_kiosk_can_see_what_reached_the_bot(app, monkeypatch, tmp_path):
+    """Касса спрашивает сервер, дошли ли фото и видео: в базу Оценки с точки хода нет, а
+    сервер стоит рядом с ней. Без этого «Отправить в Оценку» нажималась бы вслепую.
+
+    Ответ «не знаю» обязан отличаться от «ничего не прислали»: по первому касса работает
+    дальше и говорит об этом вслух, по второму — ждёт медиа."""
+    from sqlalchemy import create_engine, text as sqltext
+    from pintel_server.services import ocenka_import, points as points_service
+
+    monkeypatch.setattr(points_service, "магазины_оценки",
+                        lambda: [{"id": 14, "litera": "U", "shop_name": "16/38 Pintel"}])
+    db = SessionLocal()
+    points_service.синхронизировать(db)
+    токен = db.get(Point, 14).token
+    db.close()
+    k = TestClient(app)
+    H = {"X-Kiosk-Token": токен, "X-Kiosk-Machine": "KASSA-14"}
+
+    # базы Оценки нет вовсе — это «не знаю», и так и сказано
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine",
+                        lambda: (_ for _ in ()).throw(RuntimeError("не настроено")))
+    ответ = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert ответ["известно"] is False and ответ["почему"]
+
+    # а теперь база есть: заводим такую же таблицу обмена
+    движок = create_engine(f"sqlite:///{tmp_path}/ocenka.db", future=True)
+    with движок.begin() as conn:
+        conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
+                             "checks TEXT, done INTEGER, device_id INTEGER)"))
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: движок)
+
+    # ссылку ещё не открывали: строки нет — и это не ошибка, а начало сделки
+    пусто = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert пусто["известно"] is True and пусто["начали"] is False
+    assert пусто["фото"] == 0 and пусто["видео"] is False and пусто["готово"] is False
+    assert "Кнопки" in пусто["не_отмечено"]
+
+    with движок.begin() as conn:
+        conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video, checks) "
+                             "VALUES ('ABCD12', 'f1||f2', NULL, '{\"keys\": true}')"))
+    серёдка = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert серёдка["фото"] == 2 and серёдка["видео"] is False and серёдка["готово"] is False
+    assert "Кнопки" not in серёдка["не_отмечено"] and "Вибрация" in серёдка["не_отмечено"]
+
+    отметки = json.dumps({k_: True for k_, _, _ in
+                          __import__("pintel_core.external.ocenka_media", fromlist=["x"]).ПУНКТЫ})
+    with движок.begin() as conn:
+        conn.execute(sqltext("UPDATE kiosk_media SET photos = 'f1||f2||f3', video = 'v1', "
+                             "checks = :c WHERE code = 'ABCD12'"), {"c": отметки})
+    готово = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert готово["готово"] is True and готово["фото"] == 3 and готово["видео"] is True
+
+    # чужой токен внутрь не пускают: по коду обмена видно, что происходит на точке
+    assert k.get("/api/kiosk/media/ABCD12", headers={"X-Kiosk-Token": "pk_wrong"}).status_code == 401

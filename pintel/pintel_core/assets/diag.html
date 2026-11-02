@@ -9,15 +9,19 @@
   локальной сети (pintel_kiosk/phoneweb.py), токен в адресе одноразовый. Приложение на чужой
   телефон не поставить — iOS не пускает, а страница делает то же самое сразу.
 
-  Семь тестов, часть зачитывается сама: сетка закрашена целиком — сенсор жив; пять касаний
-  поймались — мультитач жив; снимок пришёл и он не чёрный — камера снимает. Остальное может
+  Семь тестов, и у каждого один и тот же порядок: СНАЧАЛА проверка, ПОТОМ вопрос с ответом
+  и кнопкой «пройти заново». Человек не отвечает про то, чего ещё не видел, и может
+  переделать любой тест — в конце весь список на одном экране, тап по строке повторяет
+  именно её. Часть ответов ставится сама: сетка закрашена целиком — сенсор жив; пять
+  касаний поймались — мультитач жив; снимок не чёрный — камера снимает. Остальное может
   оценить только человек, который смотрит и слушает, поэтому у каждого теста есть и ответ
   «не получилось»: честный пропуск лучше выдуманного «в порядке» — в сделке он снимает
   автоцену, но не приписывает аппарату дефект. Ключи ответов — pintel_core/phonetest.py.
 
-  Только HTTP в локальной сети, без внешней сети: камера снимается через <input capture>, он
-  работает и без HTTPS. Микрофон через getUserMedia Safari на http даёт не всегда, поэтому
-  есть путь через «Диктофон» — и он честно помечается как ответ человека.
+  Звук: и мелодию динамика, и запись микрофона проигрываем через <audio> с явным типом.
+  WebAudio на iPhone заводится не всегда, а Blob без типа Safari не играет вовсе — именно
+  на этом «проиграть» молчало. Если и <audio> не стартовал, говорим об этом словами, а не
+  показываем вопрос «слышно ли?», на который нечего ответить.
 -->
 <style>
 *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
@@ -26,126 +30,121 @@ body{background:linear-gradient(160deg,#050F1F,#081B34 55%,#0D2B52);
   color:#F4F8FD;font:17px/1.45 -apple-system,'SF Pro Text',system-ui,sans-serif;
   display:flex;flex-direction:column;touch-action:none}
 .screen{flex:1;display:none;flex-direction:column;align-items:center;
-  justify-content:center;padding:28px;text-align:center;gap:16px}
+  justify-content:center;padding:24px 22px;text-align:center;gap:14px}
 .screen.on{display:flex}
 h1{font-size:30px;font-weight:300;letter-spacing:.3px}
-.sub{color:#9FB4CF;font-size:16px;max-width:330px}
+.sub{color:#9FB4CF;font-size:16px;max-width:340px}
 .step{color:#6C83A6;font-size:13px;letter-spacing:2px;font-weight:700}
 button{background:linear-gradient(180deg,#7ADCFF,#2BA4DB);color:#06203A;
-  border:0;border-radius:999px;padding:16px 34px;font-size:17px;font-weight:800;
+  border:0;border-radius:999px;padding:16px 32px;font-size:17px;font-weight:800;
   font-family:inherit}
 button.ghost{background:rgba(255,255,255,.07);color:#F4F8FD;
   border:1px solid rgba(255,255,255,.16)}
 button.small{padding:11px 20px;font-size:15px}
+button.bad{background:linear-gradient(180deg,#FF9C90,#E2604F);color:#2A0A05}
 button:active{transform:scale(.96)}
-.pair{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.pair{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
 .card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);
-  border-radius:22px;padding:18px 20px;max-width:340px;width:100%}
-.row{display:flex;justify-content:space-between;padding:7px 0;font-size:16px}
+  border-radius:22px;padding:14px 18px;max-width:340px;width:100%}
+.row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:16px;
+  align-items:center;text-align:left}
 .ok{color:#37D9A0;font-weight:700}.fail{color:#FF7A6B;font-weight:700}
 .skip{color:#E8C76A;font-weight:700}
 .muted{color:#9FB4CF}
+/* полоска хода: видно, сколько тестов позади, без лишних слов */
+#bar{position:fixed;left:0;right:0;top:0;height:4px;z-index:30;display:flex;gap:2px;padding:0 2px}
+#bar i{flex:1;background:rgba(255,255,255,.14);border-radius:0 0 3px 3px}
+#bar i.done{background:#37D9A0}#bar i.now{background:#7ADCFF}
 #grid{position:fixed;inset:0;display:grid;z-index:10;background:#061427}
 #grid div{border:1px solid rgba(255,255,255,.05)}
 #grid div.hit{background:rgba(55,217,160,.55);border-color:transparent}
-#gridHud{position:fixed;left:0;right:0;bottom:26px;z-index:11;text-align:center;
+#gridHud{position:fixed;left:0;right:0;bottom:24px;z-index:11;text-align:center;
   pointer-events:none}
 #gridHud b{font-size:40px;font-weight:300}
-#gridBtns{position:fixed;left:0;right:0;top:20px;z-index:12;text-align:center;pointer-events:none}
+#gridBtns{position:fixed;left:0;right:0;top:14px;z-index:12;text-align:center;pointer-events:none}
 #gridBtns button{pointer-events:auto;opacity:.85}
 #colorbox{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;
-  justify-content:center;padding-bottom:50px}
+  justify-content:center;padding-bottom:46px}
 #colorbox span{color:rgba(128,128,128,.85);font-size:15px;background:rgba(0,0,0,.35);
   padding:8px 16px;border-radius:999px}
 .fingers{font-size:64px;letter-spacing:6px}
 .pulse{width:11px;height:11px;border-radius:6px;background:#4FC3F7;display:inline-block;
   animation:p 1s infinite}
 @keyframes p{50%{opacity:.15}}
-#shot{max-width:72vw;max-height:38vh;border-radius:18px;border:1px solid rgba(255,255,255,.18)}
+#shot{max-width:70vw;max-height:34vh;border-radius:18px;border:1px solid rgba(255,255,255,.18)}
 .auto{font-size:14px;color:#6C83A6}
 #level{width:220px;height:12px;border-radius:7px;background:rgba(255,255,255,.1);overflow:hidden}
 #levelBar{height:100%;width:0;background:linear-gradient(90deg,#37D9A0,#7ADCFF)}
 input[type=file]{display:none}
+#list .row{border-top:1px solid rgba(255,255,255,.08)}
+#list .row:first-child{border-top:0}
+#list button{background:transparent;border:0;padding:0;color:#7ADCFF;font-size:14px;
+  font-weight:700}
 </style></head><body>
+
+<div id="bar"></div>
 
 <!-- 0. старт -->
 <div class="screen on" id="s0">
   <div class="step">PINTEL · ПРОВЕРКА</div>
   <h1>Тест телефона</h1>
   <p class="sub">Семь коротких тестов: сенсор, мультитач, экран, динамик, микрофон и обе
-  камеры. Около двух минут. Результат сам улетит на кассу.</p>
-  <button onclick="go(1)">Начать</button>
+  камеры. Около двух минут. После каждого теста спросим, что получилось, — любой можно
+  пройти заново. Результат сам улетит на кассу.</p>
+  <button onclick="начать()">Начать</button>
 </div>
 
 <!-- 1. сенсор: тач-сетка -->
 <div class="screen" id="s1">
   <div id="grid"></div>
-  <div id="gridBtns"><button class="ghost small" onclick="mark('sensor','fail',2)">Есть места, где не красится</button></div>
+  <div id="gridBtns"><button class="ghost small" onclick="сенсорНеКрасится()">Есть места, где не красится</button></div>
   <div id="gridHud"><div class="step">ЗАКРАСЬТЕ ВЕСЬ ЭКРАН ПАЛЬЦЕМ</div><b id="gridPct">0%</b></div>
 </div>
 
 <!-- 2. мультитач -->
 <div class="screen" id="s2">
-  <div class="step">ТЕСТ 2 ИЗ 7</div>
+  <div class="step" id="s2step">ТЕСТ 2 ИЗ 7</div>
   <h1>Мультитач</h1>
   <p class="sub">Поставьте на экран <b>пять пальцев одновременно</b></p>
   <div class="fingers" id="fcount">0</div>
   <p class="auto">зачёт поставится сам</p>
-  <button class="ghost small" onclick="mark('multitouch','fail',3)">Не получается</button>
+  <button class="ghost small" onclick="мультиНеВышло()">Не получается</button>
 </div>
 
 <!-- 3. экран: заливка цветами -->
 <div class="screen" id="s3">
-  <div class="step">ТЕСТ 3 ИЗ 7</div>
+  <div class="step" id="s3step">ТЕСТ 3 ИЗ 7</div>
   <h1>Экран</h1>
-  <p class="sub">Экран зальётся цветами. Смотрите внимательно: пятна, полосы, выгорание,
-  битые точки. Тапайте, чтобы листать.</p>
-  <button onclick="startColors()">Поехали</button>
+  <p class="sub">Экран зальётся пятью цветами. Смотрите внимательно: пятна, полосы,
+  выгорание, битые точки. Тапайте, чтобы листать.</p>
+  <button onclick="экранПуск()">Поехали</button>
 </div>
 <div id="colorbox" style="display:none"><span>тапните — следующий цвет</span></div>
-<div class="screen" id="s3q">
-  <div class="step">ЭКРАН</div>
-  <h1>Как экран?</h1>
-  <p class="sub">Были видны пятна, полосы, выгорание или битые точки?</p>
-  <div class="pair">
-    <button class="ghost" onclick="mark('screen','fail',4)">Да, есть дефекты</button>
-    <button onclick="mark('screen','ok',4)">Нет, чистый</button>
-  </div>
-  <button class="ghost small" onclick="mark('screen','skip',4)">Не разглядел</button>
-</div>
 
 <!-- 4. динамик -->
 <div class="screen" id="s4">
-  <div class="step">ТЕСТ 4 ИЗ 7</div>
+  <div class="step" id="s4step">ТЕСТ 4 ИЗ 7</div>
   <h1>Динамик</h1>
-  <p class="sub">Проверьте, что звук включён (боковой переключатель и громкость), и нажмите —
-  прозвучит мелодия.</p>
-  <button onclick="playTone()">▶ Проиграть звук</button>
-  <div id="s4q" style="display:none;flex-direction:column;gap:14px;align-items:center">
-    <p class="sub">Звук был чистый и громкий?</p>
-    <div class="pair">
-      <button class="ghost" onclick="mark('speaker','fail',5)">Нет / хрипит</button>
-      <button onclick="mark('speaker','ok',5)">Да</button>
-    </div>
-  </div>
-  <button class="ghost small" onclick="mark('speaker','skip',5)">Пропустить</button>
+  <p class="sub" id="s4how">Проверьте, что звук включён (боковой переключатель и громкость),
+  и нажмите — прозвучит мелодия.</p>
+  <button id="s4btn" onclick="динамикИграть()">▶ Проиграть звук</button>
+  <p class="auto" id="s4auto"></p>
 </div>
 
 <!-- 5. микрофон -->
 <div class="screen" id="s5">
-  <div class="step">ТЕСТ 5 ИЗ 7</div>
+  <div class="step" id="s5step">ТЕСТ 5 ИЗ 7</div>
   <h1>Микрофон</h1>
   <p class="sub" id="micHow">Нажмите «Записать» и скажите вслух «раз, два, три».</p>
   <div id="level"><div id="levelBar"></div></div>
-  <button id="micBtn" onclick="micStart()">● Записать 3 секунды</button>
-  <div id="s5q" style="display:none;flex-direction:column;gap:14px;align-items:center">
-    <p class="sub" id="micAsk">Голос слышно?</p>
-    <div class="pair">
-      <button class="ghost" onclick="mark('mic','fail',6)">Нет / тихо</button>
-      <button onclick="mark('mic','ok',6)">Да, слышно</button>
-    </div>
+  <button id="micBtn" onclick="микЗаписать()">● Записать 3 секунды</button>
+  <div class="pair" id="micPlay" style="display:none">
+    <button onclick="микСлушать()">▶ Прослушать запись</button>
+    <button class="ghost small" onclick="микЗаписать()">● Записать заново</button>
   </div>
-  <button class="ghost small" onclick="mark('mic','skip',6)">Пропустить</button>
+  <p class="auto" id="micAuto"></p>
+  <button class="ghost small" id="micHand" style="display:none" onclick="микНаСлух()">
+    Проверил на слух — дальше</button>
 </div>
 
 <!-- 6 и 7. камеры -->
@@ -157,61 +156,122 @@ input[type=file]{display:none}
   <img id="shot" style="display:none" alt="">
   <p class="auto" id="camAuto"></p>
   <input type="file" id="camFile" accept="image/*">
-  <button onclick="camShoot()" id="camBtn">📷 Снять</button>
-  <div id="s6q" style="display:none;flex-direction:column;gap:14px;align-items:center">
-    <p class="sub">Снимок чёткий, без пятен и полос?</p>
-    <div class="pair">
-      <button class="ghost" onclick="camAnswer('fail')">Нет</button>
-      <button onclick="camAnswer('ok')">Да</button>
-    </div>
-  </div>
-  <button class="ghost small" onclick="camAnswer('skip')">Пропустить</button>
+  <button onclick="камСнять()" id="camBtn">📷 Снять</button>
 </div>
 
-<!-- 8. финал -->
+<!-- вопрос после теста: один экран на все тесты, порядок везде одинаковый -->
+<div class="screen" id="sq">
+  <div class="step" id="qStep"></div>
+  <h1 id="qName"></h1>
+  <div class="card"><div class="row"><span class="muted">Что получилось</span>
+    <span id="qAuto" class="ok">—</span></div></div>
+  <p class="sub" id="qAsk"></p>
+  <div class="pair" id="qAns"></div>
+  <div class="pair">
+    <button class="ghost small" onclick="заново()">↺ Пройти заново</button>
+    <button class="ghost small" id="qSkip" onclick="ответить('skip')">Пропустить</button>
+  </div>
+</div>
+
+<!-- обзор: всё на одном экране, тап по строке повторяет именно этот тест -->
 <div class="screen" id="s8">
-  <div class="step">ГОТОВО</div>
-  <h1 id="doneTitle">Отправляю…<span class="pulse"></span></h1>
-  <div class="card" id="summary"></div>
-  <p class="sub" id="doneSub">Секундочку…</p>
-  <button class="ghost small" id="retry" style="display:none" onclick="send()">Отправить ещё раз</button>
+  <div class="step">ВСЁ ПРОЙДЕНО</div>
+  <h1 id="doneTitle">Проверьте и отправьте</h1>
+  <div class="card" id="list"></div>
+  <p class="sub" id="doneSub">Что-то засчиталось не так — тапните строку и пройдите тест
+  заново.</p>
+  <button id="sendBtn" onclick="send()">Отправить на кассу</button>
 </div>
 
 <script>
 var token = location.pathname.split("/").pop();
-var ПОРЯДОК = ["sensor","multitouch","screen","speaker","mic","camera_back","camera_front"];
-var ИМЕНА = {sensor:"Сенсор",multitouch:"Мультитач",screen:"Экран",speaker:"Динамик",
-             mic:"Микрофон",camera_back:"Камера сзади",camera_front:"Камера спереди"};
-var res = {};
-var заметки = [];
+var ТЕСТЫ = [
+  {к:"sensor",       имя:"Сенсор",         пуск:сенсорПуск},
+  {к:"multitouch",   имя:"Мультитач",      пуск:мультиПуск},
+  {к:"screen",       имя:"Экран",          пуск:экранЭкран},
+  {к:"speaker",      имя:"Динамик",        пуск:динамикПуск},
+  {к:"mic",          имя:"Микрофон",       пуск:микПуск},
+  {к:"camera_back",  имя:"Камера сзади",   пуск:камПуск},
+  {к:"camera_front", имя:"Камера спереди", пуск:камПуск}
+];
+var ИМЕНА={}; for(var _i=0;_i<ТЕСТЫ.length;_i++) ИМЕНА[ТЕСТЫ[_i].к]=ТЕСТЫ[_i].имя;
+var res={}, заметки=[], шаг=0, вернуться=false, отправлено=false;
 
-function go(n){
-  var все = document.querySelectorAll(".screen");
+function экран(id){
+  var все=document.querySelectorAll(".screen");
   for(var i=0;i<все.length;i++) все[i].classList.remove("on");
-  var s = document.getElementById("s"+n);
+  var s=document.getElementById(id);
   if(s) s.classList.add("on");
-  if(n===1) buildGrid();
-  if(n===2) armMultitouch();
-  if(n===5) micSetup();
-  if(n===6) camSetup();
-  if(n===8) send();
+}
+function полоска(){
+  var b=document.getElementById("bar"), h="";
+  for(var i=0;i<ТЕСТЫ.length;i++){
+    var к=ТЕСТЫ[i].к;
+    h+='<i class="'+(i===шаг&&!вернуться?"now":(res[к]?"done":""))+'"></i>';
+  }
+  b.innerHTML=h;
+}
+function подпись(i){ return "ТЕСТ "+(i+1)+" ИЗ "+ТЕСТЫ.length; }
+
+function начать(){ шаг=0; вернуться=false; res={}; пуск(); }
+function пуск(){
+  delete res[ТЕСТЫ[шаг].к];        // пока тест не доведён, прежний ответ не считается
+  полоска();
+  ТЕСТЫ[шаг].пуск();
+}
+function дальше(){
+  if(вернуться){ вернуться=false; обзор(); return; }
+  шаг++;
+  if(шаг>=ТЕСТЫ.length){ обзор(); return; }
+  пуск();
+}
+function заново(){ пуск(); }
+
+/* Вопрос после теста. Один путь на все тесты: сначала человек видит, что получилось, и
+   только потом отвечает — и всегда может пройти тест заново. */
+function вопрос(о){
+  полоска();
+  document.getElementById("qStep").textContent=подпись(шаг);
+  document.getElementById("qName").textContent=ТЕСТЫ[шаг].имя;
+  var a=document.getElementById("qAuto");
+  a.textContent=о.вывод;
+  a.className=о.класс||"ok";
+  document.getElementById("qAsk").textContent=о.вопрос||"";
+  var ряд=document.getElementById("qAns");
+  ряд.innerHTML="";
+  var ответы=о.ответы||[{т:"Дальше →",о:"ok"}];
+  for(var i=0;i<ответы.length;i++){
+    (function(в){
+      var b=document.createElement("button");
+      b.className=в.вид||"";
+      b.textContent=в.т;
+      b.onclick=function(){ответить(в.о)};
+      ряд.appendChild(b);
+    })(ответы[i]);
+  }
+  document.getElementById("qSkip").style.display=(о.без_пропуска?"none":"");
+  экран("sq");
+}
+/* Кнопки вопроса ведут сюда все до одной. «__again» и «__play» — не ответы, а действия:
+   пройти тест заново и прослушать запись. Один обработчик на все кнопки значит, что ни
+   один ответ не может потеряться по дороге. */
+function ответить(о){
+  if(о==="__again"){ заново(); return; }
+  if(о==="__play"){ микСлушать(); return; }
+  res[ТЕСТЫ[шаг].к]=о;
+  дальше();
 }
 
-/* Ответ по тесту и переход дальше. Один путь на все тесты: так ни один ответ не может
-   потеряться по дороге, а порядок виден в одном месте. */
-function mark(ключ, ответ, дальше){
-  res[ключ] = ответ;
-  go(дальше);
-}
-
-/* ─── 1. сенсор: тач-сетка, автозачёт ─── */
+/* ─── 1. сенсор ─── */
 var cells=[], hit=0, cols=8, rows=0;
-function buildGrid(){
+function сенсорПуск(){
+  экран("s1");
   var g=document.getElementById("grid");
   cols=8; rows=Math.round(cols*innerHeight/innerWidth);
   g.style.gridTemplateColumns="repeat("+cols+",1fr)";
   g.style.gridTemplateRows="repeat("+rows+",1fr)";
   g.innerHTML=""; cells=[]; hit=0;
+  document.getElementById("gridPct").textContent="0%";
   for(var i=0;i<cols*rows;i++){var d=document.createElement("div");g.appendChild(d);cells.push(d);}
   /* Клетку считаем по координатам, а не по тому, что под пальцем: кнопка и подпись сверху
      перекрывали сетку, elementFromPoint возвращал их, и те клетки закрасить было нельзя —
@@ -226,26 +286,59 @@ function buildGrid(){
       if(el&&!el.classList.contains("hit")){el.classList.add("hit");hit++;}
     }
     document.getElementById("gridPct").textContent=Math.round(100*hit/cells.length)+"%";
-    if(hit===cells.length){setTimeout(function(){mark("sensor","ok",2)},350);}
+    if(hit===cells.length){
+      g.ontouchstart=g.ontouchmove=null;
+      setTimeout(function(){
+        вопрос({вывод:"закрашено целиком",класс:"ok",
+                вопрос:"Экран отзывался везде, без мёртвых мест?",
+                ответы:[{т:"Дальше →",о:"ok"}]});
+      },350);
+    }
   }
   g.ontouchstart=g.ontouchmove=function(e){e.preventDefault();paint(e.touches)};
 }
+function сенсорНеКрасится(){
+  var проц=Math.round(100*hit/(cells.length||1));
+  вопрос({вывод:"закрашено "+проц+"%",класс:"fail",
+          вопрос:"Есть места, где экран не отзывается на палец. Так и записать?",
+          ответы:[{т:"Да, не отзывается",о:"fail",вид:"bad"},{т:"Пройти ещё раз",о:"__again"}]});
+}
 
 /* ─── 2. мультитач ─── */
-function armMultitouch(){
+function мультиПуск(){
+  экран("s2");
+  document.getElementById("s2step").textContent=подпись(шаг);
   var el=document.getElementById("s2"), best=0;
+  document.getElementById("fcount").textContent="0";
   el.ontouchstart=el.ontouchmove=function(e){
     e.preventDefault();
     best=Math.max(best,e.touches.length);
     document.getElementById("fcount").textContent=e.touches.length;
-    if(best>=5){el.ontouchstart=el.ontouchmove=null;
-                setTimeout(function(){mark("multitouch","ok",3)},400);}
+    if(best>=5){
+      el.ontouchstart=el.ontouchmove=null;
+      setTimeout(function(){
+        вопрос({вывод:"поймано 5 касаний",класс:"ok",
+                вопрос:"Все пять пальцев отобразились одновременно?",
+                ответы:[{т:"Дальше →",о:"ok"}]});
+      },400);
+    }
   };
 }
+function мультиНеВышло(){
+  var el=document.getElementById("s2");
+  el.ontouchstart=el.ontouchmove=null;
+  вопрос({вывод:"пять касаний не поймались",класс:"fail",
+          вопрос:"Экран не видит пять пальцев сразу. Так и записать?",
+          ответы:[{т:"Да, не видит",о:"fail",вид:"bad"},{т:"Пройти ещё раз",о:"__again"}]});
+}
 
-/* ─── 3. экран: цвета ─── */
+/* ─── 3. экран ─── */
 var COLORS=["#FF0000","#00FF00","#0000FF","#FFFFFF","#000000"], ci=0;
-function startColors(){
+function экранЭкран(){
+  экран("s3");
+  document.getElementById("s3step").textContent=подпись(шаг);
+}
+function экранПуск(){
   var b=document.getElementById("colorbox");
   document.getElementById("s3").classList.remove("on");
   b.style.display="flex"; ci=0; document.body.style.background=COLORS[0];
@@ -253,7 +346,10 @@ function startColors(){
     ci++;
     if(ci>=COLORS.length){
       b.style.display="none"; b.onclick=null; document.body.style.background="";
-      go("3q"); return;
+      вопрос({вывод:"показаны 5 цветов",класс:"ok",
+              вопрос:"Были видны пятна, полосы, выгорание или битые точки?",
+              ответы:[{т:"Есть дефекты",о:"fail",вид:"bad"},{т:"Нет, чистый",о:"ok"}]});
+      return;
     }
     document.body.style.background=COLORS[ci];
   };
@@ -261,9 +357,7 @@ function startColors(){
 
 /* ─── 4. динамик ─── */
 /* Мелодию собираем в WAV и проигрываем обычным <audio>: на iPhone это единственный путь,
-   который работает всегда. WebAudio там заводится не с первого касания и по http молчит —
-   сотрудник жал кнопку и не слышал ничего. Если и <audio> не стартовал, говорим об этом,
-   а не показываем вопрос «слышно ли?», на который нечего ответить. */
+   который работает всегда. WebAudio там заводится не с первого касания и по http молчит. */
 var мелодия=null;
 function wav(){
   var sr=22050, ноты=[523,659,784,1047], длина=0.22, всего=Math.floor(sr*длина*ноты.length);
@@ -278,81 +372,163 @@ function wav(){
     var огиб=Math.min(1,(i%(sr*длина))/(sr*0.01))*Math.max(0,1-(i%(sr*длина))/(sr*длина));
     v.setInt16(44+i*2, Math.round(Math.sin(2*Math.PI*ноты[n]*t)*огиб*22000), true);
   }
-  var б=new Blob([буф],{type:"audio/wav"});
-  return URL.createObjectURL(б);
+  return URL.createObjectURL(new Blob([буф],{type:"audio/wav"}));
 }
-function playTone(){
-  var показать=function(){document.getElementById("s4q").style.display="flex"};
-  try{
-    if(!мелодия) мелодия=wav();
-    var a=new Audio(мелодия);
-    a.play().then(показать).catch(function(e){
-      заметки.push("звук не запустился: "+e.name);
-      document.getElementById("s4").querySelector(".sub").textContent=
-        "Телефон не дал проиграть звук. Включите любую мелодию в телефоне и послушайте динамик.";
-      показать();
-    });
-  }catch(e){ заметки.push("звук не собрался: "+e); показать(); }
+/* Один путь для всего звука на странице. Играем ТОЛЬКО из обработчика нажатия и всегда
+   смотрим, чем кончился play(): Safari возвращает отказ молча, и раньше кнопка «проиграть»
+   просто ничего не делала — ни звука, ни слова. */
+function играть(url, когда_пошло, когда_нет){
+  var a=new Audio(), один=false;
+  // Ровно один вызов: вопрос показываем, когда звук ДОиграл, но если браузер не пришлёт
+  // «ended» (бывает на коротких blob), не ждём его вечно. Два вызова подряд перерисовали бы
+  // вопрос поверх следующего теста — человек уже ответил, а экран вернулся назад.
+  function готово(){ if(один) return; один=true; if(когда_пошло) когда_пошло(); }
+  a.preload="auto";
+  a.src=url;
+  a.onended=готово;
+  var p=null;
+  try{ p=a.play(); }catch(e){ if(когда_нет) когда_нет(e); return; }
+  if(p&&p.then) p.then(function(){ setTimeout(готово,4000); })
+                 .catch(function(e){ if(когда_нет) когда_нет(e); });
+  else setTimeout(готово,4000);
+}
+function динамикПуск(){
+  экран("s4");
+  document.getElementById("s4step").textContent=подпись(шаг);
+  document.getElementById("s4auto").textContent="";
+  document.getElementById("s4how").textContent=
+    "Проверьте, что звук включён (боковой переключатель и громкость), и нажмите — "
+    + "прозвучит мелодия.";
+  document.getElementById("s4btn").textContent="▶ Проиграть звук";
+}
+function динамикИграть(){
+  var авто=document.getElementById("s4auto");
+  авто.textContent="играет…";
+  document.getElementById("s4btn").textContent="▶ Проиграть ещё раз";
+  if(!мелодия) мелодия=wav();
+  играть(мелодия,function(){
+    авто.textContent="мелодия проигралась";
+    вопрос({вывод:"мелодия проиграна",класс:"ok",
+            вопрос:"Звук был чистый и достаточно громкий?",
+            ответы:[{т:"Нет / хрипит",о:"fail",вид:"bad"},{т:"Да, чистый",о:"ok"}]});
+  },function(e){
+    заметки.push("звук не запустился: "+(e&&e.name||e));
+    авто.textContent="";
+    document.getElementById("s4how").textContent=
+      "Телефон не дал странице проиграть звук. Включите любую мелодию в самом телефоне и "
+      + "послушайте динамик.";
+    вопрос({вывод:"страница не смогла проиграть",класс:"skip",
+            вопрос:"Проверьте динамик своей мелодией. Звук чистый и громкий?",
+            ответы:[{т:"Нет / хрипит",о:"fail",вид:"bad"},{т:"Да, чистый",о:"ok"}]});
+  });
 }
 
 /* ─── 5. микрофон ─── */
-/* Если браузер даёт доступ к микрофону (а на http Safari его не даёт), пишем три секунды,
-   показываем уровень и проигрываем запись: пустая дорожка — сразу «не прошёл». Если не даёт,
-   путь через «Диктофон»: тест тот же, просто его зачитывает человек. */
-var micStream=null, micRec=null, micChunks=[];
-function micSetup(){
-  var есть = navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder;
+/* Если браузер даёт микрофон (на http Safari его не даёт), пишем три секунды, показываем
+   уровень и даём прослушать: пустая дорожка — сразу «не прошёл». Не даёт — путь через
+   «Диктофон»: тест тот же, просто его зачитывает человек. */
+var micRec=null, micChunks=[], micURL="", micPeak=0;
+function микПуск(){
+  экран("s5");
+  document.getElementById("s5step").textContent=подпись(шаг);
+  document.getElementById("micAuto").textContent="";
+  document.getElementById("micPlay").style.display="none";
+  document.getElementById("levelBar").style.width="0";
+  var есть=navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder;
+  var btn=document.getElementById("micBtn");
   if(!есть){
-    document.getElementById("micHow").innerHTML =
+    document.getElementById("micHow").innerHTML=
       "Браузер не даёт странице микрофон. Откройте <b>Диктофон</b>, запишите «раз, два, три» "
       + "и послушайте запись.";
-    document.getElementById("micBtn").style.display="none";
+    btn.style.display="none";
     document.getElementById("level").style.display="none";
-    document.getElementById("micAsk").textContent="Запись слышно, голос разборчивый?";
-    document.getElementById("s5q").style.display="flex";
+    document.getElementById("micHand").style.display="";
     заметки.push("микрофон проверен на слух (браузер не даёт доступ)");
+    return;
   }
+  btn.style.display=""; btn.disabled=false; btn.textContent="● Записать 3 секунды";
+  document.getElementById("micHand").style.display="none";
+  document.getElementById("level").style.display="";
+  document.getElementById("micHow").textContent="Нажмите «Записать» и скажите вслух «раз, два, три».";
 }
-function micStart(){
+function микНаСлух(){
+  вопрос({вывод:"проверено Диктофоном",класс:"skip",
+          вопрос:"Запись слышно, голос разборчивый?",
+          ответы:[{т:"Нет / тихо",о:"fail",вид:"bad"},{т:"Да, слышно",о:"ok"}]});
+}
+function микЗаписать(){
   var btn=document.getElementById("micBtn");
-  btn.disabled=true; btn.textContent="● Пишу…";
+  btn.style.display=""; btn.disabled=true; btn.textContent="● Пишу… 3";
+  document.getElementById("micPlay").style.display="none";
+  document.getElementById("micAuto").textContent="";
+  var осталось=3;
+  var счёт=setInterval(function(){
+    осталось--;
+    if(осталось>0) btn.textContent="● Пишу… "+осталось;
+  },1000);
   navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
-    micStream=stream; micChunks=[];
+    micChunks=[]; micPeak=0;
     var ctx=new (window.AudioContext||window.webkitAudioContext)();
     var src=ctx.createMediaStreamSource(stream), an=ctx.createAnalyser();
     an.fftSize=512; src.connect(an);
-    var buf=new Uint8Array(an.fftSize), peak=0;
+    var buf=new Uint8Array(an.fftSize);
     var tick=setInterval(function(){
       an.getByteTimeDomainData(buf);
       var m=0;
       for(var i=0;i<buf.length;i++) m=Math.max(m,Math.abs(buf[i]-128));
-      peak=Math.max(peak,m);
+      micPeak=Math.max(micPeak,m);
       document.getElementById("levelBar").style.width=Math.min(100,m*100/60)+"%";
     },100);
     micRec=new MediaRecorder(stream);
-    micRec.ondataavailable=function(e){micChunks.push(e.data)};
+    micRec.ondataavailable=function(e){ if(e.data&&e.data.size) micChunks.push(e.data); };
     micRec.onstop=function(){
-      clearInterval(tick);
+      clearInterval(tick); clearInterval(счёт);
       try{stream.getTracks().forEach(function(t){t.stop()})}catch(e){}
-      btn.textContent="▶ Прослушать";
-      btn.disabled=false;
-      var url=URL.createObjectURL(new Blob(micChunks));
-      btn.onclick=function(){new Audio(url).play()};
-      if(peak<3){                                  // дорожка пустая — микрофон молчал
-        res.mic="fail";
-        document.getElementById("micAsk").textContent="Микрофон молчал — записи нет.";
-        заметки.push("микрофон: уровень записи нулевой");
+      try{ctx.close()}catch(e){}
+      btn.disabled=false; btn.style.display="none";
+      /* Тип обязателен: Blob без типа Safari не играет вовсе — именно поэтому «проиграть»
+         молчало. MediaRecorder на iPhone отдаёт audio/mp4, в Chrome — webm; берём его
+         собственный mimeType, а если он пуст, подставляем mp4. */
+      var тип=(micRec&&micRec.mimeType)||"audio/mp4";
+      var размер=0;
+      for(var i=0;i<micChunks.length;i++) размер+=micChunks[i].size;
+      document.getElementById("micPlay").style.display=размер?"flex":"none";
+      if(размер) micURL=URL.createObjectURL(new Blob(micChunks,{type:тип}));
+      if(!размер||micPeak<3){
+        document.getElementById("micAuto").textContent=
+          размер? "дорожка пустая — микрофон молчал" : "запись не получилась";
+        заметки.push("микрофон: "+(размер?"уровень записи нулевой":"записи нет"));
+        вопрос({вывод:размер?"тишина в записи":"записи нет",класс:"fail",
+                вопрос:"Микрофон молчал. Проверьте, не закрыт ли он, и попробуйте заново.",
+                ответы:[{т:"Записать заново",о:"__again"},{т:"Так и есть, не пишет",о:"fail",вид:"bad"}]});
+        return;
       }
-      document.getElementById("s5q").style.display="flex";
+      document.getElementById("micAuto").textContent="записано, уровень есть — послушайте";
+      вопрос({вывод:"голос записался",класс:"ok",
+              вопрос:"Прослушайте запись и скажите: голос слышно разборчиво?",
+              ответы:[{т:"▶ Прослушать",о:"__play"},{т:"Нет / тихо",о:"fail",вид:"bad"},
+                      {т:"Да, слышно",о:"ok"}]});
     };
     micRec.start();
     setTimeout(function(){try{micRec.stop()}catch(e){}},3000);
   }).catch(function(e){
+    clearInterval(счёт);
     btn.style.display="none";
-    document.getElementById("micHow").innerHTML =
+    document.getElementById("micHow").innerHTML=
       "Доступ к микрофону не дали. Откройте <b>Диктофон</b>, запишите «раз, два, три» и послушайте.";
-    document.getElementById("s5q").style.display="flex";
-    заметки.push("микрофон: доступ не дали ("+e.name+")");
+    document.getElementById("micHand").style.display="";
+    заметки.push("микрофон: доступ не дали ("+(e&&e.name||e)+")");
+  });
+}
+function микСлушать(){
+  if(!micURL){ document.getElementById("micAuto").textContent="записи нет"; return; }
+  document.getElementById("micAuto").textContent="играет…";
+  играть(micURL,function(){
+    document.getElementById("micAuto").textContent="запись проиграна";
+  },function(e){
+    заметки.push("запись не проигралась: "+(e&&e.name||e));
+    document.getElementById("micAuto").textContent=
+      "телефон не дал проиграть запись — послушайте микрофон Диктофоном";
   });
 }
 
@@ -360,23 +536,23 @@ function micStart(){
 /* <input capture> открывает родную камеру и работает без HTTPS, в отличие от getUserMedia.
    Снимок приходит файлом: рисуем его на холсте, считаем яркость и резкость. Чёрный кадр —
    сразу «не прошёл», остальное решает глаз человека. */
-var камеры=[{ключ:"camera_back",имя:"Камера сзади",режим:"environment",шаг:"ТЕСТ 6 ИЗ 7"},
-            {ключ:"camera_front",имя:"Камера спереди",режим:"user",шаг:"ТЕСТ 7 ИЗ 7"}];
-var камI=0;
-function camSetup(){
-  var c=камеры[камI];
-  document.getElementById("camStep").textContent=c.шаг;
+var КАМЕРЫ={camera_back:{имя:"Камера сзади",режим:"environment"},
+            camera_front:{имя:"Камера спереди",режим:"user"}};
+function камПуск(){
+  var c=КАМЕРЫ[ТЕСТЫ[шаг].к];
+  экран("s6");
+  document.getElementById("camStep").textContent=подпись(шаг);
   document.getElementById("camTitle").textContent=c.имя;
   document.getElementById("camFile").setAttribute("capture",c.режим);
+  document.getElementById("camFile").value="";
   document.getElementById("shot").style.display="none";
   document.getElementById("camAuto").textContent="";
-  document.getElementById("s6q").style.display="none";
   var b=document.getElementById("camBtn");
   b.style.display=""; b.textContent="📷 Снять";
 }
-function camShoot(){ document.getElementById("camFile").click(); }
+function камСнять(){ document.getElementById("camFile").click(); }
 document.getElementById("camFile").onchange=function(e){
-  var f=e.target.files && e.target.files[0];
+  var f=e.target.files&&e.target.files[0];
   if(!f) return;
   var img=new Image(), url=URL.createObjectURL(f);
   img.onload=function(){
@@ -398,65 +574,79 @@ document.getElementById("camFile").onchange=function(e){
     sh.src=url; sh.style.display="";
     document.getElementById("camBtn").style.display="none";
     var авто="яркость "+Math.round(яркость)+", резкость "+резкость.toFixed(1);
+    document.getElementById("camAuto").textContent=авто;
     if(яркость<8){
-      document.getElementById("camAuto").textContent="кадр чёрный — "+авто;
-      заметки.push(камеры[камI].имя+": кадр чёрный");
-      camAnswer("fail"); return;
+      заметки.push(КАМЕРЫ[ТЕСТЫ[шаг].к].имя+": кадр чёрный");
+      вопрос({вывод:"кадр чёрный ("+авто+")",класс:"fail",
+              вопрос:"Камера сняла чёрный кадр. Проверьте, не закрыт ли объектив, и переснимите.",
+              ответы:[{т:"Переснять",о:"__again"},{т:"Так и есть, не снимает",о:"fail",вид:"bad"}]});
+      return;
     }
-    document.getElementById("camAuto").textContent=авто+
-      (резкость<2 ? " · кадр мутный, посмотрите внимательно" : "");
-    document.getElementById("s6q").style.display="flex";
+    вопрос({вывод:(резкость<2?"кадр мутный · ":"")+авто,класс:резкость<2?"skip":"ok",
+            вопрос:"Посмотрите на снимок: он чёткий, без пятен и полос?",
+            ответы:[{т:"Переснять",о:"__again"},{т:"Нет",о:"fail",вид:"bad"},{т:"Да",о:"ok"}]});
   };
   img.onerror=function(){
     document.getElementById("camAuto").textContent="снимок не открылся";
-    document.getElementById("s6q").style.display="flex";
+    вопрос({вывод:"снимок не открылся",класс:"skip",
+            вопрос:"Телефон не отдал снимок странице. Попробуйте ещё раз.",
+            ответы:[{т:"Переснять",о:"__again"},{т:"Не снимает",о:"fail",вид:"bad"}]});
   };
   img.src=url;
 };
-function camAnswer(ответ){
-  res[камеры[камI].ключ]=ответ;
-  камI++;
-  if(камI<камеры.length){ camSetup(); return; }
-  go(8);
-}
 
-/* ─── финал: отправка на кассу ─── */
-function build_summary(){
-  var html="";
-  for(var i=0;i<ПОРЯДОК.length;i++){
-    var k=ПОРЯДОК[i], v=res[k];
+/* ─── обзор и отправка ─── */
+function обзор(){
+  вернуться=false;
+  полоска();
+  var h="";
+  for(var i=0;i<ТЕСТЫ.length;i++){
+    var к=ТЕСТЫ[i].к, v=res[к];
     var кл=(v==="ok"?"ok":(v==="fail"?"fail":"skip"));
     var сл=(v==="ok"?"✓ в порядке":(v==="fail"?"✗ проблема":"— не проверили"));
-    html+='<div class="row"><span class="muted">'+ИМЕНА[k]+'</span><span class="'+кл+'">'+сл+"</span></div>";
+    h+='<div class="row"><span class="muted">'+ТЕСТЫ[i].имя+'</span>'
+      +'<span><span class="'+кл+'">'+сл+'</span> '
+      +'<button onclick="повторить('+i+')">заново</button></span></div>';
   }
-  document.getElementById("summary").innerHTML=html;
+  document.getElementById("list").innerHTML=h;
+  document.getElementById("doneTitle").textContent="Проверьте и отправьте";
+  document.getElementById("doneSub").textContent=
+    "Что-то засчиталось не так — нажмите «заново» в строке и пройдите тест ещё раз.";
+  var b=document.getElementById("sendBtn");
+  b.style.display=""; b.textContent="Отправить на кассу";
+  экран("s8");
+}
+function повторить(i){
+  if(отправлено) return;
+  шаг=i; вернуться=true; пуск();
 }
 function send(){
-  build_summary();
-  document.getElementById("retry").style.display="none";
+  var b=document.getElementById("sendBtn");
+  b.textContent="Отправляю…";
   document.getElementById("doneTitle").innerHTML='Отправляю…<span class="pulse"></span>';
   var тело={};
-  for(var i=0;i<ПОРЯДОК.length;i++){
-    тело[ПОРЯДОК[i]] = res[ПОРЯДОК[i]] || "skip";
-  }
+  for(var i=0;i<ТЕСТЫ.length;i++) тело[ТЕСТЫ[i].к]=res[ТЕСТЫ[i].к]||"skip";
   тело.устройство=navigator.userAgent;
   тело.когда=new Date().toISOString();
   if(заметки.length) тело.заметка=заметки.join("; ");
   fetch("/api/phone/"+token,{method:"POST",headers:{"Content-Type":"application/json"},
                              body:JSON.stringify(тело)})
     .then(function(r){
-      document.getElementById("doneTitle").textContent = r.ok ? "Готово ✓" : "Не отправилось";
-      document.getElementById("doneSub").textContent = r.ok
+      отправлено=r.ok;
+      document.getElementById("doneTitle").textContent=r.ok?"Готово ✓":"Не отправилось";
+      document.getElementById("doneSub").textContent=r.ok
         ? "Результат уже на кассе. Верните телефон продавцу."
         : "Покажите этот экран продавцу.";
-      if(!r.ok) document.getElementById("retry").style.display="";
+      b.textContent=r.ok?"Отправлено":"Отправить ещё раз";
+      b.style.display=r.ok?"none":"";
     })
     .catch(function(){
       document.getElementById("doneTitle").textContent="Нет связи с кассой";
       document.getElementById("doneSub").textContent=
         "Телефон должен быть в том же Wi-Fi, что и касса. Покажите экран продавцу.";
-      document.getElementById("retry").style.display="";
+      b.textContent="Отправить ещё раз";
     });
 }
+полоска();
 </script>
 </body></html>

@@ -768,3 +768,17 @@ def test_the_kiosk_can_see_what_reached_the_bot(app, monkeypatch, tmp_path):
 
     # чужой токен внутрь не пускают: по коду обмена видно, что происходит на точке
     assert k.get("/api/kiosk/media/ABCD12", headers={"X-Kiosk-Token": "pk_wrong"}).status_code == 401
+
+    # на точке может работать обработчик прежней версии — тогда колонки отметок в таблице
+    # ещё нет. Запрос не должен падать целиком: фото и видео видно, а про диагностику мы
+    # честно говорим «не вижу», а не «пройдена» и не «не пройдена».
+    старый = create_engine(f"sqlite:///{tmp_path}/старый.db", future=True)
+    with старый.begin() as conn:
+        conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
+                             "done INTEGER, device_id INTEGER)"))
+        conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
+                             "VALUES ('ABCD12', 'f1||f2||f3', 'v1')"))
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: старый)
+    без_колонки = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert без_колонки["известно"] is True and без_колонки["диагностика_видна"] is False
+    assert без_колонки["не_отмечено"] == [] and без_колонки["готово"] is True

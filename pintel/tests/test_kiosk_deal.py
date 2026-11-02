@@ -435,3 +435,71 @@ def test_every_deal_gets_its_own_one_time_link(окно):
     assert окно.код_теста and окно.код_теста != первый
     окно.go_home()
     assert окно.код_теста == ""                                  # сделка закрыта — ссылки нет
+
+
+def test_the_test_goes_through_our_domain_when_the_server_is_there(окно, monkeypatch):
+    """С сервером ссылку на тест даёт домен: там HTTPS, и телефон пускает страницу к
+    микрофону (по локальной сети Safari этого не разрешает). Результат ложится в базу, и
+    касса забирает его опросом — сам он к ней не придёт."""
+    from pintel_core import phonetest
+    from pintel_kiosk.client import ServerError
+    окно.client.enabled = True
+    monkeypatch.setattr(окно.client, "открыть_тест",
+                        lambda токен, ev_id=None: f"https://kiosk.pintelkz.com/t/{токен}")
+    monkeypatch.setattr(окно.client, "результат_теста", lambda токен: {})
+    окно.новый_код_теста()
+    assert окно.тест_через_сервер and len(окно.код_теста) == 16
+    assert "kiosk.pintelkz.com" in окно.s_work.тест_ссылка.text()
+    assert окно.тест_опрос.isActive()
+    окно.state = "work"                                   # опрос идёт, только пока идёт сделка
+
+    # телефон ещё не ответил — опрос ничего не меняет
+    окно._спросить_тест()
+    окно.tasks[-1].wait(5000)
+    assert not окно.s_work._тест_закрыт()
+    monkeypatch.setattr(окно.client, "результат_теста",
+                        lambda токен: {k: phonetest.ОК for k in phonetest.КЛЮЧИ})
+    окно._тест_спрашиваем = False
+    окно._спросить_тест()
+    окно.tasks[-1].wait(5000)
+    for _ in range(50):                                   # сигнал приходит в поток окна
+        QApplication.processEvents()
+    assert окно.s_work._тест_закрыт() and not окно.тест_опрос.isActive()
+
+    # сервер не ответил — остаётся мини-сервер в киоске, шаг не отменяется
+    def падает(токен, ev_id=None):
+        raise ServerError("нет связи с сервером")
+
+    monkeypatch.setattr(окно.client, "открыть_тест", падает)
+    окно.новый_код_теста()
+    assert окно.тест_через_сервер is False and not окно.тест_опрос.isActive()
+
+
+def test_the_receipt_carries_a_link_to_itself(окно, monkeypatch):
+    """Чек на бумаге несёт QR на тот же чек на домене: бумага теряется, ссылка остаётся.
+    И тот же чек дописывается в сохранённую оценку — иначе в общей базе аппарат остался бы
+    без того, чем кончилась сделка."""
+    import httpx
+    from pintel_core import receipt
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001"})
+    _чистый(окно)
+    окно.client.enabled = True
+    окно.last["server"] = {"id": 77, "номер": 5, "ссылка_чека": "https://kiosk.pintelkz.com/check/abc"}
+    дослано = {}
+    monkeypatch.setattr(окно.client, "update_evaluation",
+                        lambda ev_id, report, snapshot_patch=None: дослано.update(id=ev_id, report=report))
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
+                        httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    for _ in range(50):
+        QApplication.processEvents()
+    assert окно.сделка["ссылка"] == "https://kiosk.pintelkz.com/check/abc"
+    бумага = receipt.html(окно.сделка, окно.last["report"])
+    assert "<svg" in бумага and "check/abc" in бумага
+    for поток in окно.tasks:
+        поток.wait(5000)
+    assert дослано.get("id") == 77 and дослано["report"]["чек"]["клиент"] == "Зама"

@@ -429,3 +429,105 @@ def test_queue_never_says_all_genuine_without_apple():
     assert apple_summary({"apple_история": {}}) == "ждёт раздел на телефоне"
     assert apple_summary({"apple_история": {"Display": {"деталь": "Экран", "меняли": True}},
                           "детали_вердикт": {"apple_подтверждено": True}}) == "менялось: Экран"
+
+
+def test_the_phone_test_lives_on_our_domain(app):
+    """Тест на телефоне клиента по HTTPS: касса заводит сессию, телефон открывает страницу и
+    присылает ответы, касса их забирает. На домене браузер пускает страницу к микрофону, а по
+    локальной сети — нет, поэтому точка с интернетом ходит сюда.
+
+    Строку заводит ТОЛЬКО касса: на выдуманный токен с улицы ничего не положить."""
+    from pintel_core import phonetest
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/kiosks", data={"name": "Тест-киоск", "point_id": ""})
+    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+    k = TestClient(app)
+    телефон = TestClient(app)                                  # чужой телефон: без токена киоска
+
+    # чужого токена нет — ни страницы, ни приёма
+    assert телефон.get("/t/NETAKOGO").status_code == 410
+    assert телефон.post("/api/phone/NETAKOGO", json={"sensor": "ok"}).status_code == 410
+
+    открыт = k.post("/api/kiosk/phone", json={"token": "QR123TEST"}, headers=H).json()
+    assert открыт["ссылка"].endswith("/t/QR123TEST")
+    стр = телефон.get("/t/QR123TEST")
+    assert стр.status_code == 200 and "Тест телефона" in стр.text
+    for ключ in phonetest.КЛЮЧИ:                               # страница спрашивает ровно наши тесты
+        assert ключ in стр.text
+
+    assert k.get("/api/kiosk/phone/QR123TEST", headers=H).json()["готов"] is False
+    ответ = {k2: phonetest.ОК for k2 in phonetest.КЛЮЧИ}
+    ответ.update({"speaker": phonetest.ПЛОХО, "устройство": "iPhone", "чужое": "выкинуть"})
+    assert телефон.post("/api/phone/QR123TEST", json=ответ).status_code == 200
+    готово = k.get("/api/kiosk/phone/QR123TEST", headers=H).json()
+    assert готово["готов"] is True and готово["результат"]["speaker"] == "fail"
+    assert "чужое" not in готово["результат"]                  # в базу ложатся только наши ключи
+    assert телефон.post("/api/phone/QR123TEST", json={"мусор": 1}).status_code == 400
+    # результат чужого киоска не отдаём
+    r2 = admin.post("/settings/kiosks", data={"name": "Чужой киоск", "point_id": ""})
+    H2 = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r2)).group(1)}
+    assert k.get("/api/kiosk/phone/QR123TEST", headers=H2).status_code == 200   # читать можно
+    assert k.get("/api/kiosk/phone/NETAKOGO", headers=H).status_code == 404
+
+
+def test_the_receipt_is_on_our_domain(app):
+    """Чек на домене — тот же документ, что печатают на точке: бумага теряется, ссылка
+    остаётся. Собирает его тот же pintel_core.receipt, поэтому они не разойдутся."""
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/kiosks", data={"name": "Чек-киоск", "point_id": ""})
+    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+    k = TestClient(app)
+    rep, snap = real_report()
+    resp = k.post("/api/kiosk/evaluations", json={"client_id": "check-1", "report": rep, "snapshot": snap},
+                  headers=H).json()
+    assert resp["ссылка_чека"].endswith("/check/" + resp["ссылка_отчёта"].rsplit("/", 1)[-1])
+    # киоск дослал чек и результат теста — то, что появилось уже после создания оценки
+    rep2 = {**rep, "чек": {"номер": "A-7", "клиент": "Зама", "телефон": "+77058837953",
+                           "сотрудник": "Асылбек", "точка": "16/38", "коробка": True,
+                           "ссылка": resp["ссылка_чека"]},
+            "тест_телефона": {"sensor": "ok", "speaker": "fail"}}
+    assert k.patch(f"/api/kiosk/evaluations/{resp['id']}", json={"report": rep2}, headers=H).status_code == 200
+
+    страница = TestClient(app).get(resp["ссылка_чека"].replace("http://testserver", ""))
+    assert страница.status_code == 200
+    for кусок in ("Зама", "Асылбек", "iPhone 12", "A-7"):
+        assert кусок in страница.text, кусок
+    assert "<svg" in страница.text                                 # QR на сам себя
+    assert TestClient(app).get("/check/нет-такого").status_code == 404
+
+    # оценка целиком лежит в базе: отчёт, слепок, чек и тест — всё вместе
+    db = SessionLocal()
+    ev = db.scalar(select(Evaluation).where(Evaluation.client_id == "check-1"))
+    assert ev.report["чек"]["клиент"] == "Зама" and ev.report["тест_телефона"]["speaker"] == "fail"
+    assert ev.snapshot and ev.verdict
+    db.close()
+
+
+def test_old_snapshots_are_pruned_but_the_evaluation_stays(app):
+    """«Все оценки сохраняются» — это про оценку, а не про сырой слепок. Паспорт, батарея,
+    вердикт, чек и тест лежат вечно; слепок весит около мегабайта на аппарат, и при двух
+    сотнях оценок в день база росла бы на 6 ГБ в месяц. Разбор по нему нужен первые недели,
+    дальше остаётся обезличенный эталон."""
+    from datetime import timedelta
+    from pintel_server.db import now
+    from pintel_server.services import evaluations as ev_service
+    admin = client_for(app, "admin", "admin123")
+    r = admin.post("/settings/kiosks", data={"name": "Уборка-киоск", "point_id": ""})
+    H = {"X-Kiosk-Token": re.search(r"t=(pk_[A-Za-z0-9_\-]+)", loc(r)).group(1)}
+    rep, snap = real_report()
+    k = TestClient(app)
+    ev_id = k.post("/api/kiosk/evaluations", json={"client_id": "prune-1", "report": rep, "snapshot": snap},
+                   headers=H).json()["id"]
+    db = SessionLocal()
+    ev = db.get(Evaluation, ev_id)
+    assert ev.snapshot
+    ev.created_at = now() - timedelta(days=400)
+    db.commit()
+    assert ev_service.prune_snapshots(db, 0) == 0            # 0 — не чистить вовсе
+    assert ev_service.prune_snapshots(db, 180) == 1
+    db.expire_all()
+    ev = db.get(Evaluation, ev_id)
+    assert ev.snapshot is None                               # слепок ушёл
+    assert ev.report and ev.verdict and ev.model_name        # сама оценка на месте
+    assert ev_service.prune_snapshots(db, 180) == 0          # повторно чистить нечего
+    db.close()

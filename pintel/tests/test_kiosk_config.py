@@ -133,6 +133,7 @@ def test_the_phone_test_ships_with_the_build():
     по которому телефон клиента увидит «страница не найдена» посреди сделки."""
     спека = open(os.path.join(КОРЕНЬ, "pintel-kiosk.spec"), encoding="utf-8").read()
     assert "pintel_kiosk.phoneweb" in спека and "pintel_core.phonetest" in спека
-    assert "('pintel_kiosk/assets', 'pintel_kiosk/assets')" in спека, "страница лежит в assets"
-    assert os.path.exists(os.path.join(КОРЕНЬ, "pintel_kiosk", "assets", "diag.html"))
+    # страница общая: её отдаёт и мини-сервер киоска, и наш сервер на домене
+    assert "('pintel_core/assets', 'pintel_core/assets')" in спека, "страница лежит в assets ядра"
+    assert os.path.exists(os.path.join(КОРЕНЬ, "pintel_core", "assets", "diag.html"))
     assert config.DEFAULTS["phone_test_port"] == 8765

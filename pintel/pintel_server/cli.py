@@ -25,6 +25,8 @@ def main(argv=None):
     s = sub.add_parser("create-admin"); s.add_argument("--login", required=True); s.add_argument("--name", required=True); s.add_argument("--password")
     s = sub.add_parser("create-kiosk"); s.add_argument("--name", required=True); s.add_argument("--point")
     sub.add_parser("fetch-price")
+    s_prune = sub.add_parser("prune")        # убрать сырые слепки у старых оценок
+    s_prune.add_argument("--days", type=int, default=None)
     s = sub.add_parser("run"); s.add_argument("--host", default="0.0.0.0"); s.add_argument("--port", type=int, default=8000)
     a = ap.parse_args(argv)
 
@@ -57,6 +59,10 @@ def main(argv=None):
         if a.cmd == "fetch-price":
             row = price_service.refresh(db)
             print(f"прайс: {row.models_count} моделей, {row.positions_count} позиций"); return 0
+        if a.cmd == "prune":
+            from .services import evaluations as ev_service
+            n = ev_service.prune_snapshots(db, a.days)
+            print(f"сырые слепки убраны у {n} оценок (сами оценки остались)"); return 0
     finally:
         db.close()
     return 0

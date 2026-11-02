@@ -9,7 +9,7 @@ from .. import audit
 from ..auth import current_kiosk
 from ..config import settings
 from ..db import get_db, now
-from ..models import Evaluation, Kiosk
+from ..models import Evaluation, Kiosk, PhoneTest
 from ..services import evaluations as ev_service
 from ..services import ocenka_import
 from ..services import price as price_service
@@ -89,6 +89,7 @@ def create_evaluation(body: EvaluationIn, kiosk: Kiosk = Depends(current_kiosk),
     ev, created = ev_service.create_from_kiosk(db, kiosk, body.model_dump())
     return {"id": ev.id, "номер": ev.number, "день": ev.day, "создана": created,
             "статус": ev.status, "ссылка_отчёта": ev_service.report_url(ev),
+            "ссылка_чека": ev_service.check_url(ev),
             "уже_приносили": bool(ev.device and ev.device.evaluations_count > 1)}
 
 
@@ -140,6 +141,43 @@ def import_to_ocenka(ev_id: int, kiosk: Kiosk = Depends(current_kiosk), db: DbSe
               f"Оценка {ev_service.label(ev)} → сделка Оценки №{res.get('device_id')}",
               entity="evaluation", entity_id=ev.id, kiosk=kiosk, details=res)
     return {"id": ev.id, "номер_сделки": res.get("device_id"), **res}
+
+
+# ---------- тест на телефоне клиента ----------
+
+class PhoneTestIn(BaseModel):
+    token: str
+    eval_id: int | None = None
+
+
+@router.post("/phone")
+def open_phone_test(body: PhoneTestIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Открыть сессию теста: касса придумывает токен, сервер заводит под него строку.
+
+    Строку создаёт только касса — поэтому на выдуманный токен с улицы результат не положить:
+    такого токена в базе просто нет. В ответ — адрес страницы для QR на домене.
+    """
+    токен = (body.token or "").strip()[:32]
+    if not токен.isalnum():
+        raise HTTPException(400, "токен: только буквы и цифры")
+    pt = db.scalar(select(PhoneTest).where(PhoneTest.token == токен))
+    if pt is None:
+        pt = PhoneTest(token=токен, kiosk_id=kiosk.id, eval_id=body.eval_id)
+        db.add(pt)
+    else:
+        pt.kiosk_id, pt.eval_id = kiosk.id, body.eval_id or pt.eval_id
+    db.commit()
+    return {"токен": токен, "ссылка": f"{settings.public_url}/t/{токен}"}
+
+
+@router.get("/phone/{token}")
+def phone_test_result(token: str, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Результат теста: касса спрашивает его, пока клиент проходит тест на своём телефоне."""
+    pt = db.scalar(select(PhoneTest).where(PhoneTest.token == token))
+    if not pt:
+        raise HTTPException(404, "проверка не найдена")
+    return {"готов": pt.answered_at is not None, "результат": pt.result or {},
+            "когда": pt.answered_at.isoformat() if pt.answered_at else None}
 
 
 @router.post("/heartbeat")

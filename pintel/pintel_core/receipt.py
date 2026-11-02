@@ -39,6 +39,9 @@ _логотип_кеш = None
   .номер { font-size: 9pt; color: #6B7580; }
   .две { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm 7mm; }
   .блок { break-inside: avoid; }
+  .ссылка { display: flex; gap: 5mm; align-items: center; margin: 4mm 0 0 0; padding: 3mm 4mm;
+            border: 1px solid #EFF2F6; border-radius: 2mm; break-inside: avoid; font-size: 9pt; }
+  .ссылка .адрес { color: #6B7580; font-size: 8pt; word-break: break-all; margin-top: 1mm; }
   .кикер { font-size: 7.5pt; font-weight: 700; letter-spacing: .9pt; color: #6B7580;
            text-transform: uppercase; margin-bottom: 1.5mm; }
   .строка { display: flex; justify-content: space-between; gap: 4mm; padding: 1.1mm 0;
@@ -75,6 +78,25 @@ def логотип() -> str:
         except OSError:
             _логотип_кеш = ""
     return _логотип_кеш
+
+
+def qr_svg(текст: str, модуль: int = 3) -> str:
+    """QR как SVG прямо в странице: чек печатается и открывается без интернета и без
+    соседних файлов. Нет библиотеки qrcode — просто не рисуем, чек от этого не ломается."""
+    try:
+        import qrcode
+    except Exception:                                            # noqa: BLE001
+        return ""
+    q = qrcode.QRCode(border=1, box_size=1)
+    q.add_data(текст)
+    q.make(fit=True)
+    m = q.get_matrix()
+    размер = len(m) * модуль
+    d = "".join(f"M{x * модуль} {y * модуль}h{модуль}v{модуль}h-{модуль}z"
+                for y, строка in enumerate(m) for x, есть in enumerate(строка) if есть)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {размер} {размер}" '
+            f'width="22mm" height="22mm" shape-rendering="crispEdges">'
+            f'<rect width="100%" height="100%" fill="#fff"/><path d="{d}" fill="#11161C"/></svg>')
 
 
 def _э(значение) -> str:
@@ -171,6 +193,14 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
               "Проверка выполнена по кабелю: прочитаны серийные номера модулей и их привязка к телефону, "
               "состояние аккумулятора, память, журнал обслуживания Apple и отчёты о сбоях.")
 
+    ссылка = str(сделка.get("ссылка") or "").strip()
+    qr = qr_svg(ссылка) if ссылка else ""
+    ссылка_блок = (f'<div class="ссылка"><div>{qr}</div>'
+                   f'<div><div class="кикер">Этот чек в интернете</div>'
+                   f'<div>Наведите камеру телефона — откроется та же страница. '
+                   f'Бумага теряется, ссылка остаётся.</div>'
+                   f'<div class="адрес">{_э(ссылка)}</div></div></div>') if qr else ""
+
     реквизиты = "<br>".join(_э(x) for x in (
         фирма.get("адрес") or сделка.get("точка"),
         фирма.get("телефон"), фирма.get("сайт") or "pintel.kz",
@@ -247,6 +277,8 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
 
 {"<div class='замечания'><b>На что обратить внимание</b><ul>"
  + "".join(f"<li>{_э(x)}</li>" for x in замечания) + "</ul></div>" if замечания else ""}
+
+{ссылка_блок}
 
 <div class="подписи">
   <div><div class="кикер">Клиент</div>

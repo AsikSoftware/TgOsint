@@ -15,11 +15,30 @@ from .routers import kiosk_api, web
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _почистить_слепки():
+    """Сырые слепки старше PINTEL_SNAPSHOT_KEEP_DAYS — убрать. Сами оценки остаются.
+
+    На старте, а не по расписанию: отдельного планировщика у сервера нет, а перезапускают
+    его при каждом обновлении. Если сервер стоит месяцами, то же самое делает
+    `python -m pintel_server.cli prune` из ночного задания."""
+    from .db import SessionLocal
+    from .services import evaluations as ev_service
+    try:
+        db = SessionLocal()
+        убрано = ev_service.prune_snapshots(db)
+        db.close()
+        if убрано:
+            print(f"слепки старше {settings.snapshot_keep_days} дней убраны у {убрано} оценок")
+    except Exception as e:                                       # noqa: BLE001 — уборка не повод не стартовать
+        print(f"не удалось почистить слепки: {type(e).__name__}: {e}")
+
+
 def create_app(init_sqlite=True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app):
         if init_sqlite and settings.is_sqlite:
             init_db()                    # для разработки; на сервере таблицы создаёт alembic
+        _почистить_слепки()
         yield
 
     app = FastAPI(title="Pintel Server", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)

@@ -13,6 +13,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session as DbSession
 
+from pintel_core import phonetest
+
 from .. import audit
 from ..auth import (authenticate, clear_cookie, create_session, current_user, hash_password, new_kiosk_token,
                     require_admin, require_senior, require_staff, revoke_session, set_cookie, COOKIE)
@@ -20,7 +22,7 @@ from ..config import settings
 from ..db import get_db, now
 from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_ADMIN, ROLE_CASHIER, ROLES, ST_AT_COUNTER, ST_BOUGHT,
                       ST_DECLINED, ST_IN_WORK, ST_NEW, STATUSES, AuditLog, Device, Evaluation, EvaluationMedia,
-                      Kiosk, LoginEvent, Point, PriceGrid, User)
+                      Kiosk, LoginEvent, PhoneTest, Point, PriceGrid, User)
 from ..services import evaluations as ev_service
 from ..services import ocenka_import
 from ..services import price as price_service
@@ -234,6 +236,78 @@ def public_report(request: Request, token: str, db: DbSession = Depends(get_db))
     if not ev:
         raise HTTPException(404, "отчёт не найден")
     return render(request, "public_report.html", None, ev=ev, rep=ev.report or {})
+
+
+@router.get("/check/{token}", response_class=HTMLResponse)
+def public_check(token: str, db: DbSession = Depends(get_db)):
+    """Чек оценки на домене: ровно тот же документ, что печатается на точке.
+
+    Бумага теряется, а ссылка остаётся: клиент открывает её с телефона, и у него на руках
+    то же, что подписали на кассе. Собирает чек `pintel_core.receipt` — один и тот же код
+    на оба выхода, иначе бумажный и сетевой чек со временем разойдутся.
+    """
+    from pintel_core import receipt
+    ev = db.scalar(select(Evaluation).where(Evaluation.public_token == token))
+    if not ev:
+        raise HTTPException(404, "чек не найден")
+    rep = ev.report or {}
+    сделка = dict(rep.get("чек") or {})
+    # старая программа на точке чек не присылала — собираем из полей самой оценки
+    сделка.setdefault("номер", ev.number or ev.client_id)
+    сделка.setdefault("клиент", ev.client_name or "")
+    сделка.setdefault("телефон", ev.client_phone or "")
+    сделка.setdefault("точка", ev.point.name if ev.point else "")
+    сделка.setdefault("коробка", bool(ev.has_box))
+    сделка.setdefault("шнур", bool(ev.has_cord))
+    return HTMLResponse(receipt.html(сделка, rep, когда=ev.created_at))
+
+
+# ---------- тест на телефоне клиента (QR с экрана кассы) ----------
+
+@router.get("/t/{token}", response_class=HTMLResponse)
+def phone_test_page(token: str, db: DbSession = Depends(get_db)):
+    """Страница теста на телефоне клиента. Та же, что отдаёт мини-сервер в самом киоске.
+
+    На домене она работает по HTTPS, а значит телефон пускает страницу к микрофону — по
+    локальной сети Safari этого не разрешает. Поэтому точке с интернетом лучше ходить сюда.
+    """
+    pt = db.scalar(select(PhoneTest).where(PhoneTest.token == token))
+    if not pt:
+        raise HTTPException(410, "Эта проверка уже закончена. Возьмите новый код у продавца.")
+    try:
+        with open(phonetest.СТРАНИЦА_ФАЙЛ, "rb") as f:
+            страница = f.read()
+    except OSError:
+        raise HTTPException(500, "страница теста не найдена")
+    return HTMLResponse(страница.decode("utf-8"), headers={"Cache-Control": "no-store"})
+
+
+@router.post("/api/phone/{token}")
+async def phone_test_result(token: str, request: Request, db: DbSession = Depends(get_db)):
+    """Результат теста с телефона клиента. Путь тот же, что у мини-сервера в киоске, —
+    страница одна на оба пути и не должна знать, где она открыта.
+
+    Авторизации здесь нет и быть не может: страницу открывает чужой телефон. Защита —
+    в том, что строку с токеном заводит только касса, а в базу ложатся лишь наши ключи и
+    наши три ответа (`phonetest.разобрать`)."""
+    pt = db.scalar(select(PhoneTest).where(PhoneTest.token == token))
+    if not pt:
+        raise HTTPException(410, "проверка уже закрыта")
+    тело = await request.body()
+    if len(тело) > 64 * 1024:
+        raise HTTPException(413, "слишком большой ответ")
+    try:
+        данные = json.loads(тело.decode("utf-8")) if тело else {}
+    except Exception:                                            # noqa: BLE001
+        данные = {}
+    res = phonetest.разобрать(данные)
+    if not phonetest.был(res):
+        raise HTTPException(400, "в ответе нет ни одного теста")
+    pt.result = res
+    pt.device = (res.get("устройство") or "")[:200] or None
+    pt.answered_at = now()
+    db.commit()
+    return {"принято": True}
 
 
 # ---------- данные клиента и фото/видео: вносит сотрудник в кассе ----------

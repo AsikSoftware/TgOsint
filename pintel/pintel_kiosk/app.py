@@ -189,6 +189,10 @@ class KioskWindow(QMainWindow):
         self.код_медиа = ""
         self.код_теста = ""
         self.тест_телефона = {}
+        self.тест_через_сервер = False
+        self._тест_спрашиваем = False
+        self.тест_опрос = QTimer(self)
+        self.тест_опрос.timeout.connect(self._спросить_тест)
         self.веб_телефона = phoneweb.запустить(int(cfg.get("phone_test_port") or phoneweb.ПОРТ))
         if self.веб_телефона is None:
             log_line(f"тест на телефоне: порт {cfg.get('phone_test_port') or phoneweb.ПОРТ} занят")
@@ -268,9 +272,9 @@ class KioskWindow(QMainWindow):
         cfg = self.cfg
         if not (cfg.get("update_repo") and cfg.get("update_token")):
             return
-        t = self._run(lambda: updater.проверить(cfg["update_repo"], cfg["update_token"],
-                                                cfg.get("update_asset") or ""))
-        t.ok.connect(self._обновление_найдено)
+        self._run(lambda: updater.проверить(cfg["update_repo"], cfg["update_token"],
+                                            cfg.get("update_asset") or ""),
+                  ok=self._обновление_найдено)
 
     def _обновление_найдено(self, итог):
         """Нашлась новая сборка — ставим сразу, не спрашивая.
@@ -307,9 +311,7 @@ class KioskWindow(QMainWindow):
                 установлена, "pintel-kiosk.exe")
             return updater.применить(новая, установлена, exe, os.path.join(data_dir(), "update"))
 
-        t = self._run(job)
-        t.ok.connect(self._обновление_готово)
-        t.err.connect(self._обновление_сорвалось)
+        self._run(job, ok=self._обновление_готово, err=self._обновление_сорвалось)
 
     def _обновление_готово(self, путь):
         log_line("обновление: запущен сценарий подмены " + str(путь))
@@ -341,8 +343,17 @@ class KioskWindow(QMainWindow):
                 pass
         self._run(job)
 
-    def _run(self, fn):
+    def _run(self, fn, ok=None, err=None):
+        """Сетевое действие в отдельном потоке.
+
+        `ok` и `err` подключаются ДО запуска: быстрая задача успевает закончиться раньше,
+        чем вызывающий успеет подписаться, и тогда результат теряется вовсе. На опросе
+        теста это ловится сразу, на медленной отправке сделки — раз в сто прогонов."""
         t = Task(fn, self)
+        if ok is not None:
+            t.ok.connect(ok)
+        if err is not None:
+            t.err.connect(err)
         self.tasks = [x for x in self.tasks if x.isRunning()] + [t]
         t.start()
         return t
@@ -596,9 +607,7 @@ class KioskWindow(QMainWindow):
             посылка = ocenka.посылка(данные, код, точка=cfg.get("point") or "")
             return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка)
 
-        t = self._run(job)
-        t.ok.connect(self.сделка_ушла)
-        t.err.connect(self.отправка_не_удалась)
+        self._run(job, ok=self.сделка_ушла, err=self.отправка_не_удалась)
 
     def новый_код_медиа(self):
         """Новый код обмена и ссылка на бота. Код придумываем на месте: в базу Оценки с
@@ -618,21 +627,80 @@ class KioskWindow(QMainWindow):
                                   "нужно на шаге. Последним — ручная диагностика кнопками. "
                                   "Кто прислал — тот и оценщик.")
 
+    def _дослать_на_сервер(self, добавка: dict):
+        """Дописать в сохранённую на сервере оценку то, что появилось ПОСЛЕ её создания:
+        результат теста на телефоне и чек.
+
+        Оценка уходит на сервер сразу после кабеля, а тест и чек случаются позже. Без этого
+        в общей базе остался бы обрезанный аппарат: проверка есть, а чем кончилось — нет.
+        Сервера нет — всё то же лежит в out/ на точке и уходит в Оценку карточкой."""
+        import json as _json
+        from pintel_core.devicelink import snapshot as _snap
+        сервер = (self.last or {}).get("server") or {}
+        ev_id = сервер.get("id")
+        if not (self.client.enabled and ev_id) or сервер.get("локально"):
+            return
+        rep = dict((self.last or {}).get("report") or {})
+        rep.update(добавка)
+        self.last["report"] = rep
+        тело = _json.loads(_snap.dumps(rep))
+        self._run(lambda: self.client.update_evaluation(ev_id, тело),
+                  err=lambda e: log_line(f"оценка на сервере не обновилась: {e}"))
+
     # ---------- тест на телефоне клиента ----------
     def новый_код_теста(self):
         """Новый одноразовый код и QR на страницу теста. Код свой на каждую сделку: другое
-        устройство из той же сети не подбросит результат в чужую сделку."""
+        устройство не подбросит результат в чужую сделку.
+
+        Сначала пробуем наш домен: там HTTPS, а значит телефон пускает страницу к микрофону
+        (по локальной сети Safari этого не разрешает) и работает он с любой сети, хоть с
+        мобильного интернета. Сервер не настроен или не ответил — остаётся мини-сервер в
+        самом киоске: шаг обязательный, он не может зависеть от чужой доступности.
+        """
         from pintel_core.external import ocenka_media
         self.тест_телефона = {}
-        self.код_теста = ocenka_media.новый_код()
+        self.тест_через_сервер = False
+        self.код_теста = ocenka_media.новый_код(16)      # длиннее: этот код живёт в интернете
         phoneweb.открыть(self.код_теста, self._тест_из_сети)
-        порт = int(self.cfg.get("phone_test_port") or phoneweb.ПОРТ)
-        ссылка = phoneweb.ссылка(self.код_теста, порт) if self.веб_телефона else ""
-        почему = ("" if self.веб_телефона
-                  else f"Порт {порт} занят другой программой — тест на телефоне не открыть.")
+        ссылка, почему = "", ""
+        if self.client.enabled:
+            try:
+                ссылка = self.client.открыть_тест(self.код_теста)
+                self.тест_через_сервер = bool(ссылка)
+            except ServerError as e:
+                log_line(f"тест на телефоне: сервер не открыл сессию ({e}) — работаем по локальной сети")
+        if not ссылка:
+            порт = int(self.cfg.get("phone_test_port") or phoneweb.ПОРТ)
+            ссылка = phoneweb.ссылка(self.код_теста, порт) if self.веб_телефона else ""
+            почему = ("" if self.веб_телефона
+                      else f"Порт {порт} занят другой программой — тест на телефоне не открыть.")
         self.s_work.set_тест({})
         self.s_work.показать_тест(ссылка, почему)
-        log_line(f"тест на телефоне: код {self.код_теста}, ссылка {ссылка or 'нет сети'}")
+        self.тест_опрос.start(3000) if self.тест_через_сервер else self.тест_опрос.stop()
+        log_line(f"тест на телефоне: код {self.код_теста}, "
+                 f"{'домен' if self.тест_через_сервер else 'локальная сеть'}, ссылка {ссылка or 'нет'}")
+
+    def _спросить_тест(self):
+        """Пока клиент проходит тест на домене, касса спрашивает сервер: не готов ли.
+
+        По локальной сети результат приходит к нам сам, а через домен он ложится в базу —
+        узнать о нём можно только спросив. Запрос сетевой, поэтому в отдельном потоке и не
+        больше одного зараз."""
+        if not (self.тест_через_сервер and self.код_теста) or self._тест_спрашиваем:
+            return
+        if self.s_work._тест_закрыт() or self.state not in ("work", "intake", "scanning"):
+            self.тест_опрос.stop()
+            return
+        self._тест_спрашиваем = True
+        токен = self.код_теста
+        self._run(lambda: self.client.результат_теста(токен), ok=self._тест_спросили,
+                  err=lambda _: setattr(self, "_тест_спрашиваем", False))
+
+    def _тест_спросили(self, res):
+        self._тест_спрашиваем = False
+        if res:
+            self.тест_опрос.stop()
+            self._тест_с_телефона(res)
 
     def _тест_из_сети(self, данные):
         """Вызывается в потоке мини-сервера. Только переносим в поток окна."""
@@ -644,7 +712,10 @@ class KioskWindow(QMainWindow):
             log_line("тест на телефоне: пришло пусто")
             return
         self.тест_телефона = res
+        self.тест_опрос.stop()
         self.s_work.set_тест(res)
+        # результат — часть оценки, а не только экрана: дописываем его в то, что хранится
+        self._дослать_на_сервер({"тест_телефона": res})
         плох = [имя for _, имя in phonetest.плохие(res)]
         log_line("тест на телефоне: " + phonetest.словами(res))
         if плох:
@@ -668,13 +739,17 @@ class KioskWindow(QMainWindow):
         поля = self.s_work.данные()
         self.s_work.занято("")
         код = итог.get("код") or self.код_медиа
+        сервер = (self.last or {}).get("server") or {}
         self.сделка = {"номер": код,
                        "клиент": поля.get("имя"), "телефон": поля.get("телефон"),
                        "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
                        "коробка": поля.get("коробка"), "шнур": поля.get("шнур"),
                        "комментарий": поля.get("комментарий"), "фирма": self._фирма(),
                        "состояние": ocenka.состояние_словами(self.анкета.get("состояние")),
-                       "статус": self.статус_сделки}
+                       "статус": self.статус_сделки,
+                       # чек живёт и на домене: QR на бумаге ведёт на ту же страницу
+                       "ссылка": сервер.get("ссылка_чека") or ""}
+        self._дослать_на_сервер({"чек": dict(self.сделка)})
         self.s_work.ушло(код)
 
     def _фирма(self):
@@ -703,6 +778,7 @@ class KioskWindow(QMainWindow):
 
     def go_home(self):
         phoneweb.закрыть()                      # ссылка из прошлой сделки больше не работает
+        self.тест_опрос.stop()
         self.return_timer.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен

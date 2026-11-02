@@ -6,7 +6,9 @@ hidden = ['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.loo
           'uvicorn.lifespan.off', 'sqlalchemy.dialects.sqlite', 'anyio._backends._asyncio', 'multipart', 'python_multipart',
           'jinja2', 'google.auth.transport.requests', 'requests', 'rsa', 'h11', 'pintel_server.cli', 'pintel_server.launcher']
 datas = [('pintel_server/templates', 'pintel_server/templates'), ('pintel_server/static', 'pintel_server/static'),
-         ('pintel_core/analysis/models.json', 'pintel_core/analysis')]
+         ('pintel_core/analysis/models.json', 'pintel_core/analysis'),
+         # логотип для чека на домене и страница теста на телефоне клиента (их отдаёт сервер)
+         ('pintel_core/assets', 'pintel_core/assets')]
 excludes = ['tkinter', 'PySide6', 'PyQt5', 'matplotlib', 'av', 'jedi', 'IPython', 'parso', 'numpy', 'PIL', 'pillow',
             'pandas', 'scipy', 'qh3', 'aiohttp', 'pymobiledevice3', 'pintel_kiosk', 'psycopg', 'alembic']
 

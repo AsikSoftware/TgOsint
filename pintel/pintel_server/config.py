@@ -28,6 +28,13 @@ class Settings:
     kiosk_return_seconds: int = int(os.environ.get("PINTEL_KIOSK_RETURN_SECONDS", "60"))
     apple_history_seconds: int = int(os.environ.get("PINTEL_APPLE_HISTORY_SECONDS", "90"))
 
+    # Сколько дней держать СЫРОЙ слепок телефона внутри оценки. Сама оценка (паспорт,
+    # батарея, вердикт, чек, тест) живёт вечно — она и есть то, ради чего всё это; а слепок
+    # весит около мегабайта на аппарат, и при двух сотнях оценок в день база растёт на
+    # 6 ГБ в месяц. Разбор по нему нужен первые недели, дальше — только обезличенный эталон.
+    # 0 — не чистить вовсе.
+    snapshot_keep_days: int = int(os.environ.get("PINTEL_SNAPSHOT_KEEP_DAYS", "180"))
+
     # где лежат загруженные клиентом фото/видео (в Docker — том)
     media_dir: str = os.environ.get("PINTEL_MEDIA_DIR", "media")
     media_max_files: int = int(os.environ.get("PINTEL_MEDIA_MAX_FILES", "12"))

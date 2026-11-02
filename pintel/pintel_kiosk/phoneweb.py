@@ -25,7 +25,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ПОРТ = 8765
 ПРЕДЕЛ_ТЕЛА = 64 * 1024              # результат теста — это семь коротких строк
-СТРАНИЦА = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "diag.html")
+# Страница лежит в pintel_core: её отдаёт и этот мини-сервер, и наш сервер на домене
+# (pintel_server), когда точка работает с ним. Одна страница на оба пути — иначе они
+# разойдутся, и тест на домене начнёт спрашивать не то, что тест в локальной сети.
+from pintel_core import phonetest                                   # noqa: E402
+
+СТРАНИЦА = phonetest.СТРАНИЦА_ФАЙЛ
 
 _замок = threading.Lock()
 _сессия = {"токен": None, "приёмник": None}

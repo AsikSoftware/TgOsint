@@ -120,6 +120,21 @@ class Client:
         return self._req("PATCH", f"/api/kiosk/evaluations/{ev_id}",
                          json={"report": report, "snapshot_patch": snapshot_patch}, timeout=60)
 
+    # ---------- тест на телефоне клиента ----------
+    def открыть_тест(self, токен, ev_id=None):
+        """Завести сессию теста на сервере. → ссылка на страницу теста (на нашем домене).
+
+        Нужна ровно для того, чтобы страница открывалась по HTTPS: по локальной сети Safari
+        не пускает её к микрофону, а на домене пускает. Сервера нет — остаётся мини-сервер
+        в самом киоске, шаг от этого не отменяется."""
+        res = self._req("POST", "/api/kiosk/phone", json={"token": токен, "eval_id": ev_id}, timeout=15)
+        return (res or {}).get("ссылка") or ""
+
+    def результат_теста(self, токен):
+        """→ результат теста или {}, пока телефон не ответил."""
+        res = self._req("GET", f"/api/kiosk/phone/{токен}", timeout=15) or {}
+        return res.get("результат") or {} if res.get("готов") else {}
+
     def intake(self, ev_id):
         """Состояние заявки: номер выдаёт сотрудник в кассе (после имени и телефона клиента); ссылка на отчёт для QR."""
         return self._req("GET", f"/api/kiosk/evaluations/{ev_id}/intake", timeout=15)

@@ -202,6 +202,25 @@ class EvaluationMedia(Base):
     evaluation: Mapped[Evaluation] = relationship(back_populates="media")
 
 
+class PhoneTest(Base):
+    """Тест на телефоне клиента, открытый по временной ссылке с экрана кассы.
+
+    Отдельная таблица, а не поле оценки: ссылку касса заводит В НАЧАЛЕ сделки, когда оценки
+    ещё нет, а телефон отвечает по ней без всякого токена киоска. Строку создаёт только
+    касса (API киоска), поэтому подбросить результат с улицы на выдуманный токен нельзя —
+    такого токена просто нет.
+    """
+    __tablename__ = "phone_tests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    kiosk_id: Mapped[Optional[int]] = mapped_column(ForeignKey("kiosks.id"))
+    eval_id: Mapped[Optional[int]] = mapped_column(ForeignKey("evaluations.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=now, index=True)
+    answered_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime)
+    result: Mapped[Optional[dict]] = mapped_column(JSON)        # ответы по тестам, pintel_core.phonetest
+    device: Mapped[Optional[str]] = mapped_column(String(200))  # что за телефон открыл страницу
+
+
 class PriceGrid(Base):
     __tablename__ = "price_grids"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Оценки: приём с киоска, номера талонов, решения кассы."""
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, null, select
 
 from .. import audit
 from ..config import settings
@@ -257,8 +257,37 @@ def ensure_media_token(db, ev: Evaluation) -> str:
     return ev.media_token
 
 
+def prune_snapshots(db, days: int | None = None) -> int:
+    """Убрать сырые слепки у старых оценок. → сколько почистили.
+
+    Строку оценки не трогаем: паспорт, батарея, вердикт, чек и тест остаются навсегда —
+    ради них всё и затевалось. Уходит только сырой слепок телефона, около мегабайта на
+    аппарат: он нужен, чтобы чинить разбор по живому случаю, а это первые недели. Дальше
+    от него остаётся обезличенный эталон, который весит сотню килобайт.
+    """
+    дней = settings.snapshot_keep_days if days is None else int(days)
+    if дней <= 0:
+        return 0
+    порог = now() - timedelta(days=дней)
+    строки = db.scalars(select(Evaluation).where(Evaluation.created_at < порог,
+                                                 Evaluation.snapshot.is_not(None))).all()
+    for ev in строки:
+        # именно null(), а не None: тип JSON в SQLAlchemy по умолчанию пишет питоновский None
+        # как JSON-значение null, и строка остаётся «непустой» — вторая уборка нашла бы её снова
+        ev.snapshot = null()
+    if строки:
+        db.commit()
+    return len(строки)
+
+
 def report_url(ev: Evaluation) -> str:
     return f"{settings.public_url}/r/{ev.public_token}"
+
+
+def check_url(ev: Evaluation) -> str:
+    """Чек на домене: тот же документ, что печатают на точке. Ссылка идёт на бумажный чек
+    QR-кодом — бумага теряется, ссылка остаётся."""
+    return f"{settings.public_url}/check/{ev.public_token}"
 
 
 def media_url(ev: Evaluation) -> str | None:
@@ -281,6 +310,7 @@ def intake_state(ev: Evaluation) -> dict:
     """Что киоск спрашивает у сервера, пока показан результат: номер заявки (его выдаёт
     сотрудник в кассе, записав имя и телефон клиента), ссылка на отчёт для QR, медиа."""
     return {"id": ev.id, "номер": ev.number, "ссылка_отчёта": report_url(ev),
+            "ссылка_чека": check_url(ev),
             "клиент": {"имя": ev.client_name, "телефон": ev.client_phone,
                        "коробка": ev.has_box, "шнур": ev.has_cord},
             "медиа": media_list(ev), "готово": bool(ev.client_name and ev.client_phone),

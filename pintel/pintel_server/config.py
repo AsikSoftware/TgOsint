@@ -18,6 +18,10 @@ class Settings:
     database_url: str = os.environ.get("PINTEL_DATABASE_URL", "sqlite:///./pintel.db")
     secret_key: str = os.environ.get("PINTEL_SECRET_KEY", "dev-secret-change-me")
     public_url: str = os.environ.get("PINTEL_PUBLIC_URL", "http://localhost:8000").rstrip("/")
+    # Ключ привязки киосков: один на всю сеть, лежит в сборке киоска (pintel_kiosk/config.py).
+    # Токены точкам больше не раздают руками — киоск с этим ключом заводит себя сам, а
+    # администратор видит его в «Настройки → Киоски» и может отключить одной кнопкой.
+    kiosk_key: str = os.environ.get("PINTEL_KIOSK_KEY", "pintel-kiosk-2026")
     sickw_key: str = os.environ.get("PINTEL_SICKW_KEY", "")
     sickw_services: list = field(default_factory=lambda: _list_int(os.environ.get("PINTEL_SICKW_SERVICES", "61"), [61]))
     price_sheet_url: str = os.environ.get("PINTEL_PRICE_SHEET_URL", gsheet.DEFAULT_URL)

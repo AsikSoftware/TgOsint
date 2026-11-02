@@ -131,19 +131,85 @@ def test_pipeline_skips_history_wait_on_unsupported_model(fake_core, monkeypatch
     assert any(k == "apple" and s == "done" and "iPhone X" in t for k, s, t in events)
 
 
-def test_client_standalone_sickw_and_numbers(monkeypatch, tmp_path):
+class ФейкHTTP:
+    """Подменный httpx.Client: записывает запросы и отдаёт заготовленные ответы."""
+    запросы = []
+    ответы = {}
+
+    def __init__(self, base_url="", timeout=None, headers=None):
+        self.headers = dict(headers or {})
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def request(self, method, path, **kw):
+        import httpx
+        ФейкHTTP.запросы.append({"метод": method, "путь": path, "токен": self.headers.get("X-Kiosk-Token"),
+                                 "тело": kw.get("json")})
+        код, тело = ФейкHTTP.ответы.get(path, (200, {"ок": True}))
+        if callable(тело):
+            тело = тело(len([x for x in ФейкHTTP.запросы if x["путь"] == path]))
+        if callable(код):
+            код = код(len([x for x in ФейкHTTP.запросы if x["путь"] == path]))
+        return httpx.Response(код, json=тело)
+
+    def post(self, path, json=None, **kw):
+        return self.request("POST", path, json=json, **kw)
+
+
+def test_the_kiosk_binds_itself_to_the_one_server(monkeypatch, tmp_path):
+    """Ни адреса, ни токена на точке не настраивают: адрес в сборке, токен киоск получает
+    сам. Раздача токенов по точкам осталась от прежней версии, и ровно из-за неё ни одна
+    точка не была подключена — общей базы оценок не получалось."""
     from pintel_kiosk import client as kclient
-    from pintel_core.external import sickw as sk
-    monkeypatch.setattr(kclient, "data_dir", lambda: str(tmp_path))
+    from pintel_kiosk import config as kconfig
     for sub in ("queue", "cache"):
         os.makedirs(tmp_path / sub, exist_ok=True)
+    monkeypatch.setattr(kclient, "data_dir", lambda: str(tmp_path))
     monkeypatch.setattr(kclient, "app_dir", lambda: str(tmp_path))
-    c = kclient.Client({"server": "", "token": "", "sickw_key": "KEY", "sickw_services": [61]})
-    assert not c.enabled and c.local_sickw and c.standalone_ready
-    monkeypatch.setattr(sk, "_get", lambda params, timeout=60: {"status": "success",
-                        "result": 'Model: iPhone 12 64GB Black<br>Blacklist Status: <font color="green">Clean</font><br>iCloud Lock: <font color="red">ON</font><br>'})
-    r = c.sickw("490154203237518")
-    assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True
+    monkeypatch.setattr(kclient.httpx, "Client", ФейкHTTP)
+    ФейкHTTP.запросы, ФейкHTTP.ответы = [], {
+        "/api/kiosk/register": (200, {"токен": "pk_первый", "киоск": "16/38 · KASSA-1"}),
+        "/api/kiosk/sickw": (200, {"в_чёрном_списке": False}),
+    }
+    c = kclient.Client({**kconfig.DEFAULTS, "point": "16/38"})
+    assert c.enabled and c.base == kconfig.СЕРВЕР and not c.token
+
+    assert c.sickw("490154203237518")["в_чёрном_списке"] is False
+    привязка = [x for x in ФейкHTTP.запросы if x["путь"] == "/api/kiosk/register"]
+    assert len(привязка) == 1 and привязка[0]["тело"]["key"] == kconfig.КЛЮЧ_ПРИВЯЗКИ
+    assert привязка[0]["тело"]["machine"] and привязка[0]["тело"]["point"] == "16/38"
+    assert [x for x in ФейкHTTP.запросы if x["путь"] == "/api/kiosk/sickw"][0]["токен"] == "pk_первый"
+    # токен сохранён рядом с остальными файлами киоска: второй раз привязываться незачем
+    assert kclient.Client({**kconfig.DEFAULTS}).token == "pk_первый"
+
+    # сервер завели заново и наш токен протух — привязываемся сами и повторяем запрос
+    ФейкHTTP.запросы = []
+    ФейкHTTP.ответы["/api/kiosk/register"] = (200, {"токен": "pk_второй"})
+    ФейкHTTP.ответы["/api/kiosk/sickw"] = (lambda n: 401 if n == 1 else 200, {"в_чёрном_списке": True})
+    c2 = kclient.Client({**kconfig.DEFAULTS})
+    assert c2.sickw("490154203237518")["в_чёрном_списке"] is True
+    пути = [x["путь"] for x in ФейкHTTP.запросы]
+    assert пути == ["/api/kiosk/sickw", "/api/kiosk/register", "/api/kiosk/sickw"]
+    assert ФейкHTTP.запросы[-1]["токен"] == "pk_второй"
+
+
+def test_without_a_server_address_nothing_is_lost_silently(monkeypatch, tmp_path):
+    """Адрес стёрли руками — киоск об этом говорит, а не делает вид, что всё хорошо.
+    База IMEI теперь только через сервер: ключу на точках делать нечего."""
+    from pintel_kiosk import client as kclient
+    for sub in ("queue", "cache"):
+        os.makedirs(tmp_path / sub, exist_ok=True)
+    monkeypatch.setattr(kclient, "data_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(kclient, "app_dir", lambda: str(tmp_path))
+    c = kclient.Client({"server": "", "point": "16/38"})
+    assert not c.enabled
+    with pytest.raises(kclient.ServerError) as e:
+        c.sickw("490154203237518")
+    assert "адрес сервера" in str(e.value)
     assert not hasattr(c, "price"), "прайса у киоска больше нет — цену считает бот Оценки"
     assert [c.local_number(), c.local_number()] == [1, 2]
     # сервера нет вовсе — в очередь не копим: досылать некуда, а слепок и отчёт уже

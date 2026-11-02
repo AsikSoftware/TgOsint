@@ -182,8 +182,7 @@ def test_sealed_phone_goes_by_imei_without_the_cable(окно, monkeypatch):
     from PySide6.QtWidgets import QApplication
     from pintel_core.devicelink.connect import READY
     from pintel_kiosk import worker
-    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "sickw_key": "KEY"})
-    окно.client.sickw_key = "KEY"
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot"})
     службы = []
 
     def sickw(imei, services=None):

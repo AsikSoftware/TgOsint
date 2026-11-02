@@ -5,11 +5,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
+import secrets
+
 from .. import audit
-from ..auth import current_kiosk
+from ..auth import current_kiosk, new_kiosk_token
 from ..config import settings
 from ..db import get_db, now
-from ..models import Evaluation, Kiosk, PhoneTest
+from ..models import Evaluation, Kiosk, PhoneTest, Point
 from ..services import evaluations as ev_service
 from ..services import ocenka_import
 from ..services import price as price_service
@@ -49,6 +51,54 @@ def _own(db, kiosk, ev_id):
     if not ev or ev.kiosk_id != kiosk.id:
         raise HTTPException(404, "оценка не найдена")
     return ev
+
+
+class RegisterIn(BaseModel):
+    key: str
+    machine: str
+    point: str | None = None
+    version: str | None = None
+
+
+@router.post("/register")
+def register(body: RegisterIn, db: DbSession = Depends(get_db)):
+    """Киоск заводит себя сам. → токен, которым он дальше ходит в API.
+
+    Токены по точкам руками больше не раздают: это осталось от версии, где каждый киоск
+    заводили отдельно, и ровно из-за этого ни одна точка не была подключена, а общей базы не
+    получалось. Теперь у всех один адрес сервера и один ключ привязки (он в сборке киоска),
+    а сервер выдаёт каждому свой токен и показывает новый киоск в «Настройки → Киоски» —
+    незнакомый отключается одной кнопкой.
+
+    Узнаёт себя киоск по имени машины: после переустановки он найдёт свою прежнюю строку, а
+    не заведёт вторую. Токен при этом перевыпускается — прежний перестаёт работать.
+    """
+    if not settings.kiosk_key or body.key != settings.kiosk_key:
+        raise HTTPException(403, "неверный ключ привязки киоска")
+    машина = (body.machine or "").strip()[:80]
+    if not машина:
+        raise HTTPException(400, "киоск не назвал себя (machine)")
+    k = db.scalar(select(Kiosk).where(Kiosk.machine == машина))
+    if k and not k.is_active:
+        raise HTTPException(403, "этот киоск отключён администратором")
+    токен, хэш = new_kiosk_token()
+    if k is None:
+        точка = (body.point or "").strip()[:40]
+        имя = (f"{точка} · {машина}" if точка else машина)[:80]
+        if db.scalar(select(Kiosk).where(Kiosk.name == имя)):
+            имя = f"{имя[:72]} {secrets.token_hex(3)}"
+        k = Kiosk(name=имя, machine=машина, token_hash=хэш,
+                  point_id=db.scalar(select(Point.id).where(Point.name == точка)) if точка else None)
+        db.add(k)
+        db.flush()
+        audit.log(db, None, "kiosk.register", f"Киоск «{k.name}» привязался сам", entity="kiosk",
+                  entity_id=k.id, kiosk=k)
+    else:
+        k.token_hash = хэш
+    k.version = (body.version or k.version or "")[:32]
+    k.last_seen_at = now()
+    db.commit()
+    return {"токен": токен, "киоск": k.name, "точка": k.point.name if k.point else None}
 
 
 @router.get("/config")

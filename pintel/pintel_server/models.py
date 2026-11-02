@@ -99,6 +99,10 @@ class Kiosk(Base):
     name: Mapped[str] = mapped_column(String(80), unique=True)
     point_id: Mapped[Optional[int]] = mapped_column(ForeignKey("points.id"))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # Как киоск узнаёт себя при следующем запуске: имя машины. Токены больше не раздают
+    # руками — киоск получает свой сам, а по этому полю сервер находит его прежнюю строку
+    # и не плодит дубли после переустановки.
+    machine: Mapped[Optional[str]] = mapped_column(String(80), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=now)
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime)

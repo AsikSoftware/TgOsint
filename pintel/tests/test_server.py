@@ -543,3 +543,38 @@ def test_old_snapshots_are_pruned_but_the_evaluation_stays(app):
     assert ev2.reference_at is None
     assert ev_service.prune_snapshots(db, 180) == 1
     db.close()
+
+
+def test_a_kiosk_binds_itself_instead_of_being_handed_a_token(app):
+    """Токены по точкам руками больше не раздают: это осталось от версии, где каждый киоск
+    заводили отдельно, и ровно из-за этого ни одна точка не была подключена. Киоск приходит
+    с общим ключом привязки, получает свой токен и сразу виден администратору."""
+    from pintel_server.config import settings
+    k = TestClient(app)
+    тело = {"key": settings.kiosk_key, "machine": "KASSA-TEST-1", "point": "Привязка-город",
+            "version": "9.9.9"}
+    assert k.post("/api/kiosk/register", json={**тело, "key": "не тот"}).status_code == 403
+    assert k.post("/api/kiosk/register", json={**тело, "machine": ""}).status_code == 400
+
+    r = k.post("/api/kiosk/register", json=тело).json()
+    токен = r["токен"]
+    assert токен.startswith("pk_") and "KASSA-TEST-1" in r["киоск"]
+    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": токен}).status_code == 200
+
+    # та же машина второй раз (переустановка) — та же строка, новый токен, старый не работает
+    второй = k.post("/api/kiosk/register", json=тело).json()["токен"]
+    assert второй != токен
+    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": токен}).status_code == 401
+    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": второй}).status_code == 200
+    db = SessionLocal()
+    строки = db.scalars(select(Kiosk).where(Kiosk.machine == "KASSA-TEST-1")).all()
+    assert len(строки) == 1, "дубля киоска после переустановки быть не должно"
+    киоск_id = строки[0].id
+    db.close()
+
+    # администратор видит новый киоск и может его отключить — тогда привязка отказывает
+    admin = client_for(app, "admin", "admin123")
+    assert "KASSA-TEST-1" in admin.get("/settings").text
+    admin.post(f"/settings/kiosks/{киоск_id}/toggle")
+    assert k.post("/api/kiosk/register", json=тело).status_code == 403
+    assert k.get("/api/kiosk/config", headers={"X-Kiosk-Token": второй}).status_code == 401

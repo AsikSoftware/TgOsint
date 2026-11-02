@@ -213,10 +213,9 @@ class KioskWindow(QMainWindow):
             self.s_main.set_status(cfg["_ошибка"], ok=False)
             log_line(cfg["_ошибка"])
         elif not self.client.enabled:
-            if self.client.standalone_ready:
-                self.s_main.set_status("Готов к работе (без сервера)", ok=True)
-            else:
-                self.s_main.set_status("Нет сервера и ключей: заполните kiosk.toml", ok=False)
+            # адрес сервера зашит в сборку, пустым он бывает только если его стёрли руками
+            self.s_main.set_status("В kiosk.toml стёрт адрес сервера — оценки никуда не уйдут",
+                                   ok=False)
         self._try_server_config()
         self._убрать_старое()
         self._выгрузить_архив()
@@ -330,18 +329,23 @@ class KioskWindow(QMainWindow):
         self.s_main.set_status("Обновиться не вышло — работаем на этой версии", ok=False)
 
     def _try_server_config(self):
-        def job():
-            try:
-                c = self.client.config()
-                if c.get("точка"):
-                    self.s_main.set_point(c["точка"])
-                    self.s_start.set_point(c["точка"])
-                    self.s_work.set_point(c["точка"])
-                self.cfg["return_seconds"] = c.get("возврат_с") or self.cfg["return_seconds"]
-                self.cfg["apple_history_seconds"] = c.get("история_apple_с") or self.cfg["apple_history_seconds"]
-            except Exception:                                    # noqa: BLE001
-                pass
-        self._run(job)
+        """Спросить сервер про точку и сроки. Заодно это первый выход на связь: если токена
+        ещё нет, киоск здесь же привяжется сам.
+
+        Виджеты трогаем только в слоте: раньше настройки сервера раскладывались прямо в
+        рабочем потоке, а Qt этого не прощает. Пока сервер не был настроен ни на одной
+        точке, ветка не выполнялась вовсе — теперь она выполняется при каждом запуске."""
+        self._run(self.client.config, ok=self._настройки_сервера,
+                  err=lambda e: log_line(f"сервер не ответил на запрос настроек: {e}"))
+
+    def _настройки_сервера(self, c):
+        c = c or {}
+        if c.get("точка"):
+            self.s_main.set_point(c["точка"])
+            self.s_start.set_point(c["точка"])
+            self.s_work.set_point(c["точка"])
+        self.cfg["return_seconds"] = c.get("возврат_с") or self.cfg["return_seconds"]
+        self.cfg["apple_history_seconds"] = c.get("история_apple_с") or self.cfg["apple_history_seconds"]
 
     def _run(self, fn, ok=None, err=None):
         """Сетевое действие в отдельном потоке.

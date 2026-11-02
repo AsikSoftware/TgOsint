@@ -3,6 +3,7 @@
 оценки при обрыве связи копятся в очереди и досылаются."""
 import json
 import os
+import threading
 import time
 
 import httpx
@@ -16,34 +17,90 @@ class ServerError(RuntimeError):
 
 
 class Client:
+    """Связь с одним сервером на всю сеть.
+
+    Ни адреса, ни токена на точке не настраивают: адрес и общий ключ привязки лежат в
+    сборке, а свой токен киоск получает у сервера сам при первом выходе на связь и хранит
+    рядом с остальными своими файлами. Раздача токенов по точкам осталась от версии, где
+    каждый киоск заводили руками, — и ровно из-за неё ни одна точка не была подключена.
+    """
+
     def __init__(self, cfg):
-        self.base = cfg.get("server") or ""
-        self.token = cfg.get("token") or ""
-        self.enabled = bool(self.base and self.token)
+        self.base = (cfg.get("server") or "").rstrip("/")
+        self.ключ = cfg.get("server_key") or ""
+        self.точка = cfg.get("point") or ""
+        self.enabled = bool(self.base)
         self.online = False
         self.last_error = ""
         self.qdir = os.path.join(data_dir(), "queue")
-        # автономный режим: ключи на самом киоске. Прайса здесь нет — цену считает бот
-        # Оценки по своему прайсу, и наша цифра всё равно была бы другой.
-        self.sickw_key = str(cfg.get("sickw_key") or "")
-        self.sickw_services = cfg.get("sickw_services") or [61]
+        self._замок = threading.Lock()
+        self._токен_файл = os.path.join(data_dir(), "kiosk_token.json")
+        self.token = self._прочитать_токен()
 
-    @property
-    def local_sickw(self):
-        return bool(self.sickw_key)
+    # ---------- привязка к серверу ----------
+    @staticmethod
+    def машина() -> str:
+        """Чем киоск узнаёт себя при следующем запуске. Имя машины стабильно и не требует
+        файла: потеряется токен — сервер всё равно найдёт прежнюю строку, а не заведёт вторую."""
+        import socket
+        return (socket.gethostname() or "киоск")[:80]
 
-    @property
-    def standalone_ready(self):
-        """Без сервера киоск полноценен, если может проверить телефон по базе IMEI."""
-        return self.local_sickw
+    def _прочитать_токен(self) -> str:
+        try:
+            with open(self._токен_файл, encoding="utf-8") as f:
+                return str(json.load(f).get("token") or "")
+        except Exception:                                        # noqa: BLE001 — нет файла или он битый
+            return ""
+
+    def _сохранить_токен(self, token: str) -> None:
+        os.makedirs(os.path.dirname(self._токен_файл), exist_ok=True)
+        with open(self._токен_файл, "w", encoding="utf-8") as f:
+            json.dump({"token": token, "машина": self.машина()}, f, ensure_ascii=False)
+
+    def привязаться(self) -> str:
+        """Получить у сервера свой токен. → токен. Ошибку отдаём словами, как и всё здесь."""
+        with self._замок:
+            try:
+                with httpx.Client(base_url=self.base, timeout=20) as c:
+                    r = c.post("/api/kiosk/register",
+                               json={"key": self.ключ, "machine": self.машина(),
+                                     "point": self.точка, "version": __version__})
+            except httpx.HTTPError as e:
+                self.online = False
+                self.last_error = f"нет связи с сервером: {type(e).__name__}"
+                raise ServerError(self.last_error)
+            if r.status_code >= 400:
+                try:
+                    detail = r.json().get("detail")
+                except Exception:                                # noqa: BLE001
+                    detail = r.text[:200]
+                self.last_error = f"киоск не привязался: {detail}"
+                raise ServerError(self.last_error)
+            токен = str((r.json() or {}).get("токен") or "")
+            if not токен:
+                raise ServerError("сервер не выдал токен киоска")
+            self.token = токен
+            try:
+                self._сохранить_токен(токен)
+            except OSError as e:
+                self.last_error = f"токен не сохранился: {e}"    # работать можно, но до перезапуска
+            return токен
 
     # ---------- низкий уровень ----------
     def _req(self, method, path, timeout=15, **kw):
         if not self.enabled:
-            raise ServerError("сервер не настроен (kiosk.toml: server, token)")
+            raise ServerError("адрес сервера пуст (kiosk.toml: server)")
+        if not self.token:
+            self.привязаться()
         try:
             with httpx.Client(base_url=self.base, timeout=timeout, headers={"X-Kiosk-Token": self.token}) as c:
                 r = c.request(method, path, **kw)
+            if r.status_code == 401 and path != "/api/kiosk/register":
+                # токен протух или киоск завели заново — привязываемся и повторяем один раз
+                self.привязаться()
+                with httpx.Client(base_url=self.base, timeout=timeout,
+                                  headers={"X-Kiosk-Token": self.token}) as c:
+                    r = c.request(method, path, **kw)
         except httpx.HTTPError as e:
             self.online = False
             self.last_error = f"нет связи с сервером: {type(e).__name__}"
@@ -67,27 +124,15 @@ class Client:
 
 
     def sickw(self, imei, services=None):
-        """Через сервер (ключ там); без сервера или при его недоступности — ключом из kiosk.toml.
+        """База IMEI — только через сервер: ключ живёт там, и там же общий кэш, поэтому один
+        и тот же IMEI не оплачивается дважды. На точках ключу делать нечего.
 
         `services` — службы Sickw не по умолчанию: для запечатанного аппарата нужна другая
         (модель, объём, цвет и активация по IMEI с коробки), а не оператор и FMI."""
-        if self.enabled:
-            тело = {"imei": imei}
-            if services:
-                тело["services"] = [int(s) for s in services]
-            try:
-                return self._req("POST", "/api/kiosk/sickw", json=тело, timeout=90)
-            except ServerError:
-                if not self.local_sickw:
-                    raise
-        if self.local_sickw:
-            from pintel_core.external import sickw as sk
-            try:
-                return sk.lookup_many(imei, self.sickw_key, services or self.sickw_services,
-                                      cache_dir=os.path.join(data_dir(), "cache", "sickw"))
-            except Exception as e:                               # noqa: BLE001
-                raise ServerError(f"Sickw: {e}")
-        raise ServerError("Sickw: нет ни сервера, ни ключа sickw_key в kiosk.toml")
+        тело = {"imei": imei}
+        if services:
+            тело["services"] = [int(s) for s in services]
+        return self._req("POST", "/api/kiosk/sickw", json=тело, timeout=90)
 
     def local_number(self):
         """Номер талона, когда кассы нет: свой счётчик на каждый день."""

@@ -224,7 +224,7 @@ class Pipeline(QThread):
         # ПОВТОРНАЯ печать записей Apple, в которой и появляются замены.
         не_проверено = snap.setdefault("quality", {}).setdefault("не_проверено", {})
         imei = pas.get("imei") or ""
-        if self.cfg.get("sickw", True) and (self.client.enabled or self.client.local_sickw) and sickw.luhn_ok(imei):
+        if self.cfg.get("sickw", True) and self.client.enabled and sickw.luhn_ok(imei):
             self._step("sickw", "run")
             try:
                 snap["sickw"] = await asyncio.to_thread(self.client.sickw, imei)
@@ -243,8 +243,8 @@ class Pipeline(QThread):
             self._step("sickw", "warn", "у телефона нет IMEI")
             не_проверено["чёрный список (Sickw)"] = "у телефона не прочитался IMEI"
         else:
-            self._step("sickw", "warn", "не настроена (kiosk.toml)")
-            не_проверено["чёрный список (Sickw)"] = "база IMEI не настроена (kiosk.toml)"
+            self._step("sickw", "warn", "выключена (kiosk.toml)")
+            не_проверено["чёрный список (Sickw)"] = "проверка по базе IMEI выключена (kiosk.toml)"
 
         # Реестр РФС РК — оба IMEI, при любой оценке
         рфс, рфс_нет = await asyncio.to_thread(
@@ -378,7 +378,7 @@ class SealedPipeline(QThread):
         self._step("passport", "run", "по базе IMEI")
         sk, не_проверено = None, {}
         службы = [int(x) for x in (self.cfg.get("sickw_services_sealed") or [sickw.SERVICE_SEALED])]
-        if self.cfg.get("sickw", True) and (self.client.enabled or self.client.local_sickw):
+        if self.cfg.get("sickw", True) and self.client.enabled:
             self._step("sickw", "run", "служба " + ", ".join(map(str, службы)))
             try:
                 sk = self.client.sickw(имеи[0], services=службы)
@@ -392,8 +392,8 @@ class SealedPipeline(QThread):
                 не_проверено["чёрный список (Sickw)"] = "база IMEI недоступна"
                 log_line(f"sickw: {e}")
         else:
-            self._step("sickw", "warn", "не настроена (kiosk.toml)")
-            не_проверено["чёрный список (Sickw)"] = "база IMEI не настроена (kiosk.toml)"
+            self._step("sickw", "warn", "выключена (kiosk.toml)")
+            не_проверено["чёрный список (Sickw)"] = "проверка по базе IMEI выключена (kiosk.toml)"
         if sk and sk.get("модель"):
             self._step("passport", "done", f"{sk['модель']} · {sk.get('объём_гб') or '?'} ГБ")
         else:

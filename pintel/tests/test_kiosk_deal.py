@@ -56,6 +56,25 @@ def _отчёт(архив):
 АНКЕТА = {"состояние": "норма", "имя": "", "телефон": "", "imei": []}
 
 
+def _тест_прошёл(окно, **ответы):
+    """Тест на телефоне клиента вернулся с результатом. Без него сделку не отправить —
+    отдельный шлюз, он проверяется своими тестами ниже."""
+    from pintel_core import phonetest
+    данные = {k: phonetest.ОК for k in phonetest.КЛЮЧИ}
+    данные.update(ответы)
+    окно._тест_с_телефона(данные)
+
+
+def _чистый_без_теста(окно):
+    """То же, но без теста на телефоне: он — отдельный шлюз, и его проверяют свои тесты."""
+    окно.cfg.setdefault("ocenka_bot", "")
+    окно.cfg["ocenka_bot"] = окно.cfg["ocenka_bot"] or "PintelOlxBot"
+    окно.начать_сделку()
+    окно.анкета_готова(АНКЕТА)
+    окно.state = "scanning"
+    окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
+
+
 def _чистый(окно):
     """Довести окно до состояния «телефон прочитан, аппарат чистый»: анкета заполнена
     («б/у в нормальном состоянии»), проверка прошла."""
@@ -65,6 +84,7 @@ def _чистый(окно):
     окно.анкета_готова(АНКЕТА)
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
+    _тест_прошёл(окно)
 
 
 @pytest.mark.parametrize("вход,ждём", [
@@ -102,6 +122,8 @@ def test_client_is_taken_before_the_phone_is_read(окно):
     assert "в нормальном состоянии" in окно.s_work.состояние.text()
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
+    assert not окно.s_work.b_отправить.isEnabled()          # теста на телефоне ещё не было
+    _тест_прошёл(окно)
     assert окно.s_work.b_отправить.isEnabled()
     assert окно.статус_сделки == "Не был в ремонте" and окно.переклассификация is None
 
@@ -124,6 +146,7 @@ def test_repaired_phone_is_reclassified_not_refused(окно):
     окно.анкета_готова({**АНКЕТА, "имя": "Зама", "телефон": "+77058837953"})
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-15-Pro_iOS26.6.1.zip"), "client_id": "x"})
+    _тест_прошёл(окно)
     assert окно.s_work.b_отправить.isEnabled() and окно.код_медиа
     assert окно.статус_сделки == "Ранее был в ремонте"
     текст = окно.s_work.состояние.text()
@@ -329,3 +352,86 @@ def test_receipt_is_written_and_named_by_deal(окно, tmp_path, monkeypatch):
     текст = файл.read_text(encoding="utf-8")
     assert "iPhone 14 Pro" in текст and "Зама" in текст
     assert "₸" not in текст, "цены на чеке быть не должно — её называет Оценка"
+
+
+# ---------------------------------------------------------------- тест на телефоне клиента
+
+def test_the_deal_waits_for_the_phone_test(окно):
+    """Кабель не нажмёт на экран, не послушает динамик и не посмотрит в камеру. Поэтому
+    сделку нельзя отправить, пока телефон клиента не прогнал тест по QR с этого экрана, и
+    сотрудник читает, чего именно не хватает, а не гадает, почему кнопка серая."""
+    from pintel_core import phonetest
+    окно.cfg["ocenka_bot"] = "PintelOlxBot"
+    _чистый_без_теста(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    assert not окно.s_work.b_отправить.isEnabled()
+    мешает = окно.s_work.почему_нельзя()
+    assert "тест на телефоне" in мешает.lower() and "Сенсор" in мешает
+    # пришла половина теста — всё ещё нельзя: «не проверили» это не «в порядке»
+    окно._тест_с_телефона({"sensor": phonetest.ОК, "screen": phonetest.ПРОПУСК})
+    assert not окно.s_work.b_отправить.isEnabled()
+    assert "Динамик" in окно.s_work.почему_нельзя()
+    _тест_прошёл(окно)
+    assert окно.s_work.b_отправить.isEnabled() and окно.s_work.почему_нельзя() == ""
+
+
+def test_a_failed_phone_test_is_seen_and_goes_into_the_deal(окно, monkeypatch):
+    """Глухой динамик и чёрная камера видны только так. Результат виден сотруднику сразу и
+    уходит в сделку: по нему бот снимает автоцену и пишет причину оценщику."""
+    import httpx
+    from pintel_core import phonetest
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001"})
+    _чистый_без_теста(окно)
+    _тест_прошёл(окно, speaker=phonetest.ПЛОХО, camera_back=phonetest.ПЛОХО)
+    assert "Динамик" in окно.s_work.ошибка.text() and "Камера сзади" in окно.s_work.ошибка.text()
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    ушло = {}
+    monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
+                        (ушло.update(files=files),
+                         httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))[1])
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
+    assert посылка["тест_телефона"]["speaker"] == "fail"
+    assert посылка["тест_телефона"]["sensor"] == "ok"
+    # и в карточке, которую оценщик подтверждает в Telegram, это написано словами
+    assert "НЕ ПРОШЛИ: Динамик" in посылка["сделка"]["comment_ocenka"]
+
+
+def test_the_phone_test_can_be_skipped_but_it_is_written_down(окно, monkeypatch):
+    """Телефона нет в нашем Wi-Fi — точка не должна встать. Пропуск возможен, но он записан
+    вместе с тем, кто его сделал, и стоит автоцены: сделку смотрит человек."""
+    import httpx
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001"})
+    _чистый_без_теста(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    assert not окно.s_work.b_отправить.isEnabled()          # теста не было
+    окно.тест_не_будет()
+    assert окно.s_work.b_отправить.isEnabled()              # пропуск отмечен — работать можно
+    ушло = {}
+    monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
+                        (ушло.update(files=files),
+                         httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))[1])
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
+    assert "тест_телефона" not in посылка
+    assert "Асылбек" in посылка["тест_пропущен"]                 # кто отметил — из kiosk.toml
+    assert "Тест на телефоне пропущен" in посылка["сделка"]["comment_ocenka"]
+
+
+def test_every_deal_gets_its_own_one_time_link(окно):
+    """Код теста свой на каждую сделку, и прошлая ссылка перестаёт работать: в сети точки
+    стоят и другие телефоны, подбросить результат в чужую сделку они не должны."""
+    окно.начать_сделку()
+    первый = окно.код_теста
+    assert первый
+    окно.начать_сделку()
+    assert окно.код_теста and окно.код_теста != первый
+    окно.go_home()
+    assert окно.код_теста == ""                                  # сделка закрыта — ссылки нет

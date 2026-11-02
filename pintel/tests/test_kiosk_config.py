@@ -126,3 +126,13 @@ def test_nothing_to_restore_is_not_an_error(tmp_path):
     папка.mkdir(), данные.mkdir()
     assert config.вернуть(str(папка / "kiosk.toml"), str(данные)) is False
     assert config.сберечь(str(папка / "kiosk.toml"), str(данные)) == ""
+
+
+def test_the_phone_test_ships_with_the_build():
+    """Страница теста и мини-сервер должны попасть в exe: без страницы киоск покажет QR,
+    по которому телефон клиента увидит «страница не найдена» посреди сделки."""
+    спека = open(os.path.join(КОРЕНЬ, "pintel-kiosk.spec"), encoding="utf-8").read()
+    assert "pintel_kiosk.phoneweb" in спека and "pintel_core.phonetest" in спека
+    assert "('pintel_kiosk/assets', 'pintel_kiosk/assets')" in спека, "страница лежит в assets"
+    assert os.path.exists(os.path.join(КОРЕНЬ, "pintel_kiosk", "assets", "diag.html"))
+    assert config.DEFAULTS["phone_test_port"] == 8765

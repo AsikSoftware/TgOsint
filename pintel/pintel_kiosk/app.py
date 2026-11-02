@@ -12,9 +12,12 @@ from PySide6.QtCore import QRectF, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPalette, QShortcut
 from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsView, QMainWindow, QStackedWidget
 
+from pintel_core import phonetest
 from pintel_core.devicelink import connect
 from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER, READY
 from pintel_core.external import ocenka
+
+from . import phoneweb
 
 from . import __version__, config, ui, ui_deal, ui_start
 from .client import Client, ServerError
@@ -140,6 +143,9 @@ class ScaledHost(QGraphicsView):
 
 
 class KioskWindow(QMainWindow):
+    # результат теста с телефона клиента: приходит из потока мини-сервера
+    тест_приехал = Signal(dict)
+
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
@@ -175,7 +181,17 @@ class KioskWindow(QMainWindow):
         self.s_work.печать.connect(self.напечатать_чек)
         self.s_work.пропустить_apple.connect(self.on_skip_apple)
         self.s_work.новый_код.connect(self.новый_код_медиа)
+        self.s_work.новый_тест.connect(self.новый_код_теста)
+        self.s_work.пропустить_тест.connect(self.тест_не_будет)
+        # Результат теста приходит из потока мини-сервера, а не из потока окна: сигнал
+        # переносит его в поток Qt сам, трогать виджеты из чужого потока нельзя.
+        self.тест_приехал.connect(self._тест_с_телефона)
         self.код_медиа = ""
+        self.код_теста = ""
+        self.тест_телефона = {}
+        self.веб_телефона = phoneweb.запустить(int(cfg.get("phone_test_port") or phoneweb.ПОРТ))
+        if self.веб_телефона is None:
+            log_line(f"тест на телефоне: порт {cfg.get('phone_test_port') or phoneweb.ПОРТ} занят")
         self.сделка, self.кабель = {}, NO_DEVICE
         self.return_timer = QTimer(self)
         self.return_timer.setSingleShot(True)
@@ -465,6 +481,7 @@ class KioskWindow(QMainWindow):
         self.last = None
         self.сделка, self.анкета = {}, {}
         self.статус_сделки = self.переклассификация = None
+        self.новый_код_теста()                  # свой одноразовый код теста на каждую сделку
         self.s_start.начать()
         self.s_work.начать()
         self.state = "intake"
@@ -530,6 +547,10 @@ class KioskWindow(QMainWindow):
             self.s_work.ошибка.setText("Нет кода для медиа — нажмите «Другой код»")
             return
         клиент, код = {"имя": поля["имя"], "телефон": поля["телефон"]}, self.код_медиа
+        тест = поля.get("тест") or self.тест_телефона
+        тест_пропущен = поля.get("тест_пропущен") or ""
+        тест_строкой = (f"Тест на телефоне пропущен: {тест_пропущен}" if тест_пропущен
+                        else phonetest.словами(тест))
         состояние = self.анкета.get("состояние") or "норма"
         if self.статус_сделки is None:
             self._классифицировать(rep)
@@ -559,7 +580,8 @@ class KioskWindow(QMainWindow):
                     "статус_ремонта": статус, "состояние": состояние, "переклассификация": почему,
                     "комментарий": поля["комментарий"],
                     "комментарий_оценщика": ocenka.комментарий_оценщика(
-                        rep, откуда=откуда, состояние=ocenka.состояние_словами(состояние), почему=почему or ""),
+                        rep, откуда=откуда, состояние=ocenka.состояние_словами(состояние),
+                        почему=почему or "", тест=тест_строкой),
                     "имя_клиента": клиент.get("имя"), "телефон_клиента": клиент.get("телефон"),
                     "imei": пас.get("imei"), "imei_все": [пас.get("imei2")],
                     "замки": ocenka.замки(rep), "рфс": rep.get("рфс"),
@@ -568,6 +590,9 @@ class KioskWindow(QMainWindow):
                     "не_прочиталось": ocenka.незакрытое(rep),
                     "сверка_нужна": ocenka.сверка_нужна(rep),
                 }
+            # тест на телефоне клиента: отметки едут в сделку как есть, их читает бот
+            данные["тест_телефона"] = dict(тест)
+            данные["тест_пропущен"] = тест_пропущен
             посылка = ocenka.посылка(данные, код, точка=cfg.get("point") or "")
             return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка)
 
@@ -592,6 +617,48 @@ class KioskWindow(QMainWindow):
                                   "лицевая, задняя, потом видео — и примет только то, что "
                                   "нужно на шаге. Последним — ручная диагностика кнопками. "
                                   "Кто прислал — тот и оценщик.")
+
+    # ---------- тест на телефоне клиента ----------
+    def новый_код_теста(self):
+        """Новый одноразовый код и QR на страницу теста. Код свой на каждую сделку: другое
+        устройство из той же сети не подбросит результат в чужую сделку."""
+        from pintel_core.external import ocenka_media
+        self.тест_телефона = {}
+        self.код_теста = ocenka_media.новый_код()
+        phoneweb.открыть(self.код_теста, self._тест_из_сети)
+        порт = int(self.cfg.get("phone_test_port") or phoneweb.ПОРТ)
+        ссылка = phoneweb.ссылка(self.код_теста, порт) if self.веб_телефона else ""
+        почему = ("" if self.веб_телефона
+                  else f"Порт {порт} занят другой программой — тест на телефоне не открыть.")
+        self.s_work.set_тест({})
+        self.s_work.показать_тест(ссылка, почему)
+        log_line(f"тест на телефоне: код {self.код_теста}, ссылка {ссылка or 'нет сети'}")
+
+    def _тест_из_сети(self, данные):
+        """Вызывается в потоке мини-сервера. Только переносим в поток окна."""
+        self.тест_приехал.emit(dict(данные or {}))
+
+    def _тест_с_телефона(self, данные):
+        res = phonetest.разобрать(данные)
+        if not phonetest.был(res):
+            log_line("тест на телефоне: пришло пусто")
+            return
+        self.тест_телефона = res
+        self.s_work.set_тест(res)
+        плох = [имя for _, имя in phonetest.плохие(res)]
+        log_line("тест на телефоне: " + phonetest.словами(res))
+        if плох:
+            # найденное руками кабель не видит, и состояние сделки обязано это учесть
+            self.s_work.ошибка.setText("Тест на телефоне не прошёл: " + ", ".join(плох)
+                                       + ". Сделка уйдёт на оценку человеку.")
+
+    def тест_не_будет(self):
+        """Телефона нет в нашей сети (или тест не открывается). Пропуск возможен, но он
+        записан и стоит автоцены: сделку будет оценивать человек."""
+        кто = self.cfg.get("staff_name") or self.cfg.get("point") or "сотрудник"
+        self.s_work.set_тест({}, пропущен=f"телефон не в сети кассы, проверил {кто}")
+        self.s_work.правая.setCurrentIndex(ui_deal.СТР_МЕДИА)
+        log_line("тест на телефоне пропущен сотрудником")
 
     def отправка_не_удалась(self, текст):
         self.s_work.занято("")
@@ -635,12 +702,14 @@ class KioskWindow(QMainWindow):
         self.s_work.итог_текст.setText("Чек сохранён: " + путь)
 
     def go_home(self):
+        phoneweb.закрыть()                      # ссылка из прошлой сделки больше не работает
         self.return_timer.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
         self.state = "idle"
         self.last = None
         self.сделка, self.код_медиа, self.анкета = {}, "", {}
+        self.код_теста, self.тест_телефона = "", {}
         self.статус_сделки = self.переклассификация = None
         self.s_main.set_device("found" if self.кабель == READY else "wait")
         self.show_screen(self.s_main)

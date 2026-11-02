@@ -111,9 +111,17 @@ def test_the_manual_checks_list_is_the_same_on_both_sides():
     """Пункты ручной диагностики спрашивает бот на сервере, а показывает программа в exe:
     обновляют их в разное время. Разойдутся — сотрудник проверит по экрану одно, а бот
     спросит другое, и «без диагностики не пропускать» перестанет значить что-либо."""
+    from pintel_core import phonetest
     from pintel_core.external import ocenka_media
     assert ocenka_media.ПУНКТЫ == ядро().ПУНКТЫ
-    assert ocenka_media.пункты_словами().startswith("Экран · Касание")
+    assert ocenka_media.пункты_словами().startswith("Кнопки · Вибрация")
+    # то же про тест на телефоне клиента: страница и экран кассы берут его из phonetest,
+    # обработчик — из своей копии, и назвать результат словами они должны одинаково
+    assert phonetest.ТЕСТЫ == ядро().ТЕСТЫ
+    assert (phonetest.ОК, phonetest.ПЛОХО, phonetest.ПРОПУСК) == (
+        ядро().ТЕСТ_ОК, ядро().ТЕСТ_ПЛОХО, ядро().ТЕСТ_ПРОПУСК)
+    # и ни один пункт не спрашивается дважды: что проверяет телефон, у сотрудника не спрашиваем
+    assert not (set(phonetest.КЛЮЧИ) & {k for k, _, _ in ocenka_media.ПУНКТЫ})
 
 
 def test_send_says_what_telegram_answered(monkeypatch):

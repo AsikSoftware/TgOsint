@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pintel · Тест телефона</title>
+<!--
+  Страница открывается НА ТЕЛЕФОНЕ КЛИЕНТА по QR с экрана кассы: киоск держит мини-сервер в
+  локальной сети (pintel_kiosk/phoneweb.py), токен в адресе одноразовый. Приложение на чужой
+  телефон не поставить — iOS не пускает, а страница делает то же самое сразу.
+
+  Семь тестов, часть зачитывается сама: сетка закрашена целиком — сенсор жив; пять касаний
+  поймались — мультитач жив; снимок пришёл и он не чёрный — камера снимает. Остальное может
+  оценить только человек, который смотрит и слушает, поэтому у каждого теста есть и ответ
+  «не получилось»: честный пропуск лучше выдуманного «в порядке» — в сделке он снимает
+  автоцену, но не приписывает аппарату дефект. Ключи ответов — pintel_core/phonetest.py.
+
+  Только HTTP в локальной сети, без внешней сети: камера снимается через <input capture>, он
+  работает и без HTTPS. Микрофон через getUserMedia Safari на http даёт не всегда, поэтому
+  есть путь через «Диктофон» — и он честно помечается как ответ человека.
+-->
+<style>
+*{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+body{background:linear-gradient(160deg,#050F1F,#081B34 55%,#0D2B52);
+  color:#F4F8FD;font:17px/1.45 -apple-system,'SF Pro Text',system-ui,sans-serif;
+  display:flex;flex-direction:column;touch-action:none}
+.screen{flex:1;display:none;flex-direction:column;align-items:center;
+  justify-content:center;padding:28px;text-align:center;gap:16px}
+.screen.on{display:flex}
+h1{font-size:30px;font-weight:300;letter-spacing:.3px}
+.sub{color:#9FB4CF;font-size:16px;max-width:330px}
+.step{color:#6C83A6;font-size:13px;letter-spacing:2px;font-weight:700}
+button{background:linear-gradient(180deg,#7ADCFF,#2BA4DB);color:#06203A;
+  border:0;border-radius:999px;padding:16px 34px;font-size:17px;font-weight:800;
+  font-family:inherit}
+button.ghost{background:rgba(255,255,255,.07);color:#F4F8FD;
+  border:1px solid rgba(255,255,255,.16)}
+button.small{padding:11px 20px;font-size:15px}
+button:active{transform:scale(.96)}
+.pair{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);
+  border-radius:22px;padding:18px 20px;max-width:340px;width:100%}
+.row{display:flex;justify-content:space-between;padding:7px 0;font-size:16px}
+.ok{color:#37D9A0;font-weight:700}.fail{color:#FF7A6B;font-weight:700}
+.skip{color:#E8C76A;font-weight:700}
+.muted{color:#9FB4CF}
+#grid{position:fixed;inset:0;display:grid;z-index:10;background:#061427}
+#grid div{border:1px solid rgba(255,255,255,.05)}
+#grid div.hit{background:rgba(55,217,160,.55);border-color:transparent}
+#gridHud{position:fixed;left:0;right:0;bottom:26px;z-index:11;text-align:center;
+  pointer-events:none}
+#gridHud b{font-size:40px;font-weight:300}
+#gridBtns{position:fixed;left:0;right:0;top:20px;z-index:12;text-align:center}
+#gridBtns button{pointer-events:auto}
+#colorbox{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;
+  justify-content:center;padding-bottom:50px}
+#colorbox span{color:rgba(128,128,128,.85);font-size:15px;background:rgba(0,0,0,.35);
+  padding:8px 16px;border-radius:999px}
+.fingers{font-size:64px;letter-spacing:6px}
+.pulse{width:11px;height:11px;border-radius:6px;background:#4FC3F7;display:inline-block;
+  animation:p 1s infinite}
+@keyframes p{50%{opacity:.15}}
+#shot{max-width:72vw;max-height:38vh;border-radius:18px;border:1px solid rgba(255,255,255,.18)}
+.auto{font-size:14px;color:#6C83A6}
+#level{width:220px;height:12px;border-radius:7px;background:rgba(255,255,255,.1);overflow:hidden}
+#levelBar{height:100%;width:0;background:linear-gradient(90deg,#37D9A0,#7ADCFF)}
+input[type=file]{display:none}
+</style></head><body>
+
+<!-- 0. старт -->
+<div class="screen on" id="s0">
+  <div class="step">PINTEL · ПРОВЕРКА</div>
+  <h1>Тест телефона</h1>
+  <p class="sub">Семь коротких тестов: сенсор, мультитач, экран, динамик, микрофон и обе
+  камеры. Около двух минут. Результат сам улетит на кассу.</p>
+  <button onclick="go(1)">Начать</button>
+</div>
+
+<!-- 1. сенсор: тач-сетка -->
+<div class="screen" id="s1">
+  <div id="grid"></div>
+  <div id="gridBtns"><button class="ghost small" onclick="mark('sensor','fail',2)">Есть места, где не красится</button></div>
+  <div id="gridHud"><div class="step">ЗАКРАСЬТЕ ВЕСЬ ЭКРАН ПАЛЬЦЕМ</div><b id="gridPct">0%</b></div>
+</div>
+
+<!-- 2. мультитач -->
+<div class="screen" id="s2">
+  <div class="step">ТЕСТ 2 ИЗ 7</div>
+  <h1>Мультитач</h1>
+  <p class="sub">Поставьте на экран <b>пять пальцев одновременно</b></p>
+  <div class="fingers" id="fcount">0</div>
+  <p class="auto">зачёт поставится сам</p>
+  <button class="ghost small" onclick="mark('multitouch','fail',3)">Не получается</button>
+</div>
+
+<!-- 3. экран: заливка цветами -->
+<div class="screen" id="s3">
+  <div class="step">ТЕСТ 3 ИЗ 7</div>
+  <h1>Экран</h1>
+  <p class="sub">Экран зальётся цветами. Смотрите внимательно: пятна, полосы, выгорание,
+  битые точки. Тапайте, чтобы листать.</p>
+  <button onclick="startColors()">Поехали</button>
+</div>
+<div id="colorbox" style="display:none"><span>тапните — следующий цвет</span></div>
+<div class="screen" id="s3q">
+  <div class="step">ЭКРАН</div>
+  <h1>Как экран?</h1>
+  <p class="sub">Были видны пятна, полосы, выгорание или битые точки?</p>
+  <div class="pair">
+    <button class="ghost" onclick="mark('screen','fail',4)">Да, есть дефекты</button>
+    <button onclick="mark('screen','ok',4)">Нет, чистый</button>
+  </div>
+  <button class="ghost small" onclick="mark('screen','skip',4)">Не разглядел</button>
+</div>
+
+<!-- 4. динамик -->
+<div class="screen" id="s4">
+  <div class="step">ТЕСТ 4 ИЗ 7</div>
+  <h1>Динамик</h1>
+  <p class="sub">Проверьте, что звук включён (боковой переключатель и громкость), и нажмите —
+  прозвучит мелодия.</p>
+  <button onclick="playTone()">▶ Проиграть звук</button>
+  <div id="s4q" style="display:none;flex-direction:column;gap:14px;align-items:center">
+    <p class="sub">Звук был чистый и громкий?</p>
+    <div class="pair">
+      <button class="ghost" onclick="mark('speaker','fail',5)">Нет / хрипит</button>
+      <button onclick="mark('speaker','ok',5)">Да</button>
+    </div>
+  </div>
+  <button class="ghost small" onclick="mark('speaker','skip',5)">Пропустить</button>
+</div>
+
+<!-- 5. микрофон -->
+<div class="screen" id="s5">
+  <div class="step">ТЕСТ 5 ИЗ 7</div>
+  <h1>Микрофон</h1>
+  <p class="sub" id="micHow">Нажмите «Записать» и скажите вслух «раз, два, три».</p>
+  <div id="level"><div id="levelBar"></div></div>
+  <button id="micBtn" onclick="micStart()">● Записать 3 секунды</button>
+  <div id="s5q" style="display:none;flex-direction:column;gap:14px;align-items:center">
+    <p class="sub" id="micAsk">Голос слышно?</p>
+    <div class="pair">
+      <button class="ghost" onclick="mark('mic','fail',6)">Нет / тихо</button>
+      <button onclick="mark('mic','ok',6)">Да, слышно</button>
+    </div>
+  </div>
+  <button class="ghost small" onclick="mark('mic','skip',6)">Пропустить</button>
+</div>
+
+<!-- 6 и 7. камеры -->
+<div class="screen" id="s6">
+  <div class="step" id="camStep">ТЕСТ 6 ИЗ 7</div>
+  <h1 id="camTitle">Камера сзади</h1>
+  <p class="sub" id="camSub">Снимите что-нибудь вокруг — страница посмотрит, что кадр не
+  чёрный и в фокусе.</p>
+  <img id="shot" style="display:none" alt="">
+  <p class="auto" id="camAuto"></p>
+  <input type="file" id="camFile" accept="image/*">
+  <button onclick="camShoot()" id="camBtn">📷 Снять</button>
+  <div id="s6q" style="display:none;flex-direction:column;gap:14px;align-items:center">
+    <p class="sub">Снимок чёткий, без пятен и полос?</p>
+    <div class="pair">
+      <button class="ghost" onclick="camAnswer('fail')">Нет</button>
+      <button onclick="camAnswer('ok')">Да</button>
+    </div>
+  </div>
+  <button class="ghost small" onclick="camAnswer('skip')">Пропустить</button>
+</div>
+
+<!-- 8. финал -->
+<div class="screen" id="s8">
+  <div class="step">ГОТОВО</div>
+  <h1 id="doneTitle">Отправляю…<span class="pulse"></span></h1>
+  <div class="card" id="summary"></div>
+  <p class="sub" id="doneSub">Секундочку…</p>
+  <button class="ghost small" id="retry" style="display:none" onclick="send()">Отправить ещё раз</button>
+</div>
+
+<script>
+var token = location.pathname.split("/").pop();
+var ПОРЯДОК = ["sensor","multitouch","screen","speaker","mic","camera_back","camera_front"];
+var ИМЕНА = {sensor:"Сенсор",multitouch:"Мультитач",screen:"Экран",speaker:"Динамик",
+             mic:"Микрофон",camera_back:"Камера сзади",camera_front:"Камера спереди"};
+var res = {};
+var заметки = [];
+
+function go(n){
+  var все = document.querySelectorAll(".screen");
+  for(var i=0;i<все.length;i++) все[i].classList.remove("on");
+  var s = document.getElementById("s"+n);
+  if(s) s.classList.add("on");
+  if(n===1) buildGrid();
+  if(n===2) armMultitouch();
+  if(n===5) micSetup();
+  if(n===6) camSetup();
+  if(n===8) send();
+}
+
+/* Ответ по тесту и переход дальше. Один путь на все тесты: так ни один ответ не может
+   потеряться по дороге, а порядок виден в одном месте. */
+function mark(ключ, ответ, дальше){
+  res[ключ] = ответ;
+  go(дальше);
+}
+
+/* ─── 1. сенсор: тач-сетка, автозачёт ─── */
+var cells=[], hit=0;
+function buildGrid(){
+  var g=document.getElementById("grid");
+  var cols=8, rows=Math.round(cols*innerHeight/innerWidth);
+  g.style.gridTemplateColumns="repeat("+cols+",1fr)";
+  g.style.gridTemplateRows="repeat("+rows+",1fr)";
+  g.innerHTML=""; cells=[]; hit=0;
+  for(var i=0;i<cols*rows;i++){var d=document.createElement("div");g.appendChild(d);cells.push(d);}
+  function paint(t){
+    for(var i=0;i<t.length;i++){
+      var el=document.elementFromPoint(t[i].clientX,t[i].clientY);
+      if(el&&el.parentNode===g&&!el.classList.contains("hit")){el.classList.add("hit");hit++;}
+    }
+    document.getElementById("gridPct").textContent=Math.round(100*hit/cells.length)+"%";
+    if(hit===cells.length){setTimeout(function(){mark("sensor","ok",2)},350);}
+  }
+  g.ontouchstart=g.ontouchmove=function(e){e.preventDefault();paint(e.touches)};
+}
+
+/* ─── 2. мультитач ─── */
+function armMultitouch(){
+  var el=document.getElementById("s2"), best=0;
+  el.ontouchstart=el.ontouchmove=function(e){
+    e.preventDefault();
+    best=Math.max(best,e.touches.length);
+    document.getElementById("fcount").textContent=e.touches.length;
+    if(best>=5){el.ontouchstart=el.ontouchmove=null;
+                setTimeout(function(){mark("multitouch","ok",3)},400);}
+  };
+}
+
+/* ─── 3. экран: цвета ─── */
+var COLORS=["#FF0000","#00FF00","#0000FF","#FFFFFF","#000000"], ci=0;
+function startColors(){
+  var b=document.getElementById("colorbox");
+  document.getElementById("s3").classList.remove("on");
+  b.style.display="flex"; ci=0; document.body.style.background=COLORS[0];
+  b.onclick=function(){
+    ci++;
+    if(ci>=COLORS.length){
+      b.style.display="none"; b.onclick=null; document.body.style.background="";
+      go("3q"); return;
+    }
+    document.body.style.background=COLORS[ci];
+  };
+}
+
+/* ─── 4. динамик ─── */
+function playTone(){
+  try{
+    var ctx=new (window.AudioContext||window.webkitAudioContext)();
+    var notes=[523,659,784,1047], t=ctx.currentTime;
+    for(var i=0;i<notes.length;i++){
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.frequency.value=notes[i]; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001,t+i*0.22);
+      g.gain.exponentialRampToValueAtTime(0.6,t+i*0.22+0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+i*0.22+0.2);
+      o.start(t+i*0.22); o.stop(t+i*0.22+0.22);
+    }
+  }catch(e){ заметки.push("звук не запустился: "+e); }
+  document.getElementById("s4q").style.display="flex";
+}
+
+/* ─── 5. микрофон ─── */
+/* Если браузер даёт доступ к микрофону (а на http Safari его не даёт), пишем три секунды,
+   показываем уровень и проигрываем запись: пустая дорожка — сразу «не прошёл». Если не даёт,
+   путь через «Диктофон»: тест тот же, просто его зачитывает человек. */
+var micStream=null, micRec=null, micChunks=[];
+function micSetup(){
+  var есть = navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder;
+  if(!есть){
+    document.getElementById("micHow").innerHTML =
+      "Браузер не даёт странице микрофон. Откройте <b>Диктофон</b>, запишите «раз, два, три» "
+      + "и послушайте запись.";
+    document.getElementById("micBtn").style.display="none";
+    document.getElementById("level").style.display="none";
+    document.getElementById("micAsk").textContent="Запись слышно, голос разборчивый?";
+    document.getElementById("s5q").style.display="flex";
+    заметки.push("микрофон проверен на слух (браузер не даёт доступ)");
+  }
+}
+function micStart(){
+  var btn=document.getElementById("micBtn");
+  btn.disabled=true; btn.textContent="● Пишу…";
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+    micStream=stream; micChunks=[];
+    var ctx=new (window.AudioContext||window.webkitAudioContext)();
+    var src=ctx.createMediaStreamSource(stream), an=ctx.createAnalyser();
+    an.fftSize=512; src.connect(an);
+    var buf=new Uint8Array(an.fftSize), peak=0;
+    var tick=setInterval(function(){
+      an.getByteTimeDomainData(buf);
+      var m=0;
+      for(var i=0;i<buf.length;i++) m=Math.max(m,Math.abs(buf[i]-128));
+      peak=Math.max(peak,m);
+      document.getElementById("levelBar").style.width=Math.min(100,m*100/60)+"%";
+    },100);
+    micRec=new MediaRecorder(stream);
+    micRec.ondataavailable=function(e){micChunks.push(e.data)};
+    micRec.onstop=function(){
+      clearInterval(tick);
+      try{stream.getTracks().forEach(function(t){t.stop()})}catch(e){}
+      btn.textContent="▶ Прослушать";
+      btn.disabled=false;
+      var url=URL.createObjectURL(new Blob(micChunks));
+      btn.onclick=function(){new Audio(url).play()};
+      if(peak<3){                                  // дорожка пустая — микрофон молчал
+        res.mic="fail";
+        document.getElementById("micAsk").textContent="Микрофон молчал — записи нет.";
+        заметки.push("микрофон: уровень записи нулевой");
+      }
+      document.getElementById("s5q").style.display="flex";
+    };
+    micRec.start();
+    setTimeout(function(){try{micRec.stop()}catch(e){}},3000);
+  }).catch(function(e){
+    btn.style.display="none";
+    document.getElementById("micHow").innerHTML =
+      "Доступ к микрофону не дали. Откройте <b>Диктофон</b>, запишите «раз, два, три» и послушайте.";
+    document.getElementById("s5q").style.display="flex";
+    заметки.push("микрофон: доступ не дали ("+e.name+")");
+  });
+}
+
+/* ─── 6 и 7. камеры ─── */
+/* <input capture> открывает родную камеру и работает без HTTPS, в отличие от getUserMedia.
+   Снимок приходит файлом: рисуем его на холсте, считаем яркость и резкость. Чёрный кадр —
+   сразу «не прошёл», остальное решает глаз человека. */
+var камеры=[{ключ:"camera_back",имя:"Камера сзади",режим:"environment",шаг:"ТЕСТ 6 ИЗ 7"},
+            {ключ:"camera_front",имя:"Камера спереди",режим:"user",шаг:"ТЕСТ 7 ИЗ 7"}];
+var камI=0;
+function camSetup(){
+  var c=камеры[камI];
+  document.getElementById("camStep").textContent=c.шаг;
+  document.getElementById("camTitle").textContent=c.имя;
+  document.getElementById("camFile").setAttribute("capture",c.режим);
+  document.getElementById("shot").style.display="none";
+  document.getElementById("camAuto").textContent="";
+  document.getElementById("s6q").style.display="none";
+  var b=document.getElementById("camBtn");
+  b.style.display=""; b.textContent="📷 Снять";
+}
+function camShoot(){ document.getElementById("camFile").click(); }
+document.getElementById("camFile").onchange=function(e){
+  var f=e.target.files && e.target.files[0];
+  if(!f) return;
+  var img=new Image(), url=URL.createObjectURL(f);
+  img.onload=function(){
+    var W=200, H=Math.max(1,Math.round(W*img.height/img.width));
+    var cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+    var cx=cv.getContext("2d"); cx.drawImage(img,0,0,W,H);
+    var d=cx.getImageData(0,0,W,H).data, сумма=0, серый=[];
+    for(var i=0;i<d.length;i+=4){
+      var g=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114);
+      серый.push(g); сумма+=g;
+    }
+    var яркость=сумма/серый.length, резкость=0;
+    for(var y=1;y<H-1;y++) for(var x=1;x<W-1;x++){
+      var k=y*W+x;
+      резкость+=Math.abs(4*серый[k]-серый[k-1]-серый[k+1]-серый[k-W]-серый[k+W]);
+    }
+    резкость=резкость/((W-2)*(H-2));
+    var sh=document.getElementById("shot");
+    sh.src=url; sh.style.display="";
+    document.getElementById("camBtn").style.display="none";
+    var авто="яркость "+Math.round(яркость)+", резкость "+резкость.toFixed(1);
+    if(яркость<8){
+      document.getElementById("camAuto").textContent="кадр чёрный — "+авто;
+      заметки.push(камеры[камI].имя+": кадр чёрный");
+      camAnswer("fail"); return;
+    }
+    document.getElementById("camAuto").textContent=авто+
+      (резкость<2 ? " · кадр мутный, посмотрите внимательно" : "");
+    document.getElementById("s6q").style.display="flex";
+  };
+  img.onerror=function(){
+    document.getElementById("camAuto").textContent="снимок не открылся";
+    document.getElementById("s6q").style.display="flex";
+  };
+  img.src=url;
+};
+function camAnswer(ответ){
+  res[камеры[камI].ключ]=ответ;
+  камI++;
+  if(камI<камеры.length){ camSetup(); return; }
+  go(8);
+}
+
+/* ─── финал: отправка на кассу ─── */
+function build_summary(){
+  var html="";
+  for(var i=0;i<ПОРЯДОК.length;i++){
+    var k=ПОРЯДОК[i], v=res[k];
+    var кл=(v==="ok"?"ok":(v==="fail"?"fail":"skip"));
+    var сл=(v==="ok"?"✓ в порядке":(v==="fail"?"✗ проблема":"— не проверили"));
+    html+='<div class="row"><span class="muted">'+ИМЕНА[k]+'</span><span class="'+кл+'">'+сл+"</span></div>";
+  }
+  document.getElementById("summary").innerHTML=html;
+}
+function send(){
+  build_summary();
+  document.getElementById("retry").style.display="none";
+  document.getElementById("doneTitle").innerHTML='Отправляю…<span class="pulse"></span>';
+  var тело={};
+  for(var i=0;i<ПОРЯДОК.length;i++){
+    тело[ПОРЯДОК[i]] = res[ПОРЯДОК[i]] || "skip";
+  }
+  тело.устройство=navigator.userAgent;
+  тело.когда=new Date().toISOString();
+  if(заметки.length) тело.заметка=заметки.join("; ");
+  fetch("/api/phone/"+token,{method:"POST",headers:{"Content-Type":"application/json"},
+                             body:JSON.stringify(тело)})
+    .then(function(r){
+      document.getElementById("doneTitle").textContent = r.ok ? "Готово ✓" : "Не отправилось";
+      document.getElementById("doneSub").textContent = r.ok
+        ? "Результат уже на кассе. Верните телефон продавцу."
+        : "Покажите этот экран продавцу.";
+      if(!r.ok) document.getElementById("retry").style.display="";
+    })
+    .catch(function(){
+      document.getElementById("doneTitle").textContent="Нет связи с кассой";
+      document.getElementById("doneSub").textContent=
+        "Телефон должен быть в том же Wi-Fi, что и касса. Покажите экран продавцу.";
+      document.getElementById("retry").style.display="";
+    });
+}
+</script>
+</body></html>

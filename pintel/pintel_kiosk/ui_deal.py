@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxL
                                QPushButton, QSizePolicy, QStackedWidget, QTextEdit, QVBoxLayout,
                                QWidget)
 
+from pintel_core import phonetest
 from pintel_core.external import ocenka_media
 
 from .ui import (C, FONT_HEAD, FONT_NUM, FONT_TEXT, QrBlock, Screen, StepRow, STEPS, W, font,
@@ -46,6 +47,15 @@ QFrame#карточка { background: #FFFFFF; border: 2px solid %(border)s; bor
 
 СОСТОЯНИЕ = {"ok": ("оригинальная", C["ok"]), "repaired": ("меняли, оригинал Apple", C["warntext"]),
              "used": ("б/у деталь", C["warntext"]), "bad": ("не подтверждена", C["badtext"])}
+
+# Страницы правой колонки. Раньше индексы стояли числами в семи местах, и добавить между ними
+# ещё одну страницу было нельзя, не переставив все.
+СТР_APPLE, СТР_ТЕСТ, СТР_МЕДИА, СТР_ГОТОВО = 0, 1, 2, 3
+# как показываем ответ теста: значок, цвет, подпись
+ВИД_ОТВЕТА = {phonetest.ОК: ("✓", C["ok"], "в порядке"),
+              phonetest.ПЛОХО: ("✗", C["badtext"], "не прошёл"),
+              phonetest.ПРОПУСК: ("—", C["warntext"], "не проверили"),
+              None: ("·", C["ghost"], "ждём")}
 
 
 def нормальный_телефон(текст):
@@ -93,11 +103,15 @@ class WorkScreen(Screen):
     заново = Signal()
     пропустить_apple = Signal()
     новый_код = Signal()
+    новый_тест = Signal()                 # другой одноразовый код для теста на телефоне
+    пропустить_тест = Signal()            # телефона нет в нашей сети — сделка уйдёт человеку
 
     def __init__(self, point=""):
         super().__init__(gray=True)
         self.setStyleSheet(QSS_DEAL)
         self.rep, self.готово, self.отправлено = {}, False, False
+        # результат теста на телефоне клиента: пока его нет, сделку отправить нельзя
+        self.тест, self.тест_пропущен = {}, ""
         self.root.setContentsMargins(56, 40, 56, 36)
 
         шапка = QHBoxLayout()
@@ -238,6 +252,32 @@ class WorkScreen(Screen):
         b_пропуск.clicked.connect(self.пропустить_apple.emit)
         ал.addWidget(b_пропуск, 0, Qt.AlignLeft)
 
+        тест, тл = _карточка("ТЕСТ НА ТЕЛЕФОНЕ КЛИЕНТА")
+        self.qr_тест = QrBlock()
+        тл.addWidget(self.qr_тест, 0, Qt.AlignHCenter)
+        self.тест_ссылка = label("", "muted", wrap=True)
+        self.тест_ссылка.setAlignment(Qt.AlignHCenter)
+        тл.addWidget(self.тест_ссылка)
+        self.тест_подсказка = label("Дайте клиенту отсканировать этот QR телефоном, который он "
+                                    "сдаёт. Телефон сам прогонит тесты, результат придёт сюда.",
+                                    "muted", wrap=True)
+        self.тест_подсказка.setAlignment(Qt.AlignHCenter)
+        тл.addWidget(self.тест_подсказка)
+        self.тест_список = QVBoxLayout()
+        self.тест_список.setSpacing(2)
+        тл.addLayout(self.тест_список)
+        тл.addStretch(1)
+        ряд_теста = QHBoxLayout()
+        ряд_теста.setSpacing(10)
+        for надпись, что in (("Другой код", self.новый_тест.emit),
+                             ("Нет в нашей сети", self.пропустить_тест.emit),
+                             ("К фото и видео", lambda: self.правая.setCurrentIndex(СТР_МЕДИА))):
+            b = QPushButton(надпись)
+            b.setObjectName("small")
+            b.clicked.connect(что)
+            ряд_теста.addWidget(b)
+        тл.addLayout(ряд_теста)
+
         медиа, мл = _карточка("ФОТО, ВИДЕО И ДИАГНОСТИКА — ЧЕРЕЗ БОТА")
         self.qr = QrBlock()
         мл.addWidget(self.qr, 0, Qt.AlignHCenter)
@@ -263,10 +303,15 @@ class WorkScreen(Screen):
         мл.addWidget(пункты)
         мл.addWidget(label("Без всех отметок бот сделку не создаёт.", "muted", wrap=True))
         мл.addStretch(1)
-        b_код = QPushButton("Другой код")
-        b_код.setObjectName("small")
-        b_код.clicked.connect(self.новый_код.emit)
-        мл.addWidget(b_код, 0, Qt.AlignHCenter)
+        ряд_медиа = QHBoxLayout()
+        ряд_медиа.setSpacing(10)
+        for надпись, что in (("Другой код", self.новый_код.emit),
+                             ("К тесту телефона", lambda: self.правая.setCurrentIndex(СТР_ТЕСТ))):
+            b = QPushButton(надпись)
+            b.setObjectName("small")
+            b.clicked.connect(что)
+            ряд_медиа.addWidget(b)
+        мл.addLayout(ряд_медиа)
 
         готово, гл = _карточка("ОТПРАВЛЕНО")
         гл.addStretch(1)
@@ -278,7 +323,7 @@ class WorkScreen(Screen):
         гл.addWidget(self.итог_текст)
         гл.addStretch(1)
 
-        for w in (apple, медиа, готово):
+        for w in (apple, тест, медиа, готово):      # порядок — СТР_APPLE…СТР_ГОТОВО
             self.правая.addWidget(w)
         return self.правая
 
@@ -286,6 +331,8 @@ class WorkScreen(Screen):
     def начать(self):
         """Новая сделка: поля пустые, проверка с нуля."""
         self.rep, self.готово, self.отправлено = {}, False, False
+        self.тест, self.тест_пропущен = {}, ""
+        self._нарисовать_тест()
         self.имя.clear()
         self.телефон.clear()
         self.комментарий.clear()
@@ -300,7 +347,7 @@ class WorkScreen(Screen):
         self.set_состояние("")
         self.режим(False)
         self.стопка.setCurrentIndex(0)
-        self.правая.setCurrentIndex(1)
+        self.правая.setCurrentIndex(СТР_ТЕСТ)
         self._очистить_итоги()
         self.b_отправить.setText("Отправить в Оценку")
         self.b_отмена.setText("Отменить")
@@ -345,7 +392,7 @@ class WorkScreen(Screen):
             self.шаги["passport"].set("run", "по базе IMEI")
             self.коробка.setChecked(True)
             self.шнур.setChecked(True)
-            self.правая.setCurrentIndex(1)
+            self.правая.setCurrentIndex(СТР_ТЕСТ)
         else:
             self.шаги["connect"].set("run", "ждём «Доверять»")
 
@@ -360,13 +407,53 @@ class WorkScreen(Screen):
         """Шаг с разделом Apple занимает правую колонку, пока он нужен."""
         if self.отправлено:
             return
-        self.правая.setCurrentIndex(0 if on else 1)
+        self.правая.setCurrentIndex(СТР_APPLE if on else СТР_ТЕСТ)
 
     def показать_код(self, код, ссылка):
         self.код.setText(код or "—")
         # под QR достаточно короткого адреса: он нужен, только если QR не считался
         self.ссылка.setText(str(ссылка or "").replace("https://", ""))
         self.qr.set(qr_pixmap(ссылка) if ссылка else None, "СКАНИРУЙТЕ", rise=False)
+
+    # ---------- тест на телефоне клиента ----------
+    def показать_тест(self, ссылка, почему=""):
+        """QR на страницу теста. Пустая ссылка — сети нет, и это надо сказать словами."""
+        self.тест_ссылка.setText(str(ссылка or "").replace("http://", ""))
+        self.qr_тест.set(qr_pixmap(ссылка) if ссылка else None, "СКАНИРУЙТЕ", rise=False)
+        if not ссылка:
+            self.тест_подсказка.setText(почему or "Касса не в сети — тест на телефоне не открыть. "
+                                        "Проверьте руками и нажмите «Нет в нашей сети».")
+        else:
+            self.тест_подсказка.setText("Дайте клиенту отсканировать этот QR телефоном, который он "
+                                        "сдаёт. Телефон сам прогонит тесты, результат придёт сюда.")
+        self._нарисовать_тест()
+
+    def set_тест(self, res, пропущен=""):
+        """Результат теста пришёл с телефона (или сотрудник отметил, что теста не будет)."""
+        self.тест = dict(res or {})
+        self.тест_пропущен = str(пропущен or "")
+        self._нарисовать_тест()
+        self._проверить()
+
+    def _тест_закрыт(self) -> bool:
+        return bool(self.тест_пропущен) or phonetest.готов(self.тест)
+
+    def _нарисовать_тест(self):
+        while self.тест_список.count():
+            w = self.тест_список.takeAt(0).widget()
+            if w:
+                # setParent(None) обязателен: deleteLater откладывает удаление до
+                # следующего круга цикла событий, и до тех пор старые строки остаются
+                # детьми карточки — то есть лежат поверх новых, на своих прежних местах
+                w.setParent(None)
+                w.deleteLater()
+        if self.тест_пропущен:
+            self.тест_список.addWidget(label("Тест на телефоне пропущен: " + self.тест_пропущен,
+                                             wrap=True, color=C["warntext"]))
+            return
+        for имя, ответ in phonetest.коротко(self.тест):
+            значок, цвет, подпись = ВИД_ОТВЕТА.get(ответ, ВИД_ОТВЕТА[None])
+            self.тест_список.addWidget(label(f"{значок}  {имя} — {подпись}", color=цвет))
 
     def _очистить_итоги(self):
         while self.итоги.count():
@@ -454,7 +541,8 @@ class WorkScreen(Screen):
         from pintel_core.external import ocenka
         self.sim.setCurrentText(ocenka.sim_для_оценки(пас))
         if not self.отправлено:
-            self.правая.setCurrentIndex(1)
+            # проверка кабелем кончилась — теперь тест на телефоне, он идёт перед медиа
+            self.правая.setCurrentIndex(СТР_МЕДИА if self._тест_закрыт() else СТР_ТЕСТ)
         self._проверить()
 
     def отказ(self, текст):
@@ -468,7 +556,7 @@ class WorkScreen(Screen):
         self.отправлено = True
         self.номер.setText(str(код or "—"))
         self.итог_текст.setText(текст or "Оценщик подтверждает сделку в Telegram — там появится её номер.")
-        self.правая.setCurrentIndex(2)
+        self.правая.setCurrentIndex(СТР_ГОТОВО)
         self.b_печать.setEnabled(True)
         self.b_отправить.setEnabled(False)
         self.b_отмена.setText("Новая оценка")
@@ -484,11 +572,31 @@ class WorkScreen(Screen):
         return {"имя": self.имя.text().strip(), "телефон": нормальный_телефон(self.телефон.text()),
                 "коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
                 "sim": self.sim.currentText(),
-                "комментарий": self.комментарий.toPlainText().strip()}
+                "комментарий": self.комментарий.toPlainText().strip(),
+                "тест": dict(self.тест), "тест_пропущен": self.тест_пропущен}
 
     def _годно(self):
+        """Чего ждём перед отправкой. Тест на телефоне здесь обязателен: кабель не нажмёт на
+        экран, не послушает динамик и не посмотрит в камеру, а узнать об этом после выкупа
+        дороже, чем задержать сделку на две минуты. Если телефона нет в нашей сети, сотрудник
+        говорит об этом кнопкой — тогда сделка уходит человеку, а не получает автоцену."""
         d = self.данные()
-        return bool(self.готово and not self.отправлено and d["имя"] and d["телефон"])
+        return bool(self.готово and not self.отправлено and d["имя"] and d["телефон"]
+                    and self._тест_закрыт())
+
+    def почему_нельзя(self) -> str:
+        """Что мешает отправить — словами, для подсказки под кнопкой."""
+        if self.отправлено or not self.готово:
+            return ""
+        d = self.данные()
+        if not (d["имя"] and d["телефон"]):
+            return "Впишите имя и телефон клиента."
+        if not self._тест_закрыт():
+            осталось = [имя for _, имя in phonetest.пропущенные(self.тест)]
+            return ("Нужен тест на телефоне клиента: " + ", ".join(осталось[:4])
+                    + (f" и ещё {len(осталось) - 4}" if len(осталось) > 4 else "")
+                    + ". Телефона нет в нашей сети — скажите об этом кнопкой.")
+        return ""
 
     def _проверить(self):
         d = self.данные()
@@ -497,6 +605,11 @@ class WorkScreen(Screen):
         self.телефон.style().unpolish(self.телефон)
         self.телефон.style().polish(self.телефон)
         self.b_отправить.setEnabled(self._годно())
+        if not self.отправлено:
+            мешает = self.почему_нельзя()
+            если_было = self.ошибка.text()
+            if мешает or если_было.startswith(("Нужен тест", "Впишите имя")):
+                self.ошибка.setText(мешает)
         return self._годно()
 
     def _отправить(self):

@@ -4,7 +4,6 @@
 CREATE TABLE IF NOT EXISTS kiosk_media (
     id        SERIAL PRIMARY KEY,
     code      VARCHAR(16) UNIQUE NOT NULL,     -- то, что уходит в ссылку: /start p<code>
-    point     VARCHAR(50),                     -- точка, где завели код
     created   TIMESTAMPTZ NOT NULL DEFAULT now(),
     user_id   INTEGER REFERENCES users (id),   -- кто открыл ссылку = оценщик сделки
     chat_id   BIGINT,
@@ -18,6 +17,9 @@ CREATE TABLE IF NOT EXISTS kiosk_media (
 
 -- для баз, где таблица уже стояла без точки (её больше не выбирают: шлёт программа)
 ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS shop_id INTEGER REFERENCES shops (id);
+-- а колонка `point` (имя точки строкой) не нужна вовсе: её никто не писал с тех пор, как
+-- точку присылает программа своим shop_id. В базах, где таблица уже стояла, её убирают
+-- руками: ALTER TABLE kiosk_media DROP COLUMN IF EXISTS point;
 -- и без отметок проверок руками: {"keys": true, "water": false, …} либо {"sealed": true}.
 -- Нужна только точкам со СТАРОЙ сборкой программы: там эти пункты ещё спрашивает бот кнопками.
 -- Новая отмечает их на своём экране и присылает в посылке, и обработчик без колонки работает.

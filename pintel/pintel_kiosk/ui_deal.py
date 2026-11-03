@@ -19,7 +19,8 @@
 """
 import re
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLineEdit,
                                QPushButton, QSizePolicy, QStackedWidget, QTextEdit, QVBoxLayout,
                                QWidget)
@@ -75,10 +76,17 @@ def нормальный_телефон(текст):
     return "+" + цифры
 
 
+# Размеры надписей кнопок. Те же числа стоят в QSS (там они красят), но ширину кнопки Qt
+# считает по шрифту самого виджета: пока он оставался шрифтом приложения, «Отправить в
+# Оценку» не помещалась в кнопку и вылезала за её край.
+РАЗМЕР_КНОПКИ = {"primary": 28, "ghost": 21, "small": 19}
+
+
 def _кнопка(текст, вид="primary"):
     b = QPushButton(текст)
     b.setObjectName(вид)
     b.setCursor(Qt.PointingHandCursor)
+    b.setFont(font(FONT_TEXT, РАЗМЕР_КНОПКИ.get(вид, 21), W.Bold))
     return b
 
 
@@ -92,15 +100,60 @@ def _плашка(текст, фон, цвет):
 # QR, код и кнопки, — и лишняя строка здесь выталкивает нижние виджеты друг на друга.
 ПОДСКАЗКА_ТЕСТА = "Клиент сканирует QR телефоном, который сдаёт — результат придёт сюда."
 
-ЗНАЧКИ_ПУНКТА = {None: ("⬜", C["muted"]), True: ("✅", C["ok"]), False: ("❌", C["badtext"])}
+# Вид пункта по ответу: подпись состояния, цвет текста, фон и рамка ряда.
+ВИД_ПУНКТА = {None: ("не отмечено", C["muted"], "#FFFFFF", C["border"]),
+              True: ("работает", C["ok"], C["okbg"], C["ok"]),
+              False: ("НЕ работает", C["badtext"], C["badbg"], C["bad"])}
+
+
+class Отметка(QWidget):
+    """Квадратик состояния: пусто · галочка · крест. Рисуется, а не набирается значком.
+
+    Эмодзи ⬜✅❌ выглядели на экране точки чужеродно — у них своя палитра, свой размер и
+    своя насечка, не те, что у остального окна. Здесь те же три состояния нарисованы теми
+    же цветами, что и весь интерфейс, и одинаково на любой машине: шрифт с эмодзи на
+    Windows может оказаться другим, а рисунок — нет.
+    """
+
+    def __init__(self, сторона=26):
+        super().__init__()
+        self.сторона = int(сторона)
+        self.ответ = None
+        self.setFixedSize(self.сторона, self.сторона)
+
+    def set(self, ответ):
+        self.ответ = ответ
+        self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        с = self.сторона
+        поле = QRectF(1, 1, с - 2, с - 2)
+        цвет = {True: C["ok"], False: C["bad"]}.get(self.ответ)
+        p.setPen(QPen(QColor(цвет or C["ring"]), 2))
+        p.setBrush(QColor(цвет) if цвет else QColor("#FFFFFF"))
+        p.drawRoundedRect(поле, 7, 7)
+        if self.ответ is None:
+            return
+        p.setPen(QPen(QColor("#FFFFFF"), 2.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        if self.ответ:                       # галочка
+            p.drawPolyline([поле.topLeft() + QPointF(5, с * 0.52),
+                            поле.topLeft() + QPointF(с * 0.40, с * 0.72),
+                            поле.topLeft() + QPointF(с - 9, с * 0.28)])
+        else:                                # крест
+            k = с * 0.30
+            p.drawLine(поле.topLeft() + QPointF(k, k), поле.bottomRight() - QPointF(k, k))
+            p.drawLine(поле.topRight() + QPointF(-k, k), поле.bottomLeft() + QPointF(k, -k))
 
 
 class ПунктРяд(QFrame):
-    """Один пункт ручной проверки: значок, название и чем его проверить.
+    """Один пункт ручной проверки: квадратик состояния, название и чем его проверить.
 
-    Нажатие по всему ряду, а не по маленькой галочке: сотрудник держит телефон клиента в
-    одной руке. Состояний три — не отмечено, работает, не работает, — и «не проверял»
+    Нажатие по всему ряду, а не по маленькому квадратику: сотрудник держит телефон клиента
+    в одной руке. Состояний три — не отмечено, работает, не работает, — и «не проверял»
     среди них нет намеренно: нечем проверить значит «не работает», и сделку смотрит человек.
+    Состояние говорится и словами справа: по одному цвету его читать нельзя.
     """
 
     нажали = Signal(str)
@@ -119,27 +172,34 @@ class ПунктРяд(QFrame):
         ряд = QHBoxLayout(self)
         ряд.setContentsMargins(12, 5, 12, 5)
         ряд.setSpacing(10)
-        self.значок = label("⬜", font_=font(FONT_TEXT, 21, W.Bold))
-        self.значок.setFixedWidth(30)
-        self.значок.setAlignment(Qt.AlignCenter)
+        self.значок = Отметка()
         текст = QVBoxLayout()
         текст.setContentsMargins(0, 0, 0, 0)
         текст.setSpacing(0)
+        # Состояние словами — в одну строку с названием, а не отдельной колонкой справа:
+        # колонка съедала ширину у подписи, и та обрывалась на полуслове.
+        верх = QHBoxLayout()
+        верх.setContentsMargins(0, 0, 0, 0)
+        верх.setSpacing(8)
         self.имя = label(имя, font_=font(FONT_TEXT, 18, W.Bold))
-        текст.addWidget(self.имя)
+        self.состояние = label("", font_=font(FONT_TEXT, 15, W.Bold))
+        верх.addWidget(self.имя)
+        верх.addWidget(self.состояние)
+        верх.addStretch(1)
+        текст.addLayout(верх)
         текст.addWidget(label(подробно, "muted", wrap=True, font_=font(FONT_TEXT, 13)))
-        ряд.addWidget(self.значок, 0, Qt.AlignTop)
+        ряд.addWidget(self.значок, 0, Qt.AlignVCenter)
         ряд.addLayout(текст, 1)
         self.set(None)
 
     def set(self, ответ):
-        значок, цвет = ЗНАЧКИ_ПУНКТА.get(ответ, ЗНАЧКИ_ПУНКТА[None])
-        self.значок.setText(значок)
-        фон = {True: C["okbg"], False: C["badbg"]}.get(ответ, "#FFFFFF")
-        рамка = {True: C["ok"], False: C["badtext"]}.get(ответ, C["border"])
+        подпись, цвет, фон, рамка = ВИД_ПУНКТА.get(ответ, ВИД_ПУНКТА[None])
+        self.значок.set(ответ)
         self.setStyleSheet(f"QFrame#checkrow {{ background: {фон}; border: 2px solid {рамка}; "
                            "border-radius: 14px; }")
         self.имя.setStyleSheet(f"color: {цвет if ответ is not None else C['ink']}")
+        self.состояние.setText(подпись if ответ is not None else "")
+        self.состояние.setStyleSheet(f"color: {цвет}")
 
     def mouseReleaseEvent(self, e):
         super().mouseReleaseEvent(e)
@@ -265,8 +325,7 @@ class WorkScreen(Screen):
         self.повтор_текст = label("", wrap=True, color=C["warntext"])
         self.повтор_текст.hide()
         ил.addWidget(self.повтор_текст)
-        self.b_перепроверить = QPushButton("Проверить телефон заново")
-        self.b_перепроверить.setObjectName("small")
+        self.b_перепроверить = _кнопка("Проверить телефон заново", "small")
         self.b_перепроверить.clicked.connect(self.перепроверить.emit)
         self.b_перепроверить.hide()
         ил.addSpacing(8)
@@ -302,6 +361,11 @@ class WorkScreen(Screen):
         ряд.addWidget(self.sim, 1)
         внутри.addSpacing(6)
         внутри.addLayout(ряд)
+        # SIM кассе не надо спрашивать: лоток и eSIM видно по кабелю (SIMTrayStatus, профиль
+        # eSIM, второй IMEI). Пишем, откуда взялось значение, — иначе сотрудник не понимает,
+        # его это выбор или уже определённый, и правит наугад.
+        self.sim_подпись = label("", "muted", wrap=True)
+        внутри.addWidget(self.sim_подпись)
 
         внутри.addSpacing(6)
         внутри.addWidget(label("Цену посчитает бот Оценки по своему прайсу — здесь её не ставим.",
@@ -330,8 +394,7 @@ class WorkScreen(Screen):
         ал.addStretch(1)
         ал.addWidget(label("Строки может не быть: Apple показывает её, только если деталь меняли. "
                            "Проверка всё равно уйдёт.", "muted", wrap=True))
-        b_пропуск = QPushButton("Сделает сотрудник")
-        b_пропуск.setObjectName("small")
+        b_пропуск = _кнопка("Сделает сотрудник", "small")
         b_пропуск.clicked.connect(self.пропустить_apple.emit)
         ал.addWidget(b_пропуск, 0, Qt.AlignLeft)
 
@@ -359,8 +422,7 @@ class WorkScreen(Screen):
             ряд_теста = QHBoxLayout()
             ряд_теста.setSpacing(10)
             for надпись, что in пара:
-                b = QPushButton(надпись)
-                b.setObjectName("small")
+                b = _кнопка(надпись, "small")
                 b.clicked.connect(что)
                 ряд_теста.addWidget(b)
             if len(пара) == 1:
@@ -371,8 +433,8 @@ class WorkScreen(Screen):
         # восемь рядов с подписями — карточка плотная: промежутки урезаем, иначе длинные
         # подписи («Детали и обслуживание…») не помещаются во вторую строку и обрезаются
         рл.setSpacing(8)
-        рл.addWidget(label("Нажимайте по строке: ⬜ → ✅ работает → ❌ не работает или нечем "
-                           "проверить", "muted", wrap=True, font_=font(FONT_TEXT, 14)))
+        рл.addWidget(label("Нажимайте по строке: не отмечено → работает → не работает "
+                           "(или нечем проверить)", "muted", wrap=True, font_=font(FONT_TEXT, 14)))
         ряды = QVBoxLayout()
         ряды.setContentsMargins(0, 0, 0, 0)
         ряды.setSpacing(5)
@@ -392,8 +454,7 @@ class WorkScreen(Screen):
         # (коробку не вскрывают), а на б/у сделке бот её всё равно не примет
         for надпись, что in (("К тесту телефона", lambda: self.правая.setCurrentIndex(СТР_ТЕСТ)),
                              ("К фото и видео", lambda: self.правая.setCurrentIndex(СТР_МЕДИА))):
-            b = QPushButton(надпись)
-            b.setObjectName("small")
+            b = _кнопка(надпись, "small")
             b.clicked.connect(что)
             ряд_ручной.addWidget(b)
         рл.addLayout(ряд_ручной)
@@ -427,8 +488,7 @@ class WorkScreen(Screen):
             ряд_медиа = QHBoxLayout()
             ряд_медиа.setSpacing(10)
             for надпись, что in пара:
-                b = QPushButton(надпись)
-                b.setObjectName("small")
+                b = _кнопка(надпись, "small")
                 b.clicked.connect(что)
                 ряд_медиа.addWidget(b)
             if len(пара) == 1:
@@ -465,6 +525,7 @@ class WorkScreen(Screen):
         self.коробка.setChecked(False)
         self.шнур.setChecked(False)
         self.sim.setCurrentIndex(0)
+        self.sim_подпись.setText("")
         self.аппарат.setText("Подключите телефон кабелем")
         self.ошибка.setText("")
         self._нарисовать_повтор({})
@@ -699,14 +760,19 @@ class WorkScreen(Screen):
             self.медиа_список.addWidget(строка)
 
     def _очистить_итоги(self):
-        while self.итоги.count():
-            w = self.итоги.takeAt(0).widget()
-            if w:
-                w.deleteLater()
-        while self.плашки.count() > 1:
-            w = self.плашки.takeAt(0).widget()
-            if w:
-                w.deleteLater()
+        """Убрать прошлый итог проверки — так, чтобы его не осталось на экране.
+
+        `setParent(None)` обязателен: `deleteLater` откладывает удаление до следующего
+        круга цикла событий, и до тех пор старые подписи остаются детьми карточки, то есть
+        лежат поверх новых, на своих прежних местах. Видно это было не сразу: `показать`
+        вызывается второй раз, когда с телефона приходит журнал Apple (и теперь — когда
+        берётся прошлая проверка), и именно тогда текст наезжал на текст."""
+        for список in (self.итоги, self.плашки):
+            while список.count() > (1 if список is self.плашки else 0):
+                w = список.takeAt(0).widget()
+                if w:
+                    w.setParent(None)
+                    w.deleteLater()
 
     def _строка_итога(self, ключ, значение, цвет=None):
         n = self.итоги.rowCount()
@@ -788,6 +854,7 @@ class WorkScreen(Screen):
 
         from pintel_core.external import ocenka
         self.sim.setCurrentText(ocenka.sim_для_оценки(пас))
+        self._сказать_про_sim(пас)
         if not self.отправлено:
             # проверка кабелем кончилась — теперь тест на телефоне, он идёт перед медиа
             self.правая.setCurrentIndex(СТР_МЕДИА if self._тест_закрыт() else СТР_ТЕСТ)
@@ -826,6 +893,26 @@ class WorkScreen(Screen):
         self.подсказка.setText("Не отключайте кабель. Обычно это занимает около минуты.")
         self.сказать("", беда=False)
         self._проверить()
+
+    def _сказать_про_sim(self, пас):
+        """Откуда взялся тип SIM: это читается по кабелю, а не спрашивается у сотрудника."""
+        если = []
+        if пас.get("esim_only"):
+            если.append("лотка нет, только eSIM")
+        else:
+            if пас.get("sim_в_лотке"):
+                если.append("SIM в лотке")
+            if пас.get("esim"):
+                если.append("профиль eSIM")
+            if (пас.get("imei2") or "").strip():
+                если.append("второй IMEI")
+        if self.rep.get("запечатанный"):
+            self.sim_подпись.setText("Запечатанный: SIM по кабелю не читается — выберите сами.")
+        elif если:
+            self.sim_подпись.setText("SIM определён по телефону: " + ", ".join(если)
+                                     + ". Поправьте, если не так.")
+        else:
+            self.sim_подпись.setText("SIM по телефону не определился — выберите сами.")
 
     def сказать(self, текст, беда=True):
         """Одна строка под колонками. Беда — красным, ожидание — цветом внимания: «ждём

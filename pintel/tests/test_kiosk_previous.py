@@ -45,7 +45,7 @@ def test_the_freshest_check_of_the_same_phone_is_the_one_taken(tmp_path):
     папка = str(tmp_path / "out")
     _положить(папка, сейчас - timedelta(hours=5), _отчёт(итог={"вердикт": "СТАРАЯ"}))
     свежая = _положить(папка, сейчас - timedelta(minutes=40), _отчёт())
-    находка = previous.найти(папка, ПАСПОРТ["udid"], 6, сейчас)
+    находка = previous.найти(папка, ПАСПОРТ["udid"], 1, сейчас)
     assert находка and находка["путь"] == свежая
     assert находка["возраст_мин"] == 40 and "40 мин назад" in находка["словами"]
     assert находка["отчёт"]["итог"]["вердикт"] == "ХОРОШИЙ"
@@ -54,14 +54,14 @@ def test_the_freshest_check_of_the_same_phone_is_the_one_taken(tmp_path):
 def test_an_old_check_is_not_taken_at_all(tmp_path):
     """Отчёт старше окна не берём: он уже не про тот телефон, что лежит на столе.
 
-    За сутки аппарат успевает всё: разбиться, сменить владельца, получить другой экран.
-    Ошибка в эту сторону стоит выкупа, а не минуты чтения."""
+    Аппарат успевает всё: разбиться, сменить владельца, получить другой экран. Ошибка в
+    эту сторону стоит выкупа, а не минуты чтения."""
     сейчас = datetime(2026, 11, 3, 14, 0, 0)
     папка = str(tmp_path / "out")
-    _положить(папка, сейчас - timedelta(hours=7), _отчёт())
-    assert previous.найти(папка, ПАСПОРТ["udid"], 6, сейчас) is None
+    _положить(папка, сейчас - timedelta(days=2), _отчёт())
+    assert previous.найти(папка, ПАСПОРТ["udid"], 1, сейчас) is None
     # окно пошире — та же проверка уже годится; окно «0» выключает поиск совсем
-    assert previous.найти(папка, ПАСПОРТ["udid"], 12, сейчас)
+    assert previous.найти(папка, ПАСПОРТ["udid"], 3, сейчас)
     assert previous.найти(папка, ПАСПОРТ["udid"], 0, сейчас) is None
 
 
@@ -76,7 +76,7 @@ def test_a_check_of_another_phone_is_never_taken(tmp_path):
                             "серийник": "ДРУГОЙ"})
     # папку называем НАШИМ префиксом — по имени не отличить, отличает содержимое отчёта
     _положить(папка, сейчас - timedelta(minutes=5), чужой, серийник=ПАСПОРТ["udid"])
-    assert previous.найти(папка, ПАСПОРТ["udid"], 6, сейчас) is None
+    assert previous.найти(папка, ПАСПОРТ["udid"], 1, сейчас) is None
     assert previous.тот_же(_отчёт(), ПАСПОРТ["udid"]) is True
     assert previous.тот_же(_отчёт(), ПАСПОРТ["серийник"]) is True      # старые отчёты без udid
     assert previous.тот_же(_отчёт(), "") is False
@@ -87,7 +87,7 @@ def test_a_check_from_the_future_is_ignored(tmp_path):
     сейчас = datetime(2026, 11, 3, 14, 0, 0)
     папка = str(tmp_path / "out")
     _положить(папка, сейчас + timedelta(hours=2), _отчёт())
-    assert previous.найти(папка, ПАСПОРТ["udid"], 6, сейчас) is None
+    assert previous.найти(папка, ПАСПОРТ["udid"], 1, сейчас) is None
 
 
 def test_a_broken_folder_does_not_stop_the_point(tmp_path):
@@ -99,7 +99,7 @@ def test_a_broken_folder_does_not_stop_the_point(tmp_path):
     os.makedirs(путь)
     with open(os.path.join(путь, "report.json"), "w", encoding="utf-8") as f:
         f.write("{это не json")
-    assert previous.найти(папка, ПАСПОРТ["udid"], 6, сейчас) is None
+    assert previous.найти(папка, ПАСПОРТ["udid"], 1, сейчас) is None
 
 
 def test_the_reused_check_says_so_in_the_report_and_in_the_card():

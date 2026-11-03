@@ -63,7 +63,8 @@ QLabel#kv_v { font-size: 19px; font-weight: 700; }
 QLabel#chip_ok { background: %(okbg)s; color: %(ok)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
 QLabel#chip_warn { background: %(warnbg)s; color: %(warntext)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
 QLabel#chip_bad { background: %(badbg)s; color: %(badtext)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
-QPushButton#primary { background: %(action)s; color: white; border-radius: 20px; font-size: 28px; font-weight: 700; min-height: 80px; border: none; }
+QPushButton#primary { background: %(action)s; color: white; border-radius: 20px; font-size: 28px;
+    font-weight: 700; min-height: 80px; border: none; padding: 0 34px; }
 QPushButton#primary:pressed { background: %(action_dark)s; }
 QPushButton#update { background: %(tint)s; color: %(brand)s; border: 2px solid %(tint_border)s;
     border-radius: 14px; font-size: 20px; font-weight: 700; min-height: 54px; padding: 0 24px; }

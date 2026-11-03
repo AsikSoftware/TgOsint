@@ -39,13 +39,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ПОЛЯ_КНОПКИ = 24
 
 
+# Ссылку на приложение держим в модуле: если его соберёт сборщик мусора раньше окон,
+# Qt падает уже на выходе из интерпретатора, и прогон кончается ненулевым кодом при всех
+# пройденных тестах.
+_ПРИЛОЖЕНИЕ = None
+
+
 @pytest.fixture(scope="module")
 def приложение():
-    app = QApplication.instance() or QApplication([])
+    global _ПРИЛОЖЕНИЕ
+    _ПРИЛОЖЕНИЕ = QApplication.instance() or QApplication([])
     ui.load_fonts()
-    app.setFont(ui.app_font())
-    app.setStyleSheet(ui.QSS)
-    return app
+    _ПРИЛОЖЕНИЕ.setFont(ui.app_font())
+    _ПРИЛОЖЕНИЕ.setStyleSheet(ui.QSS)
+    return _ПРИЛОЖЕНИЕ
 
 
 @pytest.fixture(scope="module")
@@ -103,35 +110,52 @@ def _замечания(корень):
     return sorted(set(беда))
 
 
-def _экран(класс, *аргументы):
-    w = класс(*аргументы)
-    w.setFixedSize(1920, 1080)
-    w.show()
+@pytest.fixture
+def открыть(приложение):
+    """Открыть экран и закрыть его после теста.
+
+    Убирать за собой обязательно: оставленные окна Qt разрушает уже на выходе из
+    интерпретатора, в произвольном порядке, и прогон на сборочной машине падал не тестом,
+    а кодом возврата — при том, что все тесты прошли."""
+    открытые = []
+
+    def завести(класс, *аргументы):
+        w = класс(*аргументы)
+        w.setFixedSize(1920, 1080)
+        w.show()
+        QApplication.processEvents()
+        открытые.append(w)
+        return w
+
+    yield завести
+    for w in открытые:
+        w.close()
+        w.setParent(None)
+        w.deleteLater()
     QApplication.processEvents()
-    return w
 
 
-def test_the_idle_screen_fits(приложение):
+def test_the_idle_screen_fits(открыть):
     """Экран ожидания: статус, кнопка начала и предложение обновиться."""
-    экран = _экран(ui.MainScreen, "16/38 Pintel")
+    экран = открыть(ui.MainScreen, "16/38 Pintel")
     экран.set_status("Автономно: нет связи с сервером ConnectError", ok=False)
     экран.показать_обновление("Обновить программу — не вышло, повторить")
     assert _замечания(экран) == []
 
 
-def test_the_intake_screen_fits(приложение):
+def test_the_intake_screen_fits(открыть):
     """Анкета до кабеля: состояние четырьмя кнопками, имя и телефон клиента."""
-    экран = _экран(ui_start.StartScreen, "16/38 Pintel")
+    экран = открыть(ui_start.StartScreen, "16/38 Pintel")
     экран.начать()
     assert _замечания(экран) == []
 
 
-def test_every_page_of_the_deal_screen_fits(приложение, отчёт):
+def test_every_page_of_the_deal_screen_fits(открыть, отчёт):
     """Рабочее окно во всех состояниях: до проверки, с итогом, на каждой карточке справа.
 
     Это самый плотный экран программы — три колонки, и в правой живут QR, семь строк теста,
     восемь проверок руками и кнопки."""
-    экран = _экран(ui_deal.WorkScreen, "16/38 Pintel")
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
     assert _замечания(экран) == [], "окно до проверки"
 
     экран.set_клиент("Зама", "+77058837953")
@@ -156,13 +180,13 @@ def test_every_page_of_the_deal_screen_fits(приложение, отчёт):
     assert _замечания(экран) == [], "проверки руками с отметками"
 
 
-def test_the_result_is_not_drawn_twice_over_itself(приложение, отчёт):
+def test_the_result_is_not_drawn_twice_over_itself(открыть, отчёт):
     """Второй показ итога не оставляет первый на экране.
 
     `показать` вызывается повторно: когда с телефона приходит журнал Apple и когда взята
     прошлая проверка. Старые подписи удалялись отложенно и до следующего круга цикла
     событий лежали поверх новых — на экране точки это читалось как «текст по тексту»."""
-    экран = _экран(ui_deal.WorkScreen, "16/38 Pintel")
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
     экран.показать(отчёт)
     повтор = dict(отчёт)
     повтор["повторная_проверка"] = {"словами": "сегодня в 13:20, 40 мин назад",
@@ -172,21 +196,21 @@ def test_the_result_is_not_drawn_twice_over_itself(приложение, отч�
     assert _замечания(экран) == []
 
 
-def test_the_sealed_deal_screen_fits(приложение):
+def test_the_sealed_deal_screen_fits(открыть):
     """Запечатанный: шагов кабеля нет, зато в шапке два IMEI с коробки."""
-    экран = _экран(ui_deal.WorkScreen, "16/38 Pintel")
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
     экран.режим(True, ["350585886690250", "350585881725184"])
     assert _замечания(экран) == []
 
 
-def test_the_setup_and_admin_screens_fit(приложение):
+def test_the_setup_and_admin_screens_fit(открыть):
     """Первая настройка (выбор точки и токен) и меню администратора."""
-    токен = _экран(ui_admin.TokenScreen)
+    токен = открыть(ui_admin.TokenScreen)
     токен.показать_точки([{"id": 1, "название": "16/38 Pintel"},
                           {"id": 2, "название": "ТРЦ Астана", "литера": "АС"}])
     assert _замечания(токен) == []
 
-    админ = _экран(ui_admin.AdminScreen)
+    админ = открыть(ui_admin.AdminScreen)
     админ.показать({"Сервер": "https://kiosk.pintelkz.com", "Точка": "16/38 Pintel (id 14)",
                     "Этот компьютер": "KASSA-14", "Токен": "pk_abc…", "Версия": "doctor-67",
                     "Оценок в очереди": 0, "Бот Оценки": "PintelOlxBot"})

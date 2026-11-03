@@ -735,12 +735,12 @@ def test_the_manual_checks_are_marked_on_the_screen_not_in_the_bot(окно):
     assert окно.s_work.b_отправить.isEnabled() and окно.s_work.почему_нельзя() == ""
     assert окно.s_work.данные()["ручная"] == {k: True for k in ocenka_media.КЛЮЧИ}
     # второе нажатие — «не работает», третье снимает отметку: пропустить шаг нечем
-    окно.s_work.пункты_ряды["water"].нажали.emit("water")
-    assert окно.s_work.данные()["ручная"]["water"] is False
-    assert "НЕ работает" in окно.s_work.ручная_итог.text() and "Влага" in окно.s_work.ручная_итог.text()
+    окно.s_work.пункты_ряды["glue"].нажали.emit("glue")
+    assert окно.s_work.данные()["ручная"]["glue"] is False
+    assert "НЕ работает" in окно.s_work.ручная_итог.text() and "Герметик" in окно.s_work.ручная_итог.text()
     assert окно.s_work.b_отправить.isEnabled()     # поломка не отказ: её оценит человек
-    окно.s_work.пункты_ряды["water"].нажали.emit("water")
-    assert "water" not in окно.s_work.данные()["ручная"]
+    окно.s_work.пункты_ряды["glue"].нажали.emit("glue")
+    assert "glue" not in окно.s_work.данные()["ручная"]
     assert not окно.s_work.b_отправить.isEnabled()
 
 
@@ -751,7 +751,7 @@ def test_the_marks_go_to_the_bot_with_the_deal(окно, monkeypatch):
     окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
                      "ocenka_chat_id": "-1001"})
     _чистый(окно)
-    _руками_отмечено(окно, water=False)            # следы воды в лотке — кабель их не видит
+    _руками_отмечено(окно, glue=False)            # следы воды в лотке — кабель их не видит
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
     ушло = {}
@@ -762,7 +762,7 @@ def test_the_marks_go_to_the_bot_with_the_deal(окно, monkeypatch):
     assert ушло, "посылка не ушла: " + окно.s_work.ошибка.text()
     посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
     отметки = посылка["ручная_диагностика"]
-    assert отметки["water"] is False and отметки["keys"] is True
+    assert отметки["glue"] is False and отметки["keys"] is True
     assert len(отметки) == len(ocenka_media.КЛЮЧИ)
 
 
@@ -851,3 +851,46 @@ def test_a_reused_check_is_visible_with_a_way_out(окно):
     окно.кабель = "NO_DEVICE"
     окно.перепроверить_телефон()
     assert "на кабеле" in окно.s_work.ошибка.text()
+
+
+def test_a_real_click_on_the_row_marks_it(окно):
+    """Отметка ставится настоящим нажатием мыши — и именно так, как на точке.
+
+    Так это и сломалось: ряд принимал только отпускание кнопки, а Qt отдаёт его лишь тому,
+    кто принял нажатие. На точке окно живёт внутри QGraphicsView (экраны свёрстаны на
+    1920×1080 и масштабируются целиком), и там непринятое нажатие теряется совсем — строки
+    выглядели мёртвыми, хотя в обычном окне клик срабатывал. Поэтому кликаем через тот же
+    QGraphicsView, а не по виджету напрямую: иначе тест этого не увидит.
+    """
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    экран = окно.s_work
+    _чистый_без_теста(окно)
+    экран.ручная = {}
+    экран._нарисовать_ручную()
+    экран.правая.setCurrentIndex(ui_deal.СТР_РУЧНАЯ)
+    хост = kapp.ScaledHost(экран)
+    хост.resize(1920, 1080)
+    хост.show()
+    QApplication.processEvents()
+
+    def кликнуть(виджет, точка=None):
+        точка = точка if точка is not None else виджет.rect().center()
+        на_экране = виджет.mapTo(экран, точка)
+        QTest.mouseClick(хост.viewport(), Qt.LeftButton,
+                         pos=хост.mapFromScene(на_экране.x(), на_экране.y()))
+        QApplication.processEvents()
+
+    ряд = экран.пункты_ряды["keys"]
+    кликнуть(ряд)
+    assert экран.данные()["ручная"].get("keys") is True, "клик по строке не отметил пункт"
+
+    # попадают обычно по тексту, а не по рамке — подписи не должны съедать нажатие
+    кликнуть(ряд.имя, QPoint(2, 2))
+    assert экран.данные()["ручная"].get("keys") is False, "клик по названию не дошёл до строки"
+    кликнуть(ряд.подробно, QPoint(2, 2))
+    assert "keys" not in экран.данные()["ручная"], "третий клик должен снимать отметку"
+
+    хост.close()
+    экран.setParent(None)                  # вернуть экран окну: дальше его закрывает фикстура
+    окно.stack.addWidget(экран)

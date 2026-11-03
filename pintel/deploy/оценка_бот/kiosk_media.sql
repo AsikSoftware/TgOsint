@@ -11,15 +11,16 @@ CREATE TABLE IF NOT EXISTS kiosk_media (
     shop_id   INTEGER REFERENCES shops (id),   -- точка сделки: приходит в посылке с точки
     video     VARCHAR(200),                    -- file_id видео: без него сделка не открывается
     photos    TEXT,                            -- file_id фото через «||», как в devices.photo_phone
-    checks    TEXT,                            -- ручная диагностика: отметки сотрудника (JSON)
+    checks    TEXT,                            -- отметки проверок руками (JSON) — только от старых сборок
     done      BOOLEAN NOT NULL DEFAULT false,
     device_id INTEGER                          -- проставляется, когда сделка создана
 );
 
 -- для баз, где таблица уже стояла без точки (её больше не выбирают: шлёт программа)
 ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS shop_id INTEGER REFERENCES shops (id);
--- и без ручной диагностики: {"screen": true, "sound": false, …} либо {"sealed": true}.
--- Без неё обработчик сделку не создаёт, поэтому колонку надо добавить ВМЕСТЕ с новым kiosk_media.py.
+-- и без отметок проверок руками: {"keys": true, "water": false, …} либо {"sealed": true}.
+-- Нужна только точкам со СТАРОЙ сборкой программы: там эти пункты ещё спрашивает бот кнопками.
+-- Новая отмечает их на своём экране и присылает в посылке, и обработчик без колонки работает.
 ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS checks TEXT;
 
 CREATE INDEX IF NOT EXISTS kiosk_media_code_idx ON kiosk_media (code);

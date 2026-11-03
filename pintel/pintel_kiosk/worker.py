@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Поток проверки: ждёт телефон → слушатель журнала стартует СРАЗУ → слепок →
+"""Поток проверки: ждёт телефон → смотрит, не проверяли ли его только что → слушатель
+журнала стартует СРАЗУ → слепок →
 отчёт → ждём историю Apple (подсказка на экране) → Sickw через сервер →
 отправка → `done`. Дальше поток не умирает: слушатель живёт, пока телефон на
 кабеле, и если клиент открыл раздел позже — приходит `history`, карточка и
@@ -18,7 +19,8 @@ from datetime import datetime
 
 from PySide6.QtCore import QThread, Signal
 
-from pintel_core import reference
+from pintel_core import previous, reference
+from pintel_core.analysis import legal as legal_mod
 from pintel_core.analysis import report as report_mod
 from pintel_core.analysis import sealed as sealed_mod
 from pintel_core.devicelink import connect, repair_history, snapshot
@@ -87,6 +89,19 @@ def убрать_старое(дней=90):
     return убрано
 
 
+def _прочитать_слепок(папка):
+    """Слепок прошлой проверки — чтобы оценка этого визита уехала на сервер целой.
+
+    Не читается (папку унесли, файл побился) — отправим одну отчётную часть: оценка без
+    слепка полезнее, чем отсутствие оценки."""
+    try:
+        with open(os.path.join(папка, "snapshot.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        log_line(f"прошлый слепок не прочитался: {e}")
+        return None
+
+
 def проверить_рфс(cfg, имеи, step):
     """Реестр РФС РК по всем IMEI аппарата → (результаты, почему проверки не было).
 
@@ -125,14 +140,18 @@ class Pipeline(QThread):
     step = Signal(str, str, str)              # шаг: ключ, состояние (wait|run|done|warn|fail), подпись
     apple_prompt = Signal(bool)               # показать/скрыть панель «один шаг на телефоне»
     done = Signal(dict)                       # результат (отчёт, ответ сервера, …)
+    прошлая = Signal(dict)                    # взяли проверку, сделанную недавно (не читали заново)
     history = Signal(dict)                    # история Apple пришла позже: обновлённый результат
     failed = Signal(str)                      # человеческий текст ошибки
 
-    def __init__(self, cfg, client, parent=None):
+    def __init__(self, cfg, client, parent=None, заново=False):
         super().__init__(parent)
         self.cfg, self.client = cfg, client
         self.skip_apple = threading.Event()
         self.cancel = threading.Event()
+        # `заново` ставит кнопка «Проверить телефон заново»: тогда прошлую проверку не берём
+        # даже если она свежая — сотрудник сказал, что хочет перечитать аппарат.
+        self.заново = bool(заново)
         self.serial = None
         self.started = datetime.now()                 # имя эталона за этот прогон — одно на все перезаписи
 
@@ -166,6 +185,12 @@ class Pipeline(QThread):
         self.serial = st.serial
         self._step("connect", "done", "телефон на связи")
 
+        # Этот телефон проверяли только что? Тогда берём готовый отчёт и ведём сотрудника
+        # дальше — к тесту и медиа. Смотрим ДО слушателя журнала и слепка: ради того же
+        # ответа держать клиента минуты незачем.
+        if await self._взять_прошлую(ld):
+            return
+
         # Слушатель журнала — с первой секунды: если клиент откроет раздел, пока идёт
         # слепок, записи не пропадут.
         listener = repair_history.Listener(ld, log=log_line)
@@ -175,6 +200,98 @@ class Pipeline(QThread):
             await self._flow(ld, st, listener)
         finally:
             await listener.stop()
+
+    async def _взять_прошлую(self, ld) -> bool:
+        """Взять проверку этого телефона, сделанную недавно. → взяли (и `done` уже ушёл)?
+
+        Что здесь происходит и почему именно так:
+
+        * ищем самый свежий отчёт того же аппарата за окно (`reuse_hours`, по умолчанию
+          6 часов) — дольше хранить «свежесть» нельзя, отчёт перестаёт быть про этот телефон;
+        * **сверяем с живым телефоном то, что читается мгновенно**: серийник, IMEI и
+          правовой статус (Найти iPhone, активация, пароль). Один вызов `get_value` — это не
+          минуты, а доли секунды, и без этой сверки прошлый отчёт мог бы прикрыть включённый
+          за это время «Найти iPhone», то есть заблокированный аппарат в выкупе;
+        * расхождение — читаем заново, молча ничего не подменяем. Не прочиталось вовсе —
+          так и пишем в отметке: «не сверили», и это видно и на экране, и в карточке.
+
+        Отчёт уезжает на сервер как оценка этого визита: к ней потом прицепляются тест с
+        телефона клиента и чек, и без своей оценки их было бы некуда дописать.
+        """
+        if self.заново or self.cancel.is_set():
+            return False
+        часов = self.cfg.get("reuse_hours", previous.ЧАСОВ)
+        находка = previous.найти(os.path.join(data_dir(), "out"), self.serial, часов)
+        if not находка:
+            return False
+        отчёт = находка["отчёт"]
+        сверка, почему = await self._сверить_живьём(ld, отчёт)
+        if сверка is False:
+            log_line(f"прошлая проверка ({находка['словами']}) не подошла: {почему} — читаем заново")
+            self._step("passport", "run", "телефон изменился — читаем заново")
+            return False
+        rep = previous.отметить(отчёт, находка)
+        rep["повторная_проверка"]["сверка"] = "сошлась" if сверка else почему
+        for ключ, подпись in (("passport", "взята прошлая проверка"),
+                              ("battery", находка["словами"]),
+                              ("locks", "сверено с телефоном" if сверка else почему),
+                              ("apple", "из прошлой проверки"),
+                              ("sickw", "из прошлой проверки"),
+                              ("rfs", "из прошлой проверки")):
+            self._step(ключ, "done", подпись)
+        self._step("upload", "run")
+        cid = f"{self.serial or 'phone'}-{uuid.uuid4().hex[:12]}"
+        payload = {"client_id": cid, "report": json.loads(snapshot.dumps(rep)),
+                   "snapshot": _прочитать_слепок(находка["путь"])}
+        server = await asyncio.to_thread(self.client.upload, payload)
+        if not server:
+            server = {"номер": self.client.local_number(), "локально": True}
+            self._step("upload", "done" if not self.client.enabled else "warn",
+                       "сохранено на киоске" if not self.client.enabled else "отправим позже")
+        else:
+            self._step("upload", "done", "отправлено")
+        log_line(f"взята прошлая проверка: {находка['словами']}, папка {находка['путь']}, "
+                 f"сверка с телефоном: {rep['повторная_проверка']['сверка']}")
+        self.прошлая.emit(dict(rep["повторная_проверка"]))
+        self.done.emit({"report": rep, "server": server, "client_id": cid,
+                        "serial": self.serial, "out": находка["путь"], "повторная": True})
+        return True
+
+    async def _сверить_живьём(self, ld, отчёт: dict):
+        """Прошлый отчёт против живого телефона по тому, что читается мгновенно.
+
+        → (True, "") сошлось · (False, почему) расходится · (None, почему) не прочитали.
+
+        Сравниваем только однозначное: серийник и IMEI (это тот же аппарат?) и правовой
+        статус (его могли изменить в промежутке). «Не определился» расхождением не считаем —
+        это незнание, и врать про сверку из-за него нельзя, поэтому оно едет в отметку
+        словами.
+        """
+        try:
+            root = await ld.get_value() or {}
+        except Exception as exc:                                 # noqa: BLE001
+            return None, f"не сверили: телефон не ответил ({type(exc).__name__})"
+        try:
+            fmip = await ld.get_value(domain="com.apple.fmip") or {}
+        except Exception:                                        # noqa: BLE001 — домен отдают не все
+            fmip = {}
+        пас = (отчёт.get("паспорт") or {})
+        for поле, было in (("SerialNumber", пас.get("серийник")),
+                           ("InternationalMobileEquipmentIdentity", пас.get("imei"))):
+            сейчас = str(root.get(поле) or "").strip()
+            if сейчас and было and сейчас.casefold() != str(было).strip().casefold():
+                return False, f"{поле}: было {было}, стало {сейчас}"
+        живой = legal_mod.build({"root": root, "domains": {"com.apple.fmip": fmip}, "nodes": {}})
+        прошлый = отчёт.get("правовой") or {}
+        for поле in ("найти_iphone", "активация"):
+            стало, было = живой.get(поле), прошлый.get(поле)
+            if not стало or стало == "не определился":
+                return None, f"не сверили: {поле} сейчас не прочитался"
+            if было and стало != было:
+                return False, f"{поле}: было «{было}», стало «{стало}»"
+        if живой.get("пароль") is not прошлый.get("пароль"):
+            return False, "пароль на телефоне изменился"
+        return True, ""
 
     async def _flow(self, ld, st, listener):
         diag, tries = await connect.open_diagnostics(ld)

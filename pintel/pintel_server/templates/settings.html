@@ -99,6 +99,7 @@
         <div class="row"><input type="number" name="keep_days" value="{{ программа.keep_days }}" style="width:90px"> <span class="note">дней хранить оценки на точке</span></div>
         <div class="row"><input type="number" name="reference_keep" value="{{ программа.reference_keep }}" style="width:90px"> <span class="note">эталонов держать на точке</span></div>
         <div class="row"><input type="number" name="phone_test_port" value="{{ программа.phone_test_port }}" style="width:90px"> <span class="note">порт теста в локальной сети</span></div>
+        <div class="row"><input type="number" name="reuse_hours" value="{{ программа.reuse_hours }}" style="width:90px"> <span class="note">часов брать прошлую проверку того же телефона (0 — всегда читать заново)</span></div>
         <div class="row"><label class="chk"><input type="checkbox" name="fullscreen" {{ 'checked' if программа.fullscreen }}>во весь экран</label></div>
         <h3>Реквизиты в чеке клиента</h3>
         <div class="row"><input type="text" name="company_name" value="{{ программа.company_name }}" placeholder="название" style="width:200px"></div>

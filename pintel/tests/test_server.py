@@ -749,29 +749,27 @@ def test_the_kiosk_can_see_what_reached_the_bot(app, monkeypatch, tmp_path):
     пусто = k.get("/api/kiosk/media/ABCD12", headers=H).json()
     assert пусто["известно"] is True and пусто["начали"] is False
     assert пусто["фото"] == 0 and пусто["видео"] is False and пусто["готово"] is False
-    assert "Кнопки" in пусто["не_отмечено"]
 
     with движок.begin() as conn:
-        conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video, checks) "
-                             "VALUES ('ABCD12', 'f1||f2', NULL, '{\"keys\": true}')"))
+        conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
+                             "VALUES ('ABCD12', 'f1||f2', NULL)"))
     серёдка = k.get("/api/kiosk/media/ABCD12", headers=H).json()
     assert серёдка["фото"] == 2 and серёдка["видео"] is False and серёдка["готово"] is False
-    assert "Кнопки" not in серёдка["не_отмечено"] and "Вибрация" in серёдка["не_отмечено"]
 
-    отметки = json.dumps({k_: True for k_, _, _ in
-                          __import__("pintel_core.external.ocenka_media", fromlist=["x"]).ПУНКТЫ})
     with движок.begin() as conn:
-        conn.execute(sqltext("UPDATE kiosk_media SET photos = 'f1||f2||f3', video = 'v1', "
-                             "checks = :c WHERE code = 'ABCD12'"), {"c": отметки})
+        conn.execute(sqltext("UPDATE kiosk_media SET photos = 'f1||f2||f3', video = 'v1' "
+                             "WHERE code = 'ABCD12'"))
     готово = k.get("/api/kiosk/media/ABCD12", headers=H).json()
     assert готово["готово"] is True and готово["фото"] == 3 and готово["видео"] is True
+    # Про проверки руками сервер не рассказывает вовсе: их отмечают на экране программы.
+    # Полям в ответе остаётся сказать сборкам до doctor-64 «не держи сделку из-за них».
+    assert готово["диагностика_видна"] is False and готово["не_отмечено"] == []
 
     # чужой токен внутрь не пускают: по коду обмена видно, что происходит на точке
     assert k.get("/api/kiosk/media/ABCD12", headers={"X-Kiosk-Token": "pk_wrong"}).status_code == 401
 
-    # на точке может работать обработчик прежней версии — тогда колонки отметок в таблице
-    # ещё нет. Запрос не должен падать целиком: фото и видео видно, а про диагностику мы
-    # честно говорим «не вижу», а не «пройдена» и не «не пройдена».
+    # В таблице обмена может не быть колонки отметок вовсе (она нужна только точкам со
+    # старой сборкой). Запрос не должен падать целиком: фото и видео видно по-прежнему.
     старый = create_engine(f"sqlite:///{tmp_path}/старый.db", future=True)
     with старый.begin() as conn:
         conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
@@ -780,5 +778,4 @@ def test_the_kiosk_can_see_what_reached_the_bot(app, monkeypatch, tmp_path):
                              "VALUES ('ABCD12', 'f1||f2||f3', 'v1')"))
     monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: старый)
     без_колонки = k.get("/api/kiosk/media/ABCD12", headers=H).json()
-    assert без_колонки["известно"] is True and без_колонки["диагностика_видна"] is False
-    assert без_колонки["не_отмечено"] == [] and без_колонки["готово"] is True
+    assert без_колонки["известно"] is True and без_колонки["готово"] is True

@@ -29,6 +29,9 @@ from ..models import Point, Setting
     "keep_days": 90,
     "reference_keep": 500,
     "phone_test_port": 8765,
+    # Сколько часов проверка того же телефона считается свежей и берётся готовой вместо
+    # повторного чтения по кабелю. 0 — всегда читать заново.
+    "reuse_hours": 6,
     # проверки
     "sickw": True,
     "sickw_services_sealed": [147],

@@ -119,3 +119,17 @@ def test_sealed_receipt_says_the_box_was_not_opened():
     assert "Запечатанный аппарат" in txt and "кабелем не читался" in txt
     assert "по кабелю" not in txt and "Коробка не вскрыта" in txt
     assert "iPhone 15 Pro" in txt and "Not Activated" in txt and "256 ГБ" in txt
+
+
+def test_the_receipt_says_when_the_check_was_not_repeated():
+    """Проверку могли взять прошлую — на бумаге, которую клиент уносит, это должно быть
+    написано.
+
+    Иначе чек выглядит как результат чтения, сделанного при клиенте, а данные в нём — от
+    прошлого визита того же телефона."""
+    rep = _отчёт()
+    rep["повторная_проверка"] = {"словами": "сегодня в 13:20, 40 мин назад", "возраст_мин": 40,
+                                 "сверка": "сошлась"}
+    txt = receipt.html(СДЕЛКА, rep)
+    assert "сегодня в 13:20, 40 мин назад" in txt and "не перечитывали" in txt
+    assert "не перечитывали" not in receipt.html(СДЕЛКА, _отчёт())

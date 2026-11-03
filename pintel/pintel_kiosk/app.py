@@ -200,6 +200,7 @@ class KioskWindow(QMainWindow):
         self.s_work.новый_код.connect(self.новый_код_медиа)
         self.s_work.новый_тест.connect(self.новый_код_теста)
         self.s_work.пропустить_тест.connect(self.тест_не_будет)
+        self.s_work.перепроверить.connect(self.перепроверить_телефон)
         # Результат теста приходит из потока мини-сервера, а не из потока окна: сигнал
         # переносит его в поток Qt сам, трогать виджеты из чужого потока нельзя.
         self.тест_приехал.connect(self._тест_с_телефона)
@@ -508,17 +509,21 @@ class KioskWindow(QMainWindow):
                 self.s_work.set_trouble("Телефон отключили. Подключите снова — проверка начнётся заново.")
                 self.state = "work"
 
-    def start_check(self):
+    def start_check(self, заново=False):
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()
             self.pipeline.wait(3000)
         self.state = "scanning"
         self.wait_unplug = True
-        self.s_work.set_trouble("Не отключайте кабель. Обычно это занимает около минуты.")
-        self.pipeline = Pipeline(self.cfg, self.client, self)
+        self.s_work.set_trouble("Не отключайте кабель. Обычно это занимает около минуты."
+                                if заново else
+                                "Не отключайте кабель. Смотрим, не проверяли ли этот телефон "
+                                "только что.")
+        self.pipeline = Pipeline(self.cfg, self.client, self, заново=заново)
         self.pipeline.status.connect(self.on_link_status)
         self.pipeline.step.connect(self.s_work.set_step)
         self.pipeline.apple_prompt.connect(self.s_work.show_prompt)
+        self.pipeline.прошлая.connect(self.прошлая_проверка)
         self.pipeline.done.connect(self.on_done)
         self.pipeline.history.connect(self.on_history)
         self.pipeline.failed.connect(self.on_failed)
@@ -532,6 +537,28 @@ class KioskWindow(QMainWindow):
             if self.state == "work":
                 self.s_work.показать(result["report"])
                 self._классифицировать(result["report"])
+
+    def прошлая_проверка(self, отметка):
+        """Проверку взяли готовой: телефон кабелем не перечитывали.
+
+        Писать об этом в журнал обязательно: по нему потом разбирают, почему у сделки
+        отчёт получасовой давности, и была ли сверка с живым телефоном."""
+        log_line("прошлая проверка: " + str(отметка.get("словами") or "")
+                 + "; сверка: " + str(отметка.get("сверка") or "—"))
+        self.s_work.set_trouble("Эту модель проверяли " + str(отметка.get("словами") or "недавно")
+                                + " — взяли готовую проверку. Нужно перечитать — кнопка слева.")
+
+    def перепроверить_телефон(self):
+        """«Проверить телефон заново»: прошлой проверке не верим, читаем аппарат с нуля."""
+        if self.state not in ("work", "scanning") or self.анкета.get("состояние") == "новый":
+            return
+        if self.кабель != READY:
+            self.s_work.сказать("Телефона нет на кабеле — перечитывать нечего. Подключите его.")
+            return
+        log_line("сотрудник просит перечитать телефон заново")
+        self.last = None
+        self.s_work.снова_проверка()
+        self.start_check(заново=True)
 
     def on_link_status(self, state, human):
         if state != READY:
@@ -658,6 +685,7 @@ class KioskWindow(QMainWindow):
         магазин = self.cfg.get("point_id")        # он же id магазина в Оценке
         тест = поля.get("тест") or self.тест_телефона
         тест_пропущен = поля.get("тест_пропущен") or ""
+        ручная = поля.get("ручная") or {}
         тест_строкой = (f"Тест на телефоне пропущен: {тест_пропущен}" if тест_пропущен
                         else phonetest.словами(тест))
         состояние = self.анкета.get("состояние") or "норма"
@@ -704,6 +732,9 @@ class KioskWindow(QMainWindow):
             # тест на телефоне клиента: отметки едут в сделку как есть, их читает бот
             данные["тест_телефона"] = dict(тест)
             данные["тест_пропущен"] = тест_пропущен
+            # ручные проверки сотрудника — оттуда же, с экрана кассы. Бот больше не
+            # спрашивает их кнопками: он кладёт в карточку то, что отмечено здесь.
+            данные["ручная_диагностика"] = dict(ручная)
             посылка = ocenka.посылка(данные, код, точка=cfg.get("point") or "")
             return ocenka_tg.отправить(cfg["ocenka_bot_token"], cfg["ocenka_chat_id"], посылка)
 
@@ -724,7 +755,7 @@ class KioskWindow(QMainWindow):
                                  ocenka_media.ссылка(self.cfg["ocenka_bot"], self.код_медиа))
         self.s_work.медиа.setText("Сканируйте телефоном. Бот проведёт по шагам: фото с *#06#, "
                                   "лицевая, задняя, потом видео — и примет только то, что "
-                                  "нужно на шаге. Последним — ручная диагностика кнопками. "
+                                  "нужно на шаге. Проверки руками отмечают здесь, на экране. "
                                   "Кто прислал — тот и оценщик.")
         self._медиа_спрашиваем = False
         if self.client.enabled:
@@ -872,27 +903,36 @@ class KioskWindow(QMainWindow):
         записан и стоит автоцены: сделку будет оценивать человек."""
         кто = self.cfg.get("staff_name") or self.cfg.get("point") or "сотрудник"
         self.s_work.set_тест({}, пропущен=f"телефон не в сети кассы, проверил {кто}")
-        self.s_work.правая.setCurrentIndex(ui_deal.СТР_МЕДИА)
+        self.s_work.правая.setCurrentIndex(ui_deal.СТР_РУЧНАЯ)
         log_line("тест на телефоне пропущен сотрудником")
 
     def отправка_не_удалась(self, текст):
         self.s_work.занято("")
         self.s_work.сказать("Не ушло: " + текст)
 
-    def сделка_ушла(self, итог):
+    def _чек_данные(self, номер: str = "") -> dict:
+        """Что печатается в чеке клиенту — из того, что уже есть на экране.
+
+        Собрано отдельным методом, потому что чек нужен ДО отправки в Оценку: клиент стоит
+        у кассы и уходит с бумагой, а ждать создания сделки ради номера незачем — номер в
+        чеке и так наш, это код обмена с того же экрана, по которому бот создаст сделку.
+        """
         поля = self.s_work.данные()
+        сервер = (self.last or {}).get("server") or {}
+        return {"номер": номер or self.код_медиа,
+                "клиент": поля.get("имя"), "телефон": поля.get("телефон"),
+                "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
+                "коробка": поля.get("коробка"), "шнур": поля.get("шнур"),
+                "комментарий": поля.get("комментарий"), "фирма": self._фирма(),
+                "состояние": ocenka.состояние_словами(self.анкета.get("состояние")),
+                "статус": self.статус_сделки,
+                # чек живёт и на домене: QR на бумаге ведёт на ту же страницу
+                "ссылка": сервер.get("ссылка_чека") or ""}
+
+    def сделка_ушла(self, итог):
         self.s_work.занято("")
         код = итог.get("код") or self.код_медиа
-        сервер = (self.last or {}).get("server") or {}
-        self.сделка = {"номер": код,
-                       "клиент": поля.get("имя"), "телефон": поля.get("телефон"),
-                       "сотрудник": self.cfg.get("staff_name") or "", "точка": self.cfg.get("point") or "",
-                       "коробка": поля.get("коробка"), "шнур": поля.get("шнур"),
-                       "комментарий": поля.get("комментарий"), "фирма": self._фирма(),
-                       "состояние": ocenka.состояние_словами(self.анкета.get("состояние")),
-                       "статус": self.статус_сделки,
-                       # чек живёт и на домене: QR на бумаге ведёт на ту же страницу
-                       "ссылка": сервер.get("ссылка_чека") or ""}
+        self.сделка = self._чек_данные(код)
         self._дослать_на_сервер({"чек": dict(self.сделка)})
         self.медиа_опрос.stop()                 # карточка ушла, следить больше не за чем
         self.s_work.ушло(код)
@@ -905,12 +945,17 @@ class KioskWindow(QMainWindow):
                 "бин": c.get("company_bin")}
 
     def напечатать_чек(self):
-        """Чек A4 клиенту: складываем страницу и открываем — печать из окна просмотра."""
+        """Чек A4 клиенту: складываем страницу и открываем — печать из окна просмотра.
+
+        Печатать можно, как только фото и видео дошли до бота, — не дожидаясь отправки в
+        Оценку: клиенту нужна бумага, а не наш порядок шагов. Если сделка ещё не ушла, тот
+        же чек дописывается в оценку на сервере, чтобы он не остался только на бумаге."""
         from pintel_core import receipt
         rep = (self.last or {}).get("report") or {}
-        путь = os.path.join(data_dir(), "out", f"чек_{self.сделка.get('номер') or 'без-номера'}.html")
+        сделка = self.сделка or self._чек_данные()
+        путь = os.path.join(data_dir(), "out", f"чек_{сделка.get('номер') or 'без-номера'}.html")
         with open(путь, "w", encoding="utf-8") as f:
-            f.write(receipt.html(self.сделка, rep))
+            f.write(receipt.html(сделка, rep))
         try:
             if hasattr(os, "startfile"):
                 os.startfile(путь)                     # Windows: откроется браузер, дальше Ctrl+P
@@ -920,6 +965,14 @@ class KioskWindow(QMainWindow):
         except Exception as e:                         # noqa: BLE001
             log_line(f"чек не открылся: {e}")
         self.s_work.итог_текст.setText("Чек сохранён: " + путь)
+        if not self.s_work.отправлено:
+            # Сделки ещё нет, а чек уже напечатан — пусть он будет и в оценке на сервере:
+            # иначе в общей базе останется проверка без того, что клиент унёс с собой.
+            self._дослать_на_сервер({"чек": dict(сделка)})
+            self.s_work.сказать("Чек открыт для печати. Сделку в Оценку ещё не отправили.",
+                                беда=False)
+        log_line(f"чек напечатан до отправки: {путь}" if not self.s_work.отправлено
+                 else f"чек напечатан: {путь}")
 
     def go_home(self):
         phoneweb.закрыть()                      # ссылка из прошлой сделки больше не работает

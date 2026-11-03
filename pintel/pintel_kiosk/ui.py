@@ -457,11 +457,17 @@ class PopNumber(QWidget):
 
 
 class QrBlock(QWidget):
-    """QR 200×200 в белой рамке с подписью. Умеет один раз «всплыть» снизу (0,7 с, задержка 0,6 с)."""
+    """QR в белой рамке с подписью. Умеет один раз «всплыть» снизу (0,7 с, задержка 0,6 с).
 
-    def __init__(self):
+    `сторона` — размер самого кода. По умолчанию 200: столько занимает QR на экране сделки.
+    Карточке теста на телефоне клиента нужен поменьше: там под кодом ещё семь строк
+    результата, и в полный размер содержимое карточки не помещается.
+    """
+
+    def __init__(self, сторона=200):
         super().__init__()
-        self.setFixedSize(216, 246)
+        self.сторона = int(сторона)
+        self.setFixedSize(self.сторона + 16, self.сторона + 46)
         self.pm, self.caption = None, ""
         self.dy, self.alpha, self.pending = 0.0, 1.0, False
         self.font_ = font(FONT_TEXT, 14, W.Bold, 2.0)
@@ -473,7 +479,8 @@ class QrBlock(QWidget):
         self.anim.valueChanged.connect(self._step)
 
     def set(self, pm, caption, rise):
-        self.pm = pm.scaled(200, 200, Qt.KeepAspectRatio, Qt.FastTransformation) if pm else None
+        self.pm = pm.scaled(self.сторона, self.сторона, Qt.KeepAspectRatio,
+                            Qt.FastTransformation) if pm else None
         self.caption = caption
         self.pending = bool(rise)
         self.dy, self.alpha = (18.0, 0.0) if rise else (0.0, 1.0)
@@ -499,11 +506,14 @@ class QrBlock(QWidget):
         p.translate(0, self.dy)
         p.setPen(QPen(QColor(C["border"]), 1))
         p.setBrush(QColor("white"))
-        p.drawRoundedRect(QRectF(0.5, 0.5, 215, 215), 18, 18)
-        p.drawPixmap(8 + (200 - self.pm.width()) // 2, 8 + (200 - self.pm.height()) // 2, self.pm)
+        рамка = self.сторона + 15
+        p.drawRoundedRect(QRectF(0.5, 0.5, рамка, рамка), 18, 18)
+        p.drawPixmap(8 + (self.сторона - self.pm.width()) // 2,
+                     8 + (self.сторона - self.pm.height()) // 2, self.pm)
         p.setFont(self.font_)
         p.setPen(QColor(C["muted"]))
-        p.drawText(QRectF(0, 224, 216, 20), Qt.AlignHCenter | Qt.AlignVCenter, self.caption)
+        p.drawText(QRectF(0, self.сторона + 24, self.сторона + 16, 20),
+                   Qt.AlignHCenter | Qt.AlignVCenter, self.caption)
 
 
 # ---------- каркас ----------

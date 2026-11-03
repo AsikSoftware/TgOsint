@@ -115,7 +115,7 @@ class ПунктРяд(QFrame):
         # MinimumExpanding: свободную высоту карточки забирают сами ряды, а не пустота под
         # ними — иначе длинная подпись («Детали и обслуживание…») обрезается на первой строке
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.MinimumExpanding)
-        self.setMinimumHeight(46)
+        self.setMinimumHeight(54)
         ряд = QHBoxLayout(self)
         ряд.setContentsMargins(12, 5, 12, 5)
         ряд.setSpacing(10)
@@ -127,7 +127,7 @@ class ПунктРяд(QFrame):
         текст.setSpacing(0)
         self.имя = label(имя, font_=font(FONT_TEXT, 18, W.Bold))
         текст.addWidget(self.имя)
-        текст.addWidget(label(подробно, "muted", wrap=True, font_=font(FONT_TEXT, 14)))
+        текст.addWidget(label(подробно, "muted", wrap=True, font_=font(FONT_TEXT, 13)))
         ряд.addWidget(self.значок, 0, Qt.AlignTop)
         ряд.addLayout(текст, 1)
         self.set(None)
@@ -206,9 +206,11 @@ class WorkScreen(Screen):
 
         тело = QHBoxLayout()
         тело.setSpacing(22)
-        тело.addWidget(self._проверка(), 105)
-        тело.addWidget(self._сделка(), 100)
-        тело.addWidget(self._справа(), 80)
+        # Правая колонка шире прежнего: в ней живут восемь строк проверок руками с
+        # подсказками, и на узкой колонке подписи обрезались на полуслове.
+        тело.addWidget(self._проверка(), 100)
+        тело.addWidget(self._сделка(), 92)
+        тело.addWidget(self._справа(), 93)
         self.root.addSpacing(18)
         self.root.addLayout(тело, 1)
 

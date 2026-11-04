@@ -535,19 +535,28 @@ async def _ожидают() -> list:
 
 
 async def _взять(код: str):
-    """Забрать посылку себе — одним запросом, чтобы её не взяли дважды.
+    """Забрать посылку себе — так, чтобы её не взяли дважды. → текст посылки или None.
 
-    `parcel = NULL` в том же UPDATE и есть замок: второй заход по тому же коду уже
-    ничего не найдёт. Сделка дороже посылки: лучше потерять её и попросить отправить
-    заново, чем создать две.
+    Строку сначала запираем (`SELECT … FOR UPDATE`), читаем посылку и в той же
+    транзакции очищаем. Второй заход по тому же коду уже ничего не найдёт: `parcel`
+    пуст. Сделка дороже посылки — лучше потерять её и попросить отправить заново, чем
+    создать две.
+
+    Одним `UPDATE … RETURNING parcel` это не делается, хотя и просится: Postgres отдаёт
+    в RETURNING **новое** значение колонки, то есть уже очищенное. Так и было написано
+    сначала — посылки исчезали, а сделки не появлялись, и в журнале было пусто.
     """
     async with async_session_factory() as session:
-        строка = (await session.execute(text(
-            "UPDATE kiosk_media SET parcel = NULL, parcel_error = NULL "
-            "WHERE code = :c AND parcel IS NOT NULL AND device_id IS NULL "
-            "RETURNING parcel"), {"c": код})).scalar()
-        await session.commit()
-    return строка
+        async with session.begin():
+            посылка = (await session.execute(text(
+                "SELECT parcel FROM kiosk_media "
+                "WHERE code = :c AND parcel IS NOT NULL AND device_id IS NULL "
+                "FOR UPDATE"), {"c": код})).scalar()
+            if посылка:
+                await session.execute(text(
+                    "UPDATE kiosk_media SET parcel = NULL, parcel_error = NULL "
+                    "WHERE code = :c"), {"c": код})
+    return посылка
 
 
 async def _сказать_о_беде(код: str, почему: str) -> None:

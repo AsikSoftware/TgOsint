@@ -86,6 +86,9 @@ class Сессия:
     async def __aexit__(self, *a):
         return False
 
+    def begin(self):
+        return self                       # `async with session.begin()` — тот же объект
+
     async def execute(self, запрос, параметры=None):
         текст = " ".join(str(запрос).split())
         self.журнал.append((текст, dict(параметры or {})))
@@ -210,14 +213,28 @@ def test_the_deal_is_still_made_when_the_employee_cannot_be_reached(бот_мо�
     assert созданы == ["ABCD12"] and беды == []
 
 
-def test_the_claim_is_one_query_and_leaves_nothing_behind(бот_модуль, monkeypatch):
-    """«Забрать себе» — один запрос: он же и замок, и очистка прошлой ошибки."""
+def test_the_parcel_is_locked_read_and_only_then_cleared(бот_модуль, monkeypatch):
+    """«Забрать себе» — запереть строку, прочитать посылку и очистить её в той же транзакции.
+
+    Одним `UPDATE … RETURNING parcel` это не делается, хотя и просится: Postgres отдаёт в
+    RETURNING **новое** значение, то есть уже очищенное. Ровно так и было написано
+    сначала — на тестовом контуре посылки исчезали, сделки не появлялись, а в журнале
+    было пусто. Поэтому здесь проверяется сам порядок: сначала чтение под замком, потом
+    очистка.
+    """
     журнал = []
     monkeypatch.setattr(бот_модуль, "async_session_factory",
-                        lambda: Сессия(журнал, lambda т, п: ПОСЫЛКА))
+                        lambda: Сессия(журнал, lambda т, п: ПОСЫЛКА if т.startswith("SELECT") else None))
     assert asyncio.run(бот_модуль._взять("ABCD12")) == ПОСЫЛКА
-    запрос = журнал[0][0]
-    assert запрос.startswith("UPDATE kiosk_media SET parcel = NULL")
-    assert "parcel_error = NULL" in запрос, "старая ошибка не должна пережить новую посылку"
-    assert "parcel IS NOT NULL" in запрос and "device_id IS NULL" in запрос
-    assert "RETURNING parcel" in запрос
+    читаем, чистим = журнал[0][0], журнал[1][0]
+    assert читаем.startswith("SELECT parcel FROM kiosk_media") and читаем.endswith("FOR UPDATE")
+    assert "parcel IS NOT NULL" in читаем and "device_id IS NULL" in читаем
+    assert чистим.startswith("UPDATE kiosk_media SET parcel = NULL")
+    assert "parcel_error = NULL" in чистим, "старая ошибка не должна пережить новую посылку"
+
+    # посылки нет — и чистить нечего: лишний UPDATE затёр бы чужую ошибку
+    журнал.clear()
+    monkeypatch.setattr(бот_модуль, "async_session_factory",
+                        lambda: Сессия(журнал, lambda т, п: None))
+    assert asyncio.run(бот_модуль._взять("ABCD12")) is None
+    assert len(журнал) == 1

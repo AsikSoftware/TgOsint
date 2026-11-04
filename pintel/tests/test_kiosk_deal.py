@@ -73,6 +73,29 @@ def _медиа_собраны(окно):
                            "готово": True})
 
 
+def _через_бота(окно, monkeypatch):
+    """Сервер посылку не принял — касса уходит запасным путём, карточкой в Telegram.
+
+    Главный путь теперь другой: посылка идёт на наш сервер, он кладёт её в таблицу обмена,
+    и сделку создаёт сам бот. Но запасной обязан работать — им живут точки, у которых
+    сервера под рукой нет, — и тесты карточки смотрят именно на него.
+    """
+    monkeypatch.setattr(окно.client, "отправить_посылку",
+                        lambda код, посылка: {"принято": False, "почему": "в тесте сервера нет"})
+
+
+def _через_сервер(окно, monkeypatch):
+    """Главный путь: ловим посылку, которую касса отдаёт серверу. → куда она попала."""
+    поймано = {}
+
+    def принять(код, посылка):
+        поймано.update(код=код, посылка=посылка)
+        return {"принято": True}
+
+    monkeypatch.setattr(окно.client, "отправить_посылку", принять)
+    return поймано
+
+
 def _руками_отмечено(окно, **ответы):
     """Проверки руками отмечены на экране кассы — ещё один шлюз со своим тестом ниже."""
     from pintel_core.external import ocenka_media
@@ -294,6 +317,7 @@ def test_export_sends_the_payload_to_the_bot(окно, monkeypatch):
         ушло.update(url=url, data=data, files=files)
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
 
+    _через_бота(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", фейк)
     окно.s_work._отправить()
     окно.tasks[-1].wait(5000)                      # отправка идёт в отдельном потоке
@@ -337,6 +361,7 @@ def test_sealed_export_sends_her_new_phone_fields(окно, monkeypatch):
         ушло.update(url=url, data=data, files=files)
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
 
+    _через_бота(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", фейк)
     окно.s_work._отправить()
     окно.tasks[-1].wait(5000)
@@ -416,6 +441,7 @@ def test_a_failed_phone_test_is_seen_and_goes_into_the_deal(окно, monkeypatc
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
     ушло = {}
+    _через_бота(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
                         (ушло.update(files=files),
                          httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))[1])
@@ -441,6 +467,7 @@ def test_the_phone_test_can_be_skipped_but_it_is_written_down(окно, monkeypa
     окно.тест_не_будет()
     assert окно.s_work.b_отправить.isEnabled()              # пропуск отмечен — работать можно
     ушло = {}
+    _через_бота(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
                         (ушло.update(files=files),
                          httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))[1])
@@ -527,6 +554,7 @@ def test_the_receipt_carries_a_link_to_itself(окно, monkeypatch):
                         lambda ev_id, report, snapshot_patch=None: дослано.update(id=ev_id, report=report))
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
+    _через_бота(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
                         httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))
     окно.s_work._отправить()
@@ -635,6 +663,7 @@ def test_the_deal_carries_the_shop_id_of_ocenka(окно, monkeypatch):
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
     ушло = {}
+    _через_бота(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
                         (ушло.update(files=files),
                          httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))[1])
@@ -755,6 +784,7 @@ def test_the_marks_go_to_the_bot_with_the_deal(окно, monkeypatch):
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
     ушло = {}
+    _через_бота(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None: (
         ушло.update(files=files) or httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})))
     окно.s_work._отправить()
@@ -894,3 +924,105 @@ def test_a_real_click_on_the_row_marks_it(окно):
     хост.close()
     экран.setParent(None)                  # вернуть экран окну: дальше его закрывает фикстура
     окно.stack.addWidget(экран)
+
+
+def test_the_deal_goes_through_the_server_and_waits_for_its_number(окно, monkeypatch):
+    """Главный путь: посылка уходит на наш сервер, а сделку создаёт бот — сам.
+
+    Так было не всегда, и за это заплатили на точке. Раньше касса слала карточку файлом в
+    чат Telegram, и бот получал посылку ТОЛЬКО когда кто-то нажимал под ней кнопку: свои
+    исходящие сообщения бот не видит. Значит, сделка зависела от чата, а чат отказывал —
+    «chat not found», «bot was blocked by the user», — и тогда создать её было нельзя
+    вовсе: сотрудник стоял с телефоном клиента в руках и ничего не мог сделать.
+    """
+    import httpx
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001"})
+    _чистый(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    поймано = _через_сервер(окно, monkeypatch)
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("в чат слать было незачем"))
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    QApplication.processEvents()                   # итог приходит сигналом в главный поток
+
+    assert поймано.get("код") == окно.код_медиа, "посылка не ушла: " + окно.s_work.ошибка.text()
+    assert поймано["посылка"]["сделка"]["model"] == "iPhone 14 Pro"
+    assert поймано["посылка"]["клиент"]["телефон"] == "+77058837953"
+    # номера сделки ещё нет: её создаёт бот, и касса честно говорит, что ждёт его
+    assert окно.s_work.отправлено and "создаётся" in окно.s_work.итог_текст.text()
+
+    # бот создал — номер приходит тем же опросом, которым касса следила за медиа
+    окно._медиа_спросили({"известно": True, "начали": True, "фото": 3, "видео": True,
+                          "готово": True, "сделка": 7311, "ошибка": ""})
+    assert "7311" in окно.s_work.итог_текст.text()
+
+
+def test_when_the_bot_cannot_create_the_deal_the_point_is_told(окно, monkeypatch):
+    """Сделка не создалась — на экране причина и возможность отправить заново.
+
+    Молчать здесь нельзя: написано «отправлено», сотрудник ждёт номера, а номера не
+    будет — и узнает он об этом, когда клиент уже ушёл."""
+    import httpx
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001"})
+    _чистый(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    _через_сервер(окно, monkeypatch)
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("в чат слать было незачем"))
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    QApplication.processEvents()
+
+    окно._медиа_спросили({"известно": True, "начали": True, "фото": 3, "видео": True,
+                          "готово": True, "сделка": None, "ошибка": "Не хватает: видео"})
+    assert "видео" in окно.s_work.итог_текст.text()
+    assert окно.s_work.b_отправить.isEnabled(), "отправить заново должно быть можно"
+
+
+def test_without_the_server_the_card_still_goes_to_the_bot(окно, monkeypatch):
+    """Сервера нет — касса шлёт карточку с кнопкой, как раньше.
+
+    Это запасной путь, и он обязан работать: точка не должна останавливаться из-за того,
+    что наш сервер недоступен."""
+    import httpx
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001"})
+    _чистый(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    ушло = {}
+    monkeypatch.setattr(окно.client, "отправить_посылку",
+                        lambda код, посылка: {"принято": False, "почему": "сервер не ответил"})
+    monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None: (
+        ушло.update(url=url, data=data),
+        httpx.Response(200, json={"ok": True, "result": {"message_id": 42}}))[1])
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    QApplication.processEvents()
+    assert ушло and "sendDocument" in ушло["url"]
+    assert "Telegram" in окно.s_work.итог_текст.text(), "сотрудник должен знать, что ждёт кнопки"
+
+
+def test_when_neither_path_works_both_reasons_are_on_the_screen(окно, monkeypatch):
+    """Не прошло ни там, ни там — сотрудник читает обе причины, а не одну из них.
+
+    По одной причине непонятно, что чинить: сервер на точке или бота."""
+    import httpx
+    from pintel_core.external import ocenka_tg
+    окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
+                     "ocenka_chat_id": "-1001"})
+    _чистый(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    monkeypatch.setattr(окно.client, "отправить_посылку",
+                        lambda код, посылка: {"принято": False, "почему": "сервер не ответил"})
+    monkeypatch.setattr(ocenka_tg, "отправить", lambda *a, **k: (_ for _ in ()).throw(
+        ocenka_tg.ОшибкаОтправки("Telegram отказал: Forbidden: bot was blocked by the user")))
+    окно.s_work._отправить()
+    окно.tasks[-1].wait(5000)
+    QApplication.processEvents()
+    текст = окно.s_work.ошибка.text()
+    assert "сервер не ответил" in текст and "blocked" in текст

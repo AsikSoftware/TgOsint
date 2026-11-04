@@ -11,7 +11,8 @@ import math
 import os
 import time
 
-from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer,
+                            QVariantAnimation, Signal)
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -460,15 +461,28 @@ class PopNumber(QWidget):
 class QrBlock(QWidget):
     """QR в белой рамке с подписью. Умеет один раз «всплыть» снизу (0,7 с, задержка 0,6 с).
 
-    `сторона` — размер самого кода. По умолчанию 200: столько занимает QR на экране сделки.
-    Карточке теста на телефоне клиента нужен поменьше: там под кодом ещё семь строк
-    результата, и в полный размер содержимое карточки не помещается.
+    `сторона` — желаемый размер кода. По умолчанию 200: столько занимает QR на экране
+    сделки. Карточке теста на телефоне клиента нужен поменьше: там под кодом ещё семь
+    строк результата, и в полный размер содержимое карточки не помещается.
+
+    Размер не жёсткий, а предельный: под давлением QR ужимается (до `МИНИМУМ`), и сам
+    решает, насколько. Так было не всегда, и платили за это на точке. Жёсткий размер
+    ужиматься отказывается, и когда содержимому карточки переставало хватать высоты —
+    из-за длинного текста или просто более крупного системного шрифта, — раскладка Qt
+    укладывала следующие подписи ПОВЕРХ него: код и ссылка оказывались написаны по
+    самому коду. Ужавшийся QR читается телефоном, текст по тексту — не читается никем.
     """
+
+    # До этого размера QR ужимается молча: ссылка в нём короткая (t.me с кодом из шести
+    # знаков либо адрес теста), это 29–37 модулей, то есть около трёх пикселей на модуль —
+    # телефон наводится с ладони. Меньше — уже наугад, и тогда пусть лучше станет тесно.
+    МИНИМУМ = 100
 
     def __init__(self, сторона=200):
         super().__init__()
         self.сторона = int(сторона)
-        self.setFixedSize(self.сторона + 16, self.сторона + 46)
+        self.setMaximumSize(self.сторона + 16, self.сторона + 46)
+        self.setMinimumSize(self.МИНИМУМ + 16, self.МИНИМУМ + 46)
         self.pm, self.caption = None, ""
         self.dy, self.alpha, self.pending = 0.0, 1.0, False
         self.font_ = font(FONT_TEXT, 14, W.Bold, 2.0)
@@ -498,22 +512,30 @@ class QrBlock(QWidget):
         self.dy, self.alpha = 18 * (1 - v), v
         self.update()
 
+    def sizeHint(self):
+        return QSize(self.сторона + 16, self.сторона + 46)
+
+    def _сторона_сейчас(self) -> int:
+        """Сколько места под сам код есть прямо сейчас: ширина и высота минус поля."""
+        return max(self.МИНИМУМ, min(self.width() - 16, self.height() - 46))
+
     def paintEvent(self, e):
         if self.pm is None:
             return
+        бок = self._сторона_сейчас()
+        код = self.pm.scaled(бок, бок, Qt.KeepAspectRatio, Qt.FastTransformation)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setOpacity(self.alpha)
         p.translate(0, self.dy)
         p.setPen(QPen(QColor(C["border"]), 1))
         p.setBrush(QColor("white"))
-        рамка = self.сторона + 15
+        рамка = бок + 15
         p.drawRoundedRect(QRectF(0.5, 0.5, рамка, рамка), 18, 18)
-        p.drawPixmap(8 + (self.сторона - self.pm.width()) // 2,
-                     8 + (self.сторона - self.pm.height()) // 2, self.pm)
+        p.drawPixmap(8 + (бок - код.width()) // 2, 8 + (бок - код.height()) // 2, код)
         p.setFont(self.font_)
         p.setPen(QColor(C["muted"]))
-        p.drawText(QRectF(0, self.сторона + 24, self.сторона + 16, 20),
+        p.drawText(QRectF(0, бок + 24, бок + 16, 20),
                    Qt.AlignHCenter | Qt.AlignVCenter, self.caption)
 
 

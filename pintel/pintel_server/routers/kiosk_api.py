@@ -111,6 +111,26 @@ def media(code: str, kiosk: Kiosk = Depends(current_kiosk)):
     return media_service.состояние(code)
 
 
+class ПосылкаIn(BaseModel):
+    посылка: dict
+
+
+@router.post("/media/{code}/parcel")
+def media_parcel(code: str, body: ПосылкаIn, kiosk: Kiosk = Depends(current_kiosk)):
+    """Сделка с точки — боту, минуя чат Telegram.
+
+    Раньше касса слала посылку файлом в чат, и бот получал её только когда кто-то нажимал
+    кнопку под карточкой. Значит, сделка зависела от того, доступен ли чат, — а он
+    отказывал («chat not found», «bot was blocked by the user»), и тогда сделку нельзя
+    было создать вовсе. Теперь посылка ложится в таблицу обмена, бот забирает её сам.
+
+    Отказ отдаём словами: по нему касса уходит в запасной путь — ту самую карточку
+    с кнопкой, — и сотрудник не остаётся ни с чем.
+    """
+    from ..services import ocenka_media as media_service
+    return media_service.принять(code, body.посылка)
+
+
 class LogsIn(BaseModel):
     lines: list[str]
 

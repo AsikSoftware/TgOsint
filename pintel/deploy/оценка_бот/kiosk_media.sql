@@ -27,3 +27,17 @@ ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS checks TEXT;
 
 CREATE INDEX IF NOT EXISTS kiosk_media_code_idx ON kiosk_media (code);
 CREATE INDEX IF NOT EXISTS kiosk_media_created_idx ON kiosk_media (created);
+
+-- Сделка приходит в эти колонки, а не кнопкой под карточкой в Telegram.
+-- Как было: программа слала посылку файлом в чат, и бот получал её ТОЛЬКО когда кто-то
+-- нажимал кнопку (свои исходящие сообщения бот не видит). Чат мог оказаться недоступен —
+-- «bot was blocked by the user», «chat not found», — и тогда сделку нельзя было создать
+-- вовсе: сотрудник стоял с телефоном клиента в руках. Теперь посылку кладёт сюда наш
+-- сервер (он рядом с этой базой), а бот забирает её отсюда и создаёт сделку сам.
+ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS parcel TEXT;          -- JSON посылки, ждёт бота
+ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS parcel_at TIMESTAMPTZ; -- когда положили
+ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS parcel_error TEXT;    -- почему не создалась — видно на кассе
+
+-- бот спрашивает её часто: «есть ли непринятые посылки»
+CREATE INDEX IF NOT EXISTS kiosk_media_parcel_idx ON kiosk_media (parcel_at)
+    WHERE parcel IS NOT NULL;

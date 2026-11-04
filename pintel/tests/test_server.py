@@ -779,3 +779,77 @@ def test_the_kiosk_can_see_what_reached_the_bot(app, monkeypatch, tmp_path):
     monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: старый)
     без_колонки = k.get("/api/kiosk/media/ABCD12", headers=H).json()
     assert без_колонки["известно"] is True and без_колонки["готово"] is True
+
+
+def test_the_deal_from_the_point_goes_to_the_bot_through_us(app, monkeypatch, tmp_path):
+    """Сделку с точки сервер кладёт в таблицу обмена — бот заберёт её оттуда сам.
+
+    Зачем так. Раньше касса слала посылку файлом в чат Telegram, и бот получал её ТОЛЬКО
+    когда кто-то нажимал кнопку под карточкой: свои исходящие сообщения бот не видит.
+    Значит, сделка зависела от того, доступен ли чат, — а он отказывал («chat not found»,
+    «bot was blocked by the user»), и тогда создать её было нельзя вовсе.
+
+    Каждый отказ отдаём словами: по ним касса решает, уходить ли в запасной путь, и
+    «не принято» без причины там хуже, чем ничего.
+    """
+    from sqlalchemy import create_engine, text as sqltext
+    from pintel_server.services import ocenka_import, points as points_service
+
+    monkeypatch.setattr(points_service, "магазины_оценки",
+                        lambda: [{"id": 14, "litera": "U", "shop_name": "16/38 Pintel"}])
+    db = SessionLocal()
+    points_service.синхронизировать(db)
+    токен = db.get(Point, 14).token
+    db.close()
+    k = TestClient(app)
+    H = {"X-Kiosk-Token": токен, "X-Kiosk-Machine": "KASSA-14"}
+    посылка = {"версия": 1, "код": "ABCD12", "сделка": {"model": "iPhone 14 Pro"}}
+
+    движок = create_engine(f"sqlite:///{tmp_path}/ocenka_parcel.db", future=True)
+    with движок.begin() as conn:
+        conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
+                             "done INTEGER, device_id INTEGER, parcel TEXT, parcel_at TEXT, "
+                             "parcel_error TEXT)"))
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: движок)
+
+    # медиа по коду не присылали — сделку боту не из чего собрать, и это сказано словами
+    нет = k.post("/api/kiosk/media/ABCD12/parcel", headers=H, json={"посылка": посылка}).json()
+    assert нет["принято"] is False and "медиа" in нет["почему"]
+
+    with движок.begin() as conn:
+        conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
+                             "VALUES ('ABCD12', 'f1||f2||f3', 'v1')"))
+    ответ = k.post("/api/kiosk/media/ABCD12/parcel", headers=H, json={"посылка": посылка}).json()
+    assert ответ["принято"] is True
+    with движок.connect() as conn:
+        лежит = conn.execute(sqltext("SELECT parcel FROM kiosk_media WHERE code = 'ABCD12'")).scalar()
+    assert json.loads(лежит)["сделка"]["model"] == "iPhone 14 Pro"
+    # касса видит по тому же адресу, что посылка у бота и ждёт своей очереди
+    assert k.get("/api/kiosk/media/ABCD12", headers=H).json()["посылка_ждёт"] is True
+
+    # чужой код в посылке не принимаем: иначе сделка уедет на другой телефон
+    чужая = k.post("/api/kiosk/media/ABCD12/parcel", headers=H,
+                   json={"посылка": {**посылка, "код": "ZZZZ99"}}).json()
+    assert чужая["принято"] is False and "код" in чужая["почему"]
+
+    # сделка уже создана — второй раз не кладём, но и не пугаем: отвечаем её номером
+    with движок.begin() as conn:
+        conn.execute(sqltext("UPDATE kiosk_media SET device_id = 7311 WHERE code = 'ABCD12'"))
+    снова = k.post("/api/kiosk/media/ABCD12/parcel", headers=H, json={"посылка": посылка}).json()
+    assert снова["принято"] is True and снова["сделка"] == 7311
+
+    # база без новых колонок (её ещё не обновили) — отказ словами, а не падение: касса
+    # по нему уходит в запасной путь и шлёт карточку в чат, как раньше
+    старая = create_engine(f"sqlite:///{tmp_path}/ocenka_old.db", future=True)
+    with старая.begin() as conn:
+        conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
+                             "done INTEGER, device_id INTEGER)"))
+        conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
+                             "VALUES ('ABCD12', 'f1||f2||f3', 'v1')"))
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: старая)
+    отказ = k.post("/api/kiosk/media/ABCD12/parcel", headers=H, json={"посылка": посылка}).json()
+    assert отказ["принято"] is False and отказ["почему"]
+
+    # чужой токен внутрь не пускают: посылка — это имя, телефон и аппарат клиента
+    assert k.post("/api/kiosk/media/ABCD12/parcel", headers={"X-Kiosk-Token": "pk_wrong"},
+                  json={"посылка": посылка}).status_code == 401

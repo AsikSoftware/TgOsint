@@ -18,6 +18,7 @@
 что дал слой вёрстки, и поэтому переживает любую правку текстов.
 """
 import os
+import re
 import tempfile
 
 import pytest
@@ -26,7 +27,7 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton    # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget    # noqa: E402
 
 from pintel_core import phonetest, reference                        # noqa: E402
 from pintel_core.analysis import report as report_mod               # noqa: E402
@@ -83,29 +84,41 @@ def _обрезано(w):
     return ""
 
 
+def _имя(w):
+    """Как назвать виджет в жалобе: подписью, если она есть, иначе породой."""
+    текст = w.text()[:26] if isinstance(w, (QLabel, QPushButton)) else ""
+    return текст or type(w).__name__
+
+
 def _замечания(корень):
-    """Все обрезанные подписи и все наезды соседей внутри экрана."""
+    """Все обрезанные подписи и все наезды соседей внутри экрана.
+
+    Наезды ищем среди ВСЕХ видимых виджетов, а не только подписей и кнопок. QR —
+    отдельный виджет со своей рисовкой, и именно он однажды оказался под текстом: код
+    сделки и ссылка были написаны прямо по коду. Для теста, знающего только QLabel, на
+    экране в тот момент всё было в порядке.
+    """
     QApplication.sendPostedEvents()
     if корень.layout() is not None:
         корень.layout().activate()
     QApplication.processEvents()
     беда = []
-    видимые = [w for w in корень.findChildren(QLabel) + корень.findChildren(QPushButton)
+    подписи = [w for w in корень.findChildren(QLabel) + корень.findChildren(QPushButton)
                if w.isVisible()]
-    for w in видимые:
+    for w in подписи:
         почему = _обрезано(w)
         if почему:
             беда.append(f"обрезано: «{(w.text() or '')[:44]}» — {почему}")
     по_родителям = {}
-    for w in видимые:
-        if not w.geometry().isEmpty():
+    for w in корень.findChildren(QWidget):
+        if w.isVisible() and not w.geometry().isEmpty():
             по_родителям.setdefault(id(w.parent()), []).append(w)
     for соседи in по_родителям.values():
         for i, a in enumerate(соседи):
             for b in соседи[i + 1:]:
                 общее = a.geometry().intersected(b.geometry())
                 if общее.width() > 2 and общее.height() > 2:
-                    беда.append(f"наезд: «{(a.text() or '')[:26]}» на «{(b.text() or '')[:26]}» "
+                    беда.append(f"наезд: «{_имя(a)}» на «{_имя(b)}» "
                                 f"({общее.width()}×{общее.height()} px)")
     return sorted(set(беда))
 
@@ -133,6 +146,33 @@ def открыть(приложение):
         w.setParent(None)
         w.deleteLater()
     QApplication.processEvents()
+
+
+@pytest.fixture
+def крупный_шрифт(приложение, monkeypatch):
+    """Весь текст на четверть крупнее — так экран выглядит там, где шрифт другой.
+
+    Размеры у нас в пикселях, поэтому масштаб системы на них не влияет, — а вот сам
+    шрифт влияет: если на машине точки наш не подхватился, Qt берёт замену, и её буквы
+    шире. Текст переносится на лишнюю строку, карточка растёт, и раскладке перестаёт
+    хватать высоты. Ровно так на точке код сделки и ссылка оказались написаны поверх QR.
+
+    Запас на это обязан быть во всех карточках, поэтому крупный шрифт — не отдельный
+    случай, а второй прогон тех же проверок.
+    """
+    родной = ui.font
+    monkeypatch.setattr(ui, "font",
+                        lambda family=ui.FONT_TEXT, px=16, *a, **k: родной(family, round(px * 1.25),
+                                                                          *a, **k))
+    for модуль in (ui_deal, ui_start, ui_admin):      # `font` они забрали себе по имени
+        if hasattr(модуль, "font"):
+            monkeypatch.setattr(модуль, "font", ui.font)
+    крупный = re.sub(r"font-size:\s*(\d+)px",
+                     lambda m: f"font-size: {round(int(m.group(1)) * 1.25)}px", ui.QSS)
+    было = приложение.styleSheet()
+    приложение.setStyleSheet(крупный)
+    yield
+    приложение.setStyleSheet(было)
 
 
 def test_the_idle_screen_fits(открыть):
@@ -215,3 +255,25 @@ def test_the_setup_and_admin_screens_fit(открыть):
                     "Этот компьютер": "KASSA-14", "Токен": "pk_abc…", "Версия": "doctor-67",
                     "Оценок в очереди": 0, "Бот Оценки": "PintelOlxBot"})
     assert _замечания(админ) == []
+
+
+def test_the_cards_hold_a_quarter_larger_font(открыть, крупный_шрифт, отчёт):
+    """Те же экраны шрифтом на четверть крупнее — ничего не наезжает и не обрезано.
+
+    Это и есть запас на чужой шрифт. На точке его не было: QR держал свой размер
+    намертво, высоты не хватало, и Qt укладывала код сделки и ссылку прямо по нему."""
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
+    экран.set_клиент("Асылжан", "+77058837953")
+    экран.показать(отчёт)
+    экран.показать_код("LMU3GD", "https://t.me/pintel_ocenka_bot?start=pLMU3GD")
+    экран.показать_тест("https://kiosk.pintelkz.com/t/ABCDEF1234567890")
+    экран.set_медиа({"известно": True, "начали": True, "фото": 3, "видео": True, "готово": True})
+    for страница, имя in ((ui_deal.СТР_APPLE, "шаг Apple"), (ui_deal.СТР_ТЕСТ, "тест"),
+                          (ui_deal.СТР_РУЧНАЯ, "проверки руками"), (ui_deal.СТР_МЕДИА, "медиа"),
+                          (ui_deal.СТР_ГОТОВО, "отправлено")):
+        экран.правая.setCurrentIndex(страница)
+        assert _замечания(экран) == [], имя
+    assert _замечания(открыть(ui.MainScreen, "16/38 Pintel")) == [], "экран ожидания"
+    анкета = открыть(ui_start.StartScreen, "16/38 Pintel")
+    анкета.начать()
+    assert _замечания(анкета) == [], "анкета"

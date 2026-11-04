@@ -162,6 +162,22 @@ class Client:
         res = self._req("GET", f"/api/kiosk/media/{код}", timeout=15)
         return res if isinstance(res, dict) else {"известно": False, "почему": "сервер не ответил"}
 
+    def отправить_посылку(self, код, посылка):
+        """Сделку — боту через наш сервер. → {принято: bool, почему: str, сделка: id|None}.
+
+        Это главный путь: сервер кладёт посылку в таблицу обмена, бот забирает её оттуда
+        сам и создаёт сделку — подтверждать кнопкой нечего. Сервер не ответил или отказал
+        — касса уходит в запасной путь и шлёт карточку в чат, как раньше. Поэтому здесь
+        не бросаем, а возвращаем причину словами."""
+        try:
+            res = self._req("POST", f"/api/kiosk/media/{код}/parcel",
+                            json={"посылка": посылка}, timeout=30)
+        except Exception as exc:                                 # noqa: BLE001
+            return {"принято": False, "почему": f"сервер не ответил: {exc}"}
+        if not isinstance(res, dict):
+            return {"принято": False, "почему": "сервер не ответил"}
+        return res
+
     def intake(self, ev_id):
         """Состояние заявки: номер выдаёт сотрудник в кассе (после имени и телефона клиента); ссылка на отчёт для QR."""
         return self._req("GET", f"/api/kiosk/evaluations/{ev_id}/intake", timeout=15)

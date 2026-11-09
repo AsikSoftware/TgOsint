@@ -484,7 +484,8 @@ class KioskWindow(QMainWindow):
         self.кабель = state
         if self.state == "idle":
             if state == NO_DRIVER:
-                self.s_main.set_status("Нет драйвера Apple — установите iTunes", ok=False)
+                self.s_main.set_status("Служба Apple не отвечает — перезапустите "
+                                       "Apple Mobile Device Service", ok=False)
                 self.s_main.set_device("nodriver")
             elif state == READY and count:
                 self.s_main.set_device("found")

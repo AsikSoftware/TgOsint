@@ -35,7 +35,9 @@ NO_DRIVER, NO_DEVICE, LOCKED, TRUST_PENDING, TRUST_DENIED, READY, ERROR = (
 RESTORE_MODE = "RESTORE_MODE"
 
 HUMAN = {
-    NO_DRIVER: "Драйвер Apple не найден: установите iTunes с сайта Apple (служба Apple Mobile Device).",
+    NO_DRIVER: ("Служба Apple не отвечает. Если iTunes стоит — откройте «Службы» Windows и "
+                "перезапустите «Apple Mobile Device Service», затем воткните кабель заново. "
+                "Если не стоит — установите iTunes с сайта Apple."),
     NO_DEVICE: "Телефон не подключён. Нужен кабель для передачи данных, не только зарядки.",
     LOCKED: "Телефон заблокирован — разблокируйте экран.",
     TRUST_PENDING: "На телефоне нажмите «Доверять» и введите код-пароль.",

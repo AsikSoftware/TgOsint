@@ -426,6 +426,13 @@ class Listener:
             строки, похожие на тему, чтобы разбираться по файлу, а не по догадке
     """
 
+    # Пауза перед следующей попыткой, шагами. Раньше она была ровно секунда — и на
+    # мигающем USB это давало сотни заходов в usbmuxd за минуту: служба Apple на Windows
+    # от такого осыпается целиком, а вместе с ней срывается и основное чтение, после чего
+    # телефон уходит в отчёт с «память ? ГБ» и «батарея не прочиталась». Растущая пауза
+    # даёт аппарату вернуться и не мешает ему, пока он возвращается.
+    ЗАДЕРЖКИ = (1, 2, 4, 8, 15)
+
     def __init__(self, ld, log=None, max_reconnects=30, reconnect_delay=1.0):
         self.ld, self.log = ld, (log or (lambda *_: None))
         self.max_reconnects, self.reconnect_delay = max_reconnects, reconnect_delay
@@ -437,6 +444,7 @@ class Listener:
         self.found_at = None
         self.connects = 0
         self.reconnects = 0
+        self.подряд = 0                 # обрывов подряд, из которых ничего не вышло прочитать
         self.lines = 0
         self._task = None
         self._stop = False
@@ -446,8 +454,9 @@ class Listener:
         return self
 
     async def _run(self):
-        while not self._stop and self.reconnects <= self.max_reconnects:
+        while not self._stop and self.подряд <= self.max_reconnects:
             svc = SyslogService(self.ld)
+            начало, строк_было = time.monotonic(), self.lines
             try:
                 await svc.connect()
                 self.connects += 1
@@ -463,10 +472,18 @@ class Listener:
                 if self._stop:
                     break
                 self.reconnects += 1
+                # Связь жила и что-то дала — это обычный обрыв USB, а не потерянный канал,
+                # и счёт начинаем заново. Раньше счётчик был сквозной: на мигающем кабеле
+                # слушатель умирал посреди проверки, хотя каждый раз переподключался и
+                # читал журнал дальше. Телефон при этом молчал не больше секунды.
+                успели = self.lines > строк_было or time.monotonic() - начало > 5
+                self.подряд = 0 if успели else self.подряд + 1
                 note = f"# syslog оборвался ({type(e).__name__}: {e}), переподключение {self.reconnects}\n"
                 self.notes.append(note)
-                self.log(note.strip())
-                await asyncio.sleep(self.reconnect_delay)
+                if self.подряд <= 1 or self.подряд % 10 == 0:
+                    self.log(note.strip())              # в журнал точки — первый и каждый десятый
+                шаг = self.ЗАДЕРЖКИ[min(max(self.подряд, 1) - 1, len(self.ЗАДЕРЖКИ) - 1)]
+                await asyncio.sleep(шаг * self.reconnect_delay)
             finally:
                 try:
                     await svc.close()
@@ -474,12 +491,13 @@ class Listener:
                     pass
             if self._stop:
                 break
-        if not self._stop and self.reconnects > self.max_reconnects:
+        if not self._stop and self.подряд > self.max_reconnects:
             # Канал кончился, а не «телефон молчит»: после этого слушатель мёртв, но снаружи
             # он выглядит ровно как ждущий. Отчёт обязан сказать, что вердикт Apple мог просто
             # не успеть прийти, иначе проверка считается законченной без неё.
             self.meta["канал_потерян"] = True
-            self.log(f"журнал телефона: {self.reconnects} обрывов подряд, больше не переподключаюсь")
+            self.log(f"журнал телефона: {self.подряд} обрывов подряд (всего {self.reconnects}), "
+                     f"больше не переподключаюсь")
 
     def _feed(self, line):
         if isinstance(line, bytes):

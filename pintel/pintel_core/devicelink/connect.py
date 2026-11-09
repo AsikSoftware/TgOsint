@@ -7,6 +7,7 @@
   LOCKED         — телефон заблокирован паролем, сопряжение невозможно
   TRUST_PENDING  — ждём «Доверять» на экране телефона
   TRUST_DENIED   — нажали «Не доверять»
+  RESTORE_MODE   — телефон в режиме восстановления: по кабелю он не читается
   READY          — сопряжены, lockdown отвечает
   ERROR          — иное, с текстом
 
@@ -22,7 +23,7 @@ from pathlib import Path
 from pymobiledevice3 import usbmux
 from pymobiledevice3.exceptions import (
     ConnectionFailedError, ConnectionFailedToUsbmuxdError, DeviceNotFoundError,
-    FatalPairingError, MuxException, NoDeviceConnectedError, NotPairedError,
+    FatalPairingError, IncorrectModeError, MuxException, NoDeviceConnectedError, NotPairedError,
     NotTrustedError, PairingDialogResponsePendingError, PairingError,
     PasscodeRequiredError, PasswordRequiredError, UserDeniedPairingError,
 )
@@ -31,6 +32,7 @@ from pymobiledevice3.services.diagnostics import DiagnosticsService
 
 NO_DRIVER, NO_DEVICE, LOCKED, TRUST_PENDING, TRUST_DENIED, READY, ERROR = (
     "NO_DRIVER", "NO_DEVICE", "LOCKED", "TRUST_PENDING", "TRUST_DENIED", "READY", "ERROR")
+RESTORE_MODE = "RESTORE_MODE"
 
 HUMAN = {
     NO_DRIVER: "Драйвер Apple не найден: установите iTunes с сайта Apple (служба Apple Mobile Device).",
@@ -38,6 +40,10 @@ HUMAN = {
     LOCKED: "Телефон заблокирован — разблокируйте экран.",
     TRUST_PENDING: "На телефоне нажмите «Доверять» и введите код-пароль.",
     TRUST_DENIED: "На телефоне нажали «Не доверять». Переподключите кабель и нажмите «Доверять».",
+    RESTORE_MODE: ("Телефон в режиме восстановления — в нём он по кабелю не читается. "
+                   "Выведите его оттуда: нажмите и отпустите «громкость +», нажмите и "
+                   "отпустите «громкость −», затем держите боковую кнопку, пока не появится "
+                   "яблоко."),
     READY: "Телефон на связи.",
     ERROR: "Ошибка связи с телефоном.",
 }
@@ -96,6 +102,11 @@ async def connect(serial=None, trust_timeout=0.0):
         return LinkStatus(NO_DEVICE)
     except (ConnectionFailedToUsbmuxdError, MuxException):
         return LinkStatus(NO_DRIVER)
+    except IncorrectModeError as e:
+        # Телефон отвечает не lockdown, а restored — это режим восстановления. Сотрудник
+        # видел «Ошибка связи с телефоном (IncorrectModeError: …)» и переподключал кабель по
+        # кругу: за один вечер такого набралось полторы сотни строк в журнале точки.
+        return LinkStatus(RESTORE_MODE, detail=str(e)[:160], serial=serial or "")
     except (FatalPairingError, PairingError, ConnectionFailedError) as e:
         return LinkStatus(ERROR, detail=f"{type(e).__name__}: {e}")
     except Exception as e:

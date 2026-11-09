@@ -468,6 +468,7 @@ class KioskWindow(QMainWindow):
         self.net.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()
+            self.pipeline.остановить_слушателя()
         for t in (self.poller, self.net, self.pipeline, self.sealed, *self.tasks):
             if t is not None and t.isRunning():
                 t.wait(3000)                     # иначе Qt ругается «Destroyed while thread is still running»
@@ -507,12 +508,14 @@ class KioskWindow(QMainWindow):
         elif self.state == "scanning":
             if state == NO_DEVICE and self.pipeline:
                 self.pipeline.cancel.set()
+                self.pipeline.остановить_слушателя()   # телефона нет — ломиться к нему незачем
                 self.s_work.set_trouble("Телефон отключили. Подключите снова — проверка начнётся заново.")
                 self.state = "work"
 
     def start_check(self, заново=False):
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()
+            self.pipeline.остановить_слушателя()       # канал к телефону освобождаем сразу
             self.pipeline.wait(3000)
         self.state = "scanning"
         self.wait_unplug = True
@@ -1032,6 +1035,7 @@ class KioskWindow(QMainWindow):
         self.return_timer.stop()
         if self.pipeline and self.pipeline.isRunning():
             self.pipeline.cancel.set()                 # слушатель истории больше не нужен
+            self.pipeline.остановить_слушателя()
         self.state = "idle"
         self.last = None
         self.сделка, self.код_медиа, self.анкета = {}, "", {}

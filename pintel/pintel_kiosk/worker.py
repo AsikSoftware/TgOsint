@@ -154,6 +154,8 @@ class Pipeline(QThread):
         self.заново = bool(заново)
         self.serial = None
         self.started = datetime.now()                 # имя эталона за этот прогон — одно на все перезаписи
+        self._listener = None                         # чтобы закрыть канал к телефону снаружи
+        self._loop = None
 
     def run(self):
         try:
@@ -162,17 +164,45 @@ class Pipeline(QThread):
             log_line(traceback.format_exc())
             self.failed.emit(f"{type(e).__name__}: {e}")
 
+    def остановить_слушателя(self):
+        """Закрыть канал к телефону немедленно, из чужого потока.
+
+        `cancel` поток замечает не сразу: он может сидеть в запросе к серверу (до 90 с).
+        Пока он там сидит, его слушатель журнала держит и переоткрывает канал к тому же
+        телефону — а новая проверка уже открыла свой. Два слушателя на одном аппарате
+        дерутся за usbmux, и в журнале точки это видно как обрывы раз в секунду."""
+        слушатель, loop = self._listener, self._loop
+        if слушатель is None or loop is None or loop.is_closed():
+            return
+        слушатель._stop = True
+        задача = getattr(слушатель, "_task", None)
+        if задача is not None:
+            try:
+                loop.call_soon_threadsafe(задача.cancel)
+            except RuntimeError:                      # цикл уже остановлен — канал и так закрыт
+                pass
+
     def _step(self, key, state, text=""):
         log_line(f"шаг {key}: {state} {text}".rstrip())
         self.step.emit(key, state, text)
 
     async def _main(self):
+        self._loop = asyncio.get_running_loop()
         self._step("connect", "run", "ждём «Доверять»")
         st = None
+        сказано = None
+
+        def связь(s):
+            # В журнал — только смена состояния. Цикл спрашивает телефон каждые две секунды,
+            # и аппарат в режиме восстановления писал одну и ту же строку сотнями.
+            nonlocal сказано
+            if s.state != сказано:
+                log_line(f"связь: {s.state} {s.human}")
+                сказано = s.state
+            self.status.emit(s.state, s.human)
+
         while not self.cancel.is_set():
-            st = await connect.wait_ready(on_status=lambda s: (log_line(f"связь: {s.state} {s.human}"),
-                                                               self.status.emit(s.state, s.human)),
-                                          deadline=time.monotonic() + 2.0)
+            st = await connect.wait_ready(on_status=связь, deadline=time.monotonic() + 2.0)
             if st.state == READY:
                 break
             if st.state == "NO_DEVICE":
@@ -194,6 +224,7 @@ class Pipeline(QThread):
         # Слушатель журнала — с первой секунды: если клиент откроет раздел, пока идёт
         # слепок, записи не пропадут.
         listener = repair_history.Listener(ld, log=log_line)
+        self._listener = listener
         await listener.start()
         self.apple_prompt.emit(True)
         try:

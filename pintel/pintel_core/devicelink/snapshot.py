@@ -47,6 +47,12 @@ def loads(text):
     return json.loads(text, object_hook=_dec)
 
 
+# Ошибки, которые говорят «связь моргнула», а не «телефон так отвечает». Только их имеет
+# смысл перечитывать: отказ самого телефона повтором не лечится.
+СВЯЗЬ_МИГНУЛА = ("DeviceNotFound", "ConnectionTerminated", "ConnectionAborted", "ConnectionReset",
+                 "ConnectionFailed", "BrokenPipe", "Timeout", "MuxException", "OSError", "EOF")
+
+
 async def _retry(fn, name, quality, tries=3, delays=(0.7, 1.5, 2.5)):
     last = None
     for i in range(tries):
@@ -112,6 +118,21 @@ async def collect(ld, diag, log=lambda *a: None):
         if changed:
             quality["устарело"].append({"disk_usage": changed})
         domains["com.apple.disk_usage"] = second
+
+    # Второй заход за тем, без чего отчёт неполон. Домены читались ровно один раз, и одного
+    # моргнувшего USB хватало, чтобы память стала «? ГБ», а «Найти iPhone» — «не определился»:
+    # в отчёт это уезжало как незнание, хотя телефон всё это время лежал на кабеле.
+    # Перечитываем только то, что сорвалось по связи: если домена на этой iOS просто нет,
+    # повторять нечего и ждать сотрудника незачем.
+    for dom in ("com.apple.disk_usage", "com.apple.mobile.battery", "com.apple.fmip"):
+        почему = quality["не_прочиталось"].get(dom) or ""
+        if domains.get(dom) or not any(k in почему for k in СВЯЗЬ_МИГНУЛА):
+            continue
+        v = await _retry(lambda d=dom: ld.get_value(domain=d), dom, quality, tries=2, delays=(0.8, 2.0))
+        if v:
+            domains[dom] = v
+            quality["не_прочиталось"].pop(dom, None)
+            quality["повторы"][dom] = quality["повторы"].get(dom, 2)
 
     log("карта узлов…")
     t = time.monotonic()

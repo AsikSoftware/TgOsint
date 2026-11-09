@@ -605,3 +605,47 @@ def test_raw_journal_from_the_snapshot_is_reread_by_todays_parser():
     записи, meta = rh.перечитать(raw)
     assert записи["Battery"]["неизвестная"] and meta["раздел_открыт"] is True
     assert rh.перечитать("") == ({}, {}) and rh.перечитать(None) == ({}, {})
+
+
+async def _послушать(lst, seconds, grace=0.1):
+    await lst.start()
+    try:
+        return await lst.wait(seconds, grace=grace)
+    finally:
+        await lst.stop()
+
+
+def test_мигающий_кабель_не_убивает_слушателя(fake):
+    """Телефон отваливается и возвращается — но каждый раз журнал читается дальше.
+
+    Так ведёт себя рабочее место, где USB слабый: за проверку набегает три десятка
+    обрывов. Раньше счётчик был сквозной, слушатель умирал на тридцать первом и вердикт
+    Apple не приходил вовсе — хотя телефон всё это время лежал на кабеле и отвечал."""
+    fake.script = [[f"noise {i}\n", "DROP"] for i in range(40)] + [list(BLOCK)]
+    lst = rh.Listener(None, reconnect_delay=0)
+    items, raw, _ = asyncio.run(_послушать(lst, 10))
+    assert set(items) == {"Battery", "Display", "FaceID"}
+    assert lst.reconnects == 40 and lst.подряд == 0
+    assert not lst.meta.get("канал_потерян")
+
+
+def test_глухое_молчание_всё_ещё_признаём(fake):
+    """А вот когда переподключение не даёт ничего подряд, канал честно считаем потерянным:
+    отчёт обязан сказать, что вердикт Apple мог просто не успеть прийти."""
+    fake.script = [["DROP"] for _ in range(60)]
+    lst = rh.Listener(None, reconnect_delay=0)
+    items, _, _ = asyncio.run(_послушать(lst, 0.6))
+    assert items == {} and lst.meta.get("канал_потерян") is True
+    assert lst.connects <= lst.max_reconnects + 2
+
+
+def test_в_журнал_точки_не_сыплется_каждый_обрыв(fake):
+    """Журнал точки читают люди. Пятьсот одинаковых строк за вечер в нём не нужны —
+    нужен первый обрыв и отметки по ходу."""
+    строки = []
+    fake.script = [["DROP"] for _ in range(60)]
+    lst = rh.Listener(None, log=строки.append, reconnect_delay=0)
+    asyncio.run(_послушать(lst, 0.6))
+    обрывы = [s for s in строки if "оборвался" in s]
+    assert lst.reconnects >= 30 and len(обрывы) <= 5
+    assert any("больше не переподключаюсь" in s for s in строки)

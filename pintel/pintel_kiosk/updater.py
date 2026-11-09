@@ -85,10 +85,13 @@ def проверить(репозиторий: str, токен: str, имя_ар
               таймаут: float = 20.0) -> dict:
     """Спросить у GitHub последний релиз. Сети нет — просто «нет обновления»."""
     import httpx
-    if not (репозиторий and токен):
+    if not репозиторий:
         return {"есть": False, "почему": "обновление не настроено"}
-    заголовки = {"Authorization": f"Bearer {токен}", "Accept": "application/vnd.github+json",
-                 "X-GitHub-Api-Version": "2022-11-28"}
+    # Токен нужен только закрытому репозиторию. Точка без токена в kiosk.toml молча не
+    # обновлялась никогда — а релизы лежат на виду, и спросить их можно без ключа.
+    заголовки = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    if токен:
+        заголовки["Authorization"] = f"Bearer {токен}"
     try:
         r = httpx.get(f"{API}/repos/{репозиторий}/releases/latest", headers=заголовки,
                       timeout=таймаут)
@@ -105,7 +108,9 @@ def скачать(url: str, токен: str, куда: str, таймаут: flo
     import httpx
     os.makedirs(os.path.dirname(куда), exist_ok=True)
     временный = куда + ".part"
-    заголовки = {"Authorization": f"Bearer {токен}", "Accept": "application/octet-stream"}
+    заголовки = {"Accept": "application/octet-stream"}
+    if токен:
+        заголовки["Authorization"] = f"Bearer {токен}"
     with httpx.stream("GET", url, headers=заголовки, timeout=таймаут,
                       follow_redirects=True) as r:
         r.raise_for_status()

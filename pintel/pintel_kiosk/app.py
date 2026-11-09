@@ -293,7 +293,7 @@ class KioskWindow(QMainWindow):
         подменять нельзя."""
         from . import updater
         cfg = self.cfg
-        if not (cfg.get("update_repo") and cfg.get("update_token")):
+        if not cfg.get("update_repo"):
             return
         self._run(lambda: updater.проверить(cfg["update_repo"], cfg["update_token"],
                                             cfg.get("update_asset") or ""),

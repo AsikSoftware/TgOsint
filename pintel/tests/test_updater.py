@@ -77,8 +77,25 @@ def test_github_refusal_is_reported_not_swallowed(monkeypatch):
     assert итог["есть"] is False and "401" in итог["почему"]
 
 
-def test_check_is_skipped_without_a_token():
-    assert updater.проверить("AsikSoftware/TgOsint", "", АРХИВ)["есть"] is False
+def test_check_works_without_a_token(monkeypatch):
+    """Репозиторий открыт, и точка без токена в kiosk.toml обязана узнавать о сборке.
+
+    Раньше проверка не делалась вовсе и молча: на 16/38 за всё время работы — ни одной
+    строки об обновлении, то есть исправления до этой точки не доезжали никогда."""
+    поймали = {}
+
+    def отдать(url, headers=None, **k):
+        поймали["заголовки"] = dict(headers or {})
+        return httpx.Response(200, json=релиз())
+
+    monkeypatch.setattr(httpx, "get", отдать)
+    итог = updater.проверить("AsikSoftware/TgOsint", "", АРХИВ, свой="doctor-45")
+    assert итог["есть"] is True
+    assert "Authorization" not in поймали["заголовки"]
+
+
+def test_check_is_skipped_without_a_repo():
+    assert updater.проверить("", "ghp_x", АРХИВ)["есть"] is False
 
 
 def test_unpack_refuses_to_write_outside_its_folder(tmp_path):

@@ -773,7 +773,7 @@ class KioskWindow(QMainWindow):
         if not self.cfg.get("ocenka_bot"):
             self.код_медиа = ""
             self.s_work.показать_код("—", "")
-            self.s_work.медиа.setText("Бот Оценки не задан в кассе — медиа принять не от кого")
+            self.s_work.медиа.setText("В кассе не задан ocenka_bot — медиа принять не от кого")
             return
         self.код_медиа = ocenka_media.новый_код()
         self.s_work.показать_код(self.код_медиа,

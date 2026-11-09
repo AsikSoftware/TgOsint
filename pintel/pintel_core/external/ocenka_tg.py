@@ -92,9 +92,9 @@ def отправить(токен: str, чат, посылка: dict, тайма
     """Отправить сделку в чат. → {message_id, чат}. Ошибку Telegram отдаём словами."""
     import httpx
     if not токен:
-        raise ОшибкаОтправки("в kiosk.toml не задан ocenka_bot_token — отправлять нечем")
+        raise ОшибкаОтправки("в кассе не задан ocenka_bot_token — отправлять нечем")
     if not чат:
-        raise ОшибкаОтправки("в kiosk.toml не задан ocenka_chat_id — отправлять некуда")
+        raise ОшибкаОтправки("в кассе не задан ocenka_chat_id — отправлять некуда")
     код = str(посылка.get("код") or "")
     файл = json.dumps(посылка, ensure_ascii=False, indent=1).encode("utf-8")
     try:

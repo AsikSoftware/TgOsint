@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Окно киоска: состояния «ожидание → проверка → результат», опрос кабеля,
-связь с сервером в фоне. Запуск: pintel-kiosk (kiosk.toml рядом с exe)."""
+связь с сервером в фоне. Запуск: pintel-kiosk (настройки приходят с сервера)."""
 import asyncio
 import os
 import sys
@@ -329,7 +329,7 @@ class KioskWindow(QMainWindow):
             updater.скачать(self.обновление["url"], cfg["update_token"], архив)
             новая = updater.распаковать(архив, os.path.join(data_dir(), "update", тег))
             установлена = config.app_dir()
-            updater.перенести_своё(установлена, новая)   # kiosk.toml не теряем
+            updater.перенести_своё(установлена, новая)   # чужое рядом с exe не теряем
             exe = sys.executable if getattr(sys, "frozen", False) else os.path.join(
                 установлена, "pintel-kiosk.exe")
             return updater.применить(новая, установлена, exe, os.path.join(data_dir(), "update"))
@@ -773,7 +773,7 @@ class KioskWindow(QMainWindow):
         if not self.cfg.get("ocenka_bot"):
             self.код_медиа = ""
             self.s_work.показать_код("—", "")
-            self.s_work.медиа.setText("В kiosk.toml не задан ocenka_bot — медиа принять не от кого")
+            self.s_work.медиа.setText("Бот Оценки не задан в кассе — медиа принять не от кого")
             return
         self.код_медиа = ocenka_media.новый_код()
         self.s_work.показать_код(self.код_медиа,

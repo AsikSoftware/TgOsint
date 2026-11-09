@@ -117,8 +117,8 @@ def проверить_рфс(cfg, имеи, step):
         step("rfs", "warn", "у телефона нет IMEI")
         return None, "реестр РФС не проверялся — у телефона не прочитался IMEI"
     if not cfg.get("rfs", True):
-        step("rfs", "warn", "выключена (kiosk.toml)")
-        return None, "реестр РФС не проверялся — проверка выключена в kiosk.toml"
+        step("rfs", "warn", "выключена в кассе")
+        return None, "реестр РФС не проверялся — проверка выключена в настройках"
     step("rfs", "run", f"{len(имеи)} IMEI")
     try:
         итог = rfs.проверить(имеи, os.path.join(data_dir(), "cache", "rfs"), cfg.get("rfs_proxy") or None)
@@ -407,8 +407,8 @@ class Pipeline(QThread):
             self._step("sickw", "warn", "у телефона нет IMEI")
             не_проверено["чёрный список (Sickw)"] = "у телефона не прочитался IMEI"
         else:
-            self._step("sickw", "warn", "выключена (kiosk.toml)")
-            не_проверено["чёрный список (Sickw)"] = "проверка по базе IMEI выключена (kiosk.toml)"
+            self._step("sickw", "warn", "выключена в кассе")
+            не_проверено["чёрный список (Sickw)"] = "проверка по базе IMEI выключена в настройках"
 
         # Реестр РФС РК — оба IMEI, при любой оценке
         рфс, рфс_нет = await asyncio.to_thread(
@@ -556,8 +556,8 @@ class SealedPipeline(QThread):
                 не_проверено["чёрный список (Sickw)"] = "база IMEI недоступна"
                 log_line(f"sickw: {e}")
         else:
-            self._step("sickw", "warn", "выключена (kiosk.toml)")
-            не_проверено["чёрный список (Sickw)"] = "проверка по базе IMEI выключена (kiosk.toml)"
+            self._step("sickw", "warn", "выключена в кассе")
+            не_проверено["чёрный список (Sickw)"] = "проверка по базе IMEI выключена в настройках"
         if sk and sk.get("модель"):
             self._step("passport", "done", f"{sk['модель']} · {sk.get('объём_гб') or '?'} ГБ")
         else:

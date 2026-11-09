@@ -775,6 +775,6 @@ async def _позвать_дальше(bot: Bot, медиа, сделка: dict)
 
 @router_kiosk_media.message(F.text.regexp(r"^/kiosk_id(?:@\w+)?\b"))
 async def номер_чата(message: Message):
-    """Чтобы узнать chat_id рабочей группы для kiosk.toml — иначе его негде взять."""
+    """Чтобы узнать chat_id рабочей группы для настроек киоска — иначе его негде взять."""
     await message.answer(f"chat_id: <code>{message.chat.id}</code>\n"
-                         "Впишите его в kiosk.toml как ocenka_chat_id.")
+                         "Впишите его в кассе: Настройки → Программа на точках, ocenka_chat_id.")

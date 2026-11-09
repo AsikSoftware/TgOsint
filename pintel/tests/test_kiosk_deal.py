@@ -475,7 +475,7 @@ def test_the_phone_test_can_be_skipped_but_it_is_written_down(окно, monkeypa
     окно.tasks[-1].wait(5000)
     посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
     assert "тест_телефона" not in посылка
-    assert "Асылбек" in посылка["тест_пропущен"]                 # кто отметил — из kiosk.toml
+    assert "Асылбек" in посылка["тест_пропущен"]                 # кто отметил — из настроек точки
     assert "Тест на телефоне пропущен" in посылка["сделка"]["comment_ocenka"]
 
 

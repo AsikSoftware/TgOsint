@@ -168,7 +168,7 @@ def test_google_upal_a_prochitannoe_ostalos(monkeypatch):
         raise RuntimeError("Таблица не открыта сервис-аккаунту")
 
     monkeypatch.setattr(сервис.gsheet, "api_rows", падает)
-    сервис._кэш["когда"] = 0.0                                   # срок кэша вышел
+    сервис._кэш["когда"] = None                                  # срок кэша вышел
     найдено, беда = сервис.заявки(["351234560000019"])
     assert найдено and "не прочиталась" in беда
 

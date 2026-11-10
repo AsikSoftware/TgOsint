@@ -681,15 +681,15 @@ class WorkScreen(Screen):
         вид = история_мод.словами(данные)
         if not вид["строки"]:
             self.история_панель.hide()
-        self.история_плашка.set(вид, self.история_панель.isVisible())
+        self.история_плашка.set(вид, not self.история_панель.isHidden())
         self.история_панель.наполнить(вид)
-        if self.история_панель.isVisible():
+        if not self.история_панель.isHidden():
             self._историю_положить()
 
     def история_переключить(self):
         """Нажали по плашке: список развернулся. Нажали снова — угол опять пустой."""
         вид = история_мод.словами(self.история)
-        открыть = bool(вид["строки"]) and not self.история_панель.isVisible()
+        открыть = bool(вид["строки"]) and self.история_панель.isHidden()
         if открыть:
             self.история_панель.наполнить(вид)
             self._историю_положить()
@@ -709,7 +709,7 @@ class WorkScreen(Screen):
 
     def resizeEvent(self, e):                                    # noqa: N802 — имя от Qt
         super().resizeEvent(e)
-        if self.история_панель.isVisible():
+        if not self.история_панель.isHidden():
             self._историю_положить()
 
     СТРОКИ_КАБЕЛЯ = ("connect", "battery", "locks", "apple", "upload")

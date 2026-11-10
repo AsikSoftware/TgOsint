@@ -39,6 +39,9 @@ PINTEL_MEDIA_DIR=/home/www/pintel_media
 PINTEL_SICKW_KEY=ВАШ-КЛЮЧ-SICKW
 PINTEL_GSERVICE_JSON=/путь/к/gservice.json
 PINTEL_PRICE_SHEET_URL=https://docs.google.com/spreadsheets/d/.../edit?gid=...
+# Таблица заявок с сайта: по ней киоск показывает историю телефона по IMEI.
+# Лист должен быть открыт по ссылке (Читатель) — тогда ключ Google для него не нужен.
+PINTEL_REQUESTS_SHEET_URL=https://docs.google.com/spreadsheets/d/.../edit?gid=0
 # --- импорт в тестовую Оценку (значения из .env Оценки) ---
 PINTEL_OCENKA_DB_URL=postgresql+psycopg://<DB_USER>:<DB_PASS>@127.0.0.1:5432/pintel_ocenka_test
 PINTEL_OCENKA_BOT_TOKEN=<TOKEN_DEMO>

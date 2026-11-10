@@ -13,6 +13,7 @@ from ..config import settings
 from ..db import get_db, now
 from ..models import Evaluation, Kiosk, KioskLog, PhoneTest, Point, ReferenceBundle
 from ..services import evaluations as ev_service
+from ..services import history as history_service
 from ..services import kiosk_settings
 from ..services import references as ref_service
 from ..services import ocenka_import
@@ -292,6 +293,17 @@ def phone_test_result(token: str, kiosk: Kiosk = Depends(current_kiosk), db: DbS
         raise HTTPException(404, "проверка не найдена")
     return {"готов": pt.answered_at is not None, "результат": pt.result or {},
             "когда": pt.answered_at.isoformat() if pt.answered_at else None}
+
+
+@router.get("/history")
+def history(imei: str = "", imei2: str = "", ev_id: int | None = None,
+            kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Что с этим аппаратом у нас уже было: сделки Оценки, заявки с сайта, наши проверки.
+
+    Киоск спрашивает это, как только прочитал IMEI, и показывает сотруднику в углу экрана —
+    до того, как тот назовёт цену. Источник, который не ответил, уезжает в «почему»: пустая
+    история и молчащая Оценка на экране обязаны выглядеть по-разному."""
+    return history_service.по_имеи(db, [imei, imei2], кроме=ev_id)
 
 
 @router.post("/heartbeat")

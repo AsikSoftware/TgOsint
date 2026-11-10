@@ -94,6 +94,18 @@ class Client:
     def config(self):
         return self._req("GET", "/api/kiosk/config")
 
+    def история(self, имеи, кроме=None):
+        """Что с этим аппаратом у нас уже было — по IMEI.
+
+        Это подсказка сотруднику, а не часть проверки: ждать её дольше, чем он читает экран,
+        незачем, и её неудача ничего не ломает — вызывающий покажет причину в углу."""
+        параметры = {}
+        for имя, значение in zip(("imei", "imei2"), [x for x in (имеи or ()) if str(x or "").strip()]):
+            параметры[имя] = str(значение).strip()
+        if кроме:
+            параметры["ev_id"] = int(кроме)
+        return self._req("GET", "/api/kiosk/history", timeout=20, params=параметры)
+
 
     def sickw(self, imei, services=None):
         """База IMEI — только через сервер: ключ живёт там, и там же общий кэш, поэтому один

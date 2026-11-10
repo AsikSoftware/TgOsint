@@ -86,8 +86,13 @@ def _google_error(resp):
     return f"Google ответил {resp.status_code}: {msg[:200]}"
 
 
-def api_rows(url):
-    """Строки листа через Sheets API от имени сервис-аккаунта."""
+def api_rows(url, клетки="A1:T500"):
+    """Строки листа через Sheets API от имени сервис-аккаунта.
+
+    `клетки` — какой прямоугольник просить. Прайсу хватает пятисот строк, а таблица заявок с
+    сайта растёт сама и давно их переросла: обрезанный диапазон молча терял бы старые
+    заявки, и история телефона врала бы «ничего не нашли».
+    """
     import requests
     from google.oauth2 import service_account
     from google.auth.transport.requests import Request
@@ -121,7 +126,7 @@ def api_rows(url):
 
     r = requests.get(
         f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
-        + urllib.parse.quote(f"'{title}'!A1:T500", safe="!:'"),
+        + urllib.parse.quote(f"'{title}'!{клетки}", safe="!:'"),
         headers=h, timeout=30)
     if r.status_code != 200:
         raise RuntimeError(_google_error(r))

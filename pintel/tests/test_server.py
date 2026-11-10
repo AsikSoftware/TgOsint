@@ -151,7 +151,8 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
 
     db = SessionLocal()
     ev = db.get(Evaluation, r1["id"])
-    assert ev.model_name == "iPhone 12" and ev.battery_health == 78 and ev.price_offer == 75000 and ev.apple_summary == "менялось: Экран"
+    # 77 — процент с экрана телефона (минимум за жизнь), не текущая ёмкость
+    assert ev.model_name == "iPhone 12" and ev.battery_health == 77 and ev.price_offer == 75000 and ev.apple_summary == "менялось: Экран"
     assert ev.snapshot["repair_history"]["Display"]["меняли"] is True
     assert ev.locks_summary == "Найти iPhone вкл." and ev.point_id == 1 and ev.snapshot["root"]["ProductType"] == "iPhone13,2"
     dev = db.scalar(select(Device).where(Device.serial == ev.serial))
@@ -853,3 +854,31 @@ def test_the_deal_from_the_point_goes_to_the_bot_through_us(app, monkeypatch, tm
     # чужой токен внутрь не пускают: посылка — это имя, телефон и аппарат клиента
     assert k.post("/api/kiosk/media/ABCD12/parcel", headers={"X-Kiosk-Token": "pk_wrong"},
                   json={"посылка": посылка}).status_code == 401
+
+
+def test_istoriya_telefona_po_imei(app, monkeypatch):
+    """Киоск спрашивает историю по IMEI и получает три списка плюс «почему».
+
+    Молчащий источник обязан быть назван: пустая история и неотвеченный запрос — для
+    сотрудника разные вещи, и во втором случае он идёт смотреть руками."""
+    from pintel_server.services import history as history_service
+    # токен задаём явно: помощник выводит его из имени, а у всех «Точка-…» начало одно
+    H = точка("Точка-История", токен="pk_istoria")
+    k = TestClient(app)
+
+    # оба источника выключены: ответ пустой, но причины названы
+    monkeypatch.setattr(history_service.settings, "ocenka_db_url", "")
+    monkeypatch.setattr(history_service.settings, "requests_sheet_url", "")
+    history_service._кэш.update({"когда": 0.0, "по_имеи": {}, "строк": 0, "беда": ""})
+    r = k.get("/api/kiosk/history", params={"imei": "351234560000019"}, headers=H)
+    assert r.status_code == 200
+    тело = r.json()
+    assert тело["есть"] is False and len(тело["почему"]) == 2
+    assert тело["оценки"] == [] and тело["заявки"] == [] and тело["наши"] == []
+
+    # IMEI не прочитался — так и говорим, а не «ничего не нашли»
+    тело = k.get("/api/kiosk/history", headers=H).json()
+    assert "IMEI" in тело["почему"][0]
+
+    # без токена точки история не отдаётся: это данные о клиентах и ценах
+    assert k.get("/api/kiosk/history", params={"imei": "351234560000019"}).status_code in (401, 403)

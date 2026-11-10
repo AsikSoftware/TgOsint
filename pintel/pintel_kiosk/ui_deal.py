@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxL
                                QPushButton, QSizePolicy, QStackedWidget, QTextEdit, QVBoxLayout,
                                QWidget)
 
+from pintel_core import history as история_мод
 from pintel_core import phonetest
 from pintel_core.external import ocenka_media
 
@@ -242,6 +243,75 @@ def _карточка(заголовок):
     return рамка, внутри
 
 
+class ПлашкаИстории(QFrame):
+    """Окошко в углу: сколько мы уже знаем про этот телефон.
+
+    Стоит всегда — и когда истории нет, и когда её не удалось спросить: «ничего не нашли» и
+    «Оценка не ответила» сотрудник обязан различать, иначе второе он примет за первое и
+    назовёт цену с нуля. По нажатию разворачивается список, по второму нажатию угол снова
+    пустой: список длинный, а нужен он ровно в ту минуту, когда называют цену.
+    """
+
+    нажали = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("карточка")
+        self.setCursor(Qt.PointingHandCursor)
+        сл = QHBoxLayout(self)
+        сл.setContentsMargins(16, 7, 16, 7)
+        сл.setSpacing(10)
+        self.текст = label("История телефона", font_=font(FONT_TEXT, 18, W.Bold))
+        self.значок = label("·", font_=font(FONT_TEXT, 18, W.Bold), color=C["muted"])
+        сл.addWidget(self.текст)
+        сл.addWidget(self.значок)
+
+    def set(self, вид, открыто=False):
+        self.текст.setText(вид["подпись"])
+        if вид["беда"] and not вид["строки"]:
+            цвет = C["badtext"]
+        elif вид["беда"]:
+            цвет = C["warntext"]
+        elif вид["строки"]:
+            цвет = C["brand"]
+        else:
+            цвет = C["muted"]
+        self.текст.setStyleSheet(f"color: {цвет}")
+        self.значок.setText("▾" if открыто else ("▸" if вид["строки"] else "·"))
+
+    def mousePressEvent(self, e):                                # noqa: N802 — имя от Qt
+        self.нажали.emit()
+
+
+class ПанельИстории(QFrame):
+    """Сам список: заявки с сайта, сделки Оценки, наши прошлые проверки.
+
+    Лежит поверх экрана, а не в разметке: развёрнутый список иначе двигал бы колонки и
+    выталкивал кнопки отправки за край.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("карточка")
+        self.setAutoFillBackground(True)
+        сл = QVBoxLayout(self)
+        сл.setContentsMargins(22, 16, 22, 18)
+        сл.setSpacing(8)
+        сл.addWidget(kicker("ИСТОРИЯ ЭТОГО ТЕЛЕФОНА", 14, 2.2, C["brand"]))
+        self.текст = label("", wrap=True, font_=font(FONT_TEXT, 17))
+        сл.addWidget(self.текст)
+        self.беда = label("", wrap=True, font_=font(FONT_TEXT, 16), color=C["badtext"])
+        self.беда.hide()
+        сл.addWidget(self.беда)
+
+    def наполнить(self, вид):
+        куски = [первая + (("\n      " + второе) if второе else "")
+                 for первая, второе in вид["строки"]]
+        self.текст.setText("\n".join(куски))
+        self.беда.setText(вид["беда"])
+        self.беда.setVisible(bool(вид["беда"]))
+
+
 class WorkScreen(Screen):
     """Всё, что делает сотрудник после «Начать оценку»."""
 
@@ -253,6 +323,7 @@ class WorkScreen(Screen):
     новый_тест = Signal()                 # другой одноразовый код для теста на телефоне
     пропустить_тест = Signal()            # телефона нет в нашей сети — сделка уйдёт человеку
     перепроверить = Signal()              # прочитать телефон заново, не брать прошлую проверку
+    проверки_руками = Signal()            # отметку руками поменяли — пересчитать состояние
 
     def __init__(self, point=""):
         super().__init__(gray=True)
@@ -276,8 +347,15 @@ class WorkScreen(Screen):
         self.состояние.setWordWrap(True)
         self.состояние.hide()
         self.точка = label(point_text(point), "muted")
+        # Угол экрана: история этого телефона. Плашка в шапке, список — поверх экрана.
+        self.история = {}
+        self.история_плашка = ПлашкаИстории()
+        self.история_плашка.нажали.connect(self.история_переключить)
+        self.история_панель = ПанельИстории(self)
+        self.история_панель.hide()
         шапка.addWidget(self.аппарат, 1)
         шапка.addWidget(self.состояние, 2)
+        шапка.addWidget(self.история_плашка)
         шапка.addWidget(self.точка)
         self.root.addLayout(шапка)
 
@@ -542,6 +620,9 @@ class WorkScreen(Screen):
         self.тест, self.тест_пропущен = {}, ""
         self.ручная = {}
         self.медиа_состояние, self._подсказка = {}, ""
+        self.история = {}                              # угол чистый: это другой телефон
+        self.история_панель.hide()
+        self.история_плашка.set(история_мод.словами({}), False)
         self._нарисовать_ручную()
         self._нарисовать_тест()
         self._нарисовать_медиа()
@@ -592,6 +673,44 @@ class WorkScreen(Screen):
             self.состояние.setStyleSheet(f"background: {C['tint']}; color: {C['brand']}; "
                                          "border-radius: 16px; padding: 7px 18px;")
         self.состояние.show()
+
+    # ---------- история телефона ----------
+    def set_история(self, данные):
+        """Ответ сервера (или None, пока спрашиваем) → плашка в углу и список под ней."""
+        self.история = данные
+        вид = история_мод.словами(данные)
+        if not вид["строки"]:
+            self.история_панель.hide()
+        self.история_плашка.set(вид, self.история_панель.isVisible())
+        self.история_панель.наполнить(вид)
+        if self.история_панель.isVisible():
+            self._историю_положить()
+
+    def история_переключить(self):
+        """Нажали по плашке: список развернулся. Нажали снова — угол опять пустой."""
+        вид = история_мод.словами(self.история)
+        открыть = bool(вид["строки"]) and not self.история_панель.isVisible()
+        if открыть:
+            self.история_панель.наполнить(вид)
+            self._историю_положить()
+            self.история_панель.show()
+            self.история_панель.raise_()
+        else:
+            self.история_панель.hide()
+        self.история_плашка.set(вид, открыть)
+
+    def _историю_положить(self):
+        """Панель — под плашкой, у правого края экрана."""
+        ширина = min(760, max(380, int(self.width() * 0.42)))
+        self.история_панель.setFixedWidth(ширина)
+        self.история_панель.adjustSize()
+        угол = self.история_плашка.mapTo(self, self.история_плашка.rect().bottomRight())
+        self.история_панель.move(max(16, угол.x() - ширина), угол.y() + 10)
+
+    def resizeEvent(self, e):                                    # noqa: N802 — имя от Qt
+        super().resizeEvent(e)
+        if self.история_панель.isVisible():
+            self._историю_положить()
 
     СТРОКИ_КАБЕЛЯ = ("connect", "battery", "locks", "apple", "upload")
 
@@ -699,6 +818,9 @@ class WorkScreen(Screen):
                 and self.правая.currentIndex() == СТР_РУЧНАЯ):
             self.правая.setCurrentIndex(СТР_МЕДИА)
         self._проверить()
+        # Отказ по пункту — это «Есть видимые дефекты», и плашка состояния обязана
+        # измениться сразу, пока сотрудник смотрит на экран.
+        self.проверки_руками.emit()
 
     def _нарисовать_ручную(self):
         d = ocenka_media.разобрать(self.ручная)

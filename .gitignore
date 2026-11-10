@@ -12,3 +12,8 @@ kiosk.toml
 server.toml
 config.toml
 gservice.json
+
+# Следы прогона тестов в рабочей копии: в media/ лежат фото и видео клиентов, в pintel.db —
+# оценки. Ни то, ни другое в открытом репозитории оказаться не должно даже случайно.
+pintel/media/
+pintel/pintel.db

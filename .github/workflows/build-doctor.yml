@@ -32,15 +32,15 @@ jobs:
         run: |
           set +e
           python -m pytest tests -q --tb=short > pytest.log 2>&1
-          код=$?
+          rc=$?
           tail -n 200 pytest.log
-          if [ $код -ne 0 ]; then
-            grep -E "^(FAILED|ERROR)" pytest.log | head -20 | while IFS= read -r строка; do
-              echo "::error::$строка"
+          if [ $rc -ne 0 ]; then
+            grep -E "^(FAILED|ERROR)" pytest.log | head -20 | while IFS= read -r line; do
+              echo "::error::$line"
             done
-            echo "::error::Тесты ядра и сервера упали (код $код)"
+            echo "::error::Тесты ядра и сервера упали (код $rc)"
           fi
-          exit $код
+          exit $rc
       - name: Миграции на чистой базе
         run: PINTEL_DATABASE_URL=sqlite:////tmp/mig.db alembic upgrade head
 
@@ -62,13 +62,13 @@ jobs:
       - name: Тесты ядра (архивные слепки — регрессия)
         run: |
           python -m pytest tests -q -s --tb=short --ignore=tests/test_server.py 2>&1 | Tee-Object -FilePath pytest.log
-          $код = $LASTEXITCODE
-          if ($код -ne 0) {
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0) {
             Select-String -Path pytest.log -Pattern '^(FAILED|ERROR)' | Select-Object -First 20 |
               ForEach-Object { Write-Output "::error::$($_.Line)" }
-            Write-Output "::error::Тесты ядра упали в сборке Windows (код $код)"
+            Write-Output "::error::Тесты ядра упали в сборке Windows (код $rc)"
           }
-          exit $код
+          exit $rc
 
       - name: Сборка exe
         run: python -m PyInstaller --clean --noconfirm pintel-doctor.spec

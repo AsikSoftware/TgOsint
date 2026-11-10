@@ -154,4 +154,4 @@ jobs:
         run: |
           gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip pintel-kiosk_Windows_x64.zip pintel-server_Windows_x64.zip `
             --target $env:GITHUB_SHA --title "Pintel — сборка #${{ github.run_number }}" `
-            --notes "pintel-server: касса сотрудника одним файлом (server.toml, gservice.json рядом; пункт 2 — администратор, пункт 1 — запуск). pintel-kiosk: киоск для клиента (kiosk.toml: server, token). pintel-doctor: консольный врач. Для всех точек — VPS, pintel/deploy."
+            --notes "pintel-server: касса сотрудника одним файлом (server.toml, gservice.json рядом; пункт 2 — администратор, пункт 1 — запуск). pintel-kiosk: киоск для клиента — распаковать поверх папки программы и запустить, токен точки и настройки лежат в %LOCALAPPDATA%\PintelKiosk. pintel-doctor: консольный врач. Для всех точек — VPS, pintel/deploy."

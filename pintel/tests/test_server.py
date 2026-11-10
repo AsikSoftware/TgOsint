@@ -869,7 +869,7 @@ def test_istoriya_telefona_po_imei(app, monkeypatch):
     # оба источника выключены: ответ пустой, но причины названы
     monkeypatch.setattr(history_service.settings, "ocenka_db_url", "")
     monkeypatch.setattr(history_service.settings, "requests_sheet_url", "")
-    history_service._кэш.update({"когда": 0.0, "по_имеи": {}, "строк": 0, "беда": ""})
+    history_service._кэш.update({"когда": None, "по_имеи": {}, "строк": 0, "беда": ""})
     r = k.get("/api/kiosk/history", params={"imei": "351234560000019"}, headers=H)
     assert r.status_code == 200
     тело = r.json()

@@ -115,7 +115,7 @@ def _таблица(monkeypatch, строки, через_csv=False):
     else:
         monkeypatch.setattr(сервис.gsheet, "sa_path", lambda: __file__)   # «ключ есть»
         monkeypatch.setattr(сервис.gsheet, "api_rows", lambda url, клетки=None: строки)
-    сервис._кэш.update({"когда": 0.0, "по_имеи": {}, "строк": 0, "беда": ""})
+    сервис._кэш.update({"когда": None, "по_имеи": {}, "строк": 0, "беда": ""})
 
 
 def test_zayavki_chitayutsya_po_nazvaniyam_kolonok(monkeypatch):
@@ -152,7 +152,7 @@ def test_tablica_bez_imei_govorit_ob_etom(monkeypatch):
 def test_vyklyuchennaya_tablica_ne_vydaet_sebya_za_pustuyu(monkeypatch):
     сервис = _сервис()
     monkeypatch.setattr(сервис.settings, "requests_sheet_url", "")
-    сервис._кэш.update({"когда": 0.0, "по_имеи": {}, "строк": 0, "беда": ""})
+    сервис._кэш.update({"когда": None, "по_имеи": {}, "строк": 0, "беда": ""})
     найдено, беда = сервис.заявки(["351234560000019"])
     assert найдено == [] and "не подключены" in беда
 
@@ -179,7 +179,7 @@ def test_po_imei_nazyvaet_kazhdyy_molchashchiy_istochnik(monkeypatch):
     сервис = _сервис()
     monkeypatch.setattr(сервис.settings, "ocenka_db_url", "")
     monkeypatch.setattr(сервис.settings, "requests_sheet_url", "")
-    сервис._кэш.update({"когда": 0.0, "по_имеи": {}, "строк": 0, "беда": ""})
+    сервис._кэш.update({"когда": None, "по_имеи": {}, "строк": 0, "беда": ""})
     итог = сервис.по_имеи(ФиктивнаяБаза(), ["351234560000019"])
     assert итог["есть"] is False and len(итог["почему"]) == 2
     assert any("Оценки" in x for x in итог["почему"])
@@ -200,3 +200,16 @@ def test_zayavki_chitayutsya_i_bez_klyucha(monkeypatch):
     _таблица(monkeypatch, [ШАПКА, СТРОКА], через_csv=True)
     найдено, беда = сервис.заявки(["351234560000019"])
     assert not беда and len(найдено) == 1 and найдено[0]["номер"] == "PT-0001"
+
+
+def test_svezhaya_mashina_ne_schitaet_kesh_goryachim(monkeypatch):
+    """Кэш заявок пуст и не читался — значит читать, сколько бы ни было на монотонных часах.
+
+    Монотонные часы считают от загрузки машины. Ноль в поле «когда» на сервере, работающем
+    неделями, значит «давно», а на только что поднятой машине — «только что»: именно на этом
+    прогон в GitHub молча не читал таблицу вовсе."""
+    сервис = _сервис()
+    _таблица(monkeypatch, [ШАПКА, СТРОКА])
+    monkeypatch.setattr(сервис.time, "monotonic", lambda: 12.0)   # машина поднялась 12 с назад
+    найдено, беда = сервис.заявки(["351234560000019"])
+    assert not беда and len(найдено) == 1

@@ -17,7 +17,7 @@
 
 Поэтому модуль делает три вещи и больше ничего:
   1. `починить` — без прав: порт отвечает? служба есть? остановлена — запустить;
-  2. `поставить` — скачать пакет с сервера Apple, сверить сумму и подпись Apple;
+  2. `скачать_пакет` — скачать пакет с сервера Apple и сверить его сумму;
   3. `под_админом` — то единственное, что требует прав администратора: установка пакета,
      автозапуск службы, перезапуск при сбое, старт. Зовётся отдельным запуском программы
      с повышением прав (одно окно Windows «Разрешить?»).
@@ -40,6 +40,12 @@ import urllib.request
 # Пакет с сервера Apple. Адрес и сумма — из манифеста winget `Apple.AppleMobileDeviceSupport`
 # (он ведёт на тот же сервер Apple). Обновить: взять там новую версию, проверить, что
 # сборка проходит шаг «Служба Apple ставится сама».
+#
+# На точке сверяется только сумма: она однозначно называет файл. А то, что файл с этой
+# суммой подписан Apple, проверяет сборка — на каждом прогоне, средствами самой Windows.
+# Проверять подпись на точке пробовали через PowerShell и убрали: его модуль подписей не
+# грузится, когда программу запустили из другой оболочки, — исправный пакет объявлялся
+# «без подписи», и установка не шла.
 ПАКЕТ = {
     "версия": "19.4.0.10",
     "url": ("https://swcdn.apple.com/content/downloads/20/49/047-76422/"
@@ -139,17 +145,6 @@ class Windows:
                 h.update(кусок)
         return h.hexdigest()
 
-    def подписан_apple(self, путь):
-        """Цифровая подпись файла действительна и принадлежит Apple."""
-        команда = ("$s = Get-AuthenticodeSignature -LiteralPath $env:PINTEL_MSI; "
-                   "Write-Output ($s.Status.ToString() + '|' + $s.SignerCertificate.Subject)")
-        флаги = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", команда],
-                           capture_output=True, timeout=120, creationflags=флаги,
-                           env=dict(os.environ, PINTEL_MSI=путь))
-        статус, _, чей = r.stdout.decode("utf-8", errors="replace").strip().partition("|")
-        return статус == "Valid" and "Apple Inc." in чей
-
     def папка(self):
         база = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.local/share")
         return os.path.join(база, "Pintel", "apple")
@@ -208,7 +203,7 @@ def починить(окр=None, пауза=time.sleep):
 
 
 def скачать_пакет(окр, шаг=None):
-    """Пакет Apple на диске, сумма и подпись сошлись. → путь к файлу. Иначе RuntimeError."""
+    """Пакет Apple на диске, сумма сошлась. → путь к файлу. Иначе RuntimeError."""
     путь = os.path.join(окр.папка(), "AppleMobileDeviceSupport64.msi")
     if not (os.path.isfile(путь) and окр.сумма(путь) == ПАКЕТ["sha256"]):
         try:
@@ -218,8 +213,6 @@ def скачать_пакет(окр, шаг=None):
                                "запасной путь — поставить iTunes с сайта apple.com") from None
         if окр.сумма(путь) != ПАКЕТ["sha256"]:
             raise RuntimeError("скачанный пакет Apple не совпал с ожидаемым — ставить его нельзя")
-    if not окр.подписан_apple(путь):
-        raise RuntimeError("у скачанного пакета нет действительной подписи Apple — ставить его нельзя")
     return путь
 
 

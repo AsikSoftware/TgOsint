@@ -13,17 +13,13 @@ import asyncio
 import importlib.util
 import os
 import sys
-import types
 
 import pytest
 
+from bot_price import загрузить
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ФАЙЛ = os.path.join(HERE, "..", "deploy", "оценка_бот", "kiosk_price.py")
-
-# Раскладка колонок по диапазонам АКБ — копия из `utils/google_price.py` бота: модуль берёт
-# её оттуда, а в тестах того модуля нет, поэтому подкладываем такой же.
-КОЛОНКИ_АКБ = {"нет информации": 3, "0-74": 4, "75-79": 5, "80-85": 6, "86-90": 7,
-               "91-95": 8, "96-99": 9, "100": 10, "100 (0-30)": 11}
 
 ТАБЛИЦА = [
     ["Марка", "Модель", "Память", "нет информации", "0-74", "75-79", "80-85", "86-90",
@@ -46,14 +42,11 @@ class Сделка:
 
 @pytest.fixture
 def прайс(monkeypatch):
-    """Модуль с подменёнными походами наружу: в базу и в Google."""
-    фальшивый = types.ModuleType("utils.google_price")
-    фальшивый.AKB_COL_INDEX_BY_STATE = dict(КОЛОНКИ_АКБ)
-    фальшивый._get_client = lambda: (_ for _ in ()).throw(AssertionError("в тесте Google не зовём"))
-    utils = types.ModuleType("utils")
-    utils.google_price = фальшивый
-    monkeypatch.setitem(sys.modules, "utils", utils)
-    monkeypatch.setitem(sys.modules, "utils.google_price", фальшивый)
+    """Модуль с подменёнными походами наружу: в базу и в Google.
+
+    `utils.google_price` здесь настоящий — тот, что лежит рядом в `deploy/оценка_бот/`:
+    колонку по АКБ выбирает он, и подделка проверяла бы саму себя."""
+    загрузить(monkeypatch)
 
     spec = importlib.util.spec_from_file_location("kiosk_price", ФАЙЛ)
     m = importlib.util.module_from_spec(spec)
@@ -107,17 +100,17 @@ def test_what_is_not_a_link_is_not_taken_for_one(прайс, мусор):
 
 def test_the_price_is_found_the_same_way_as_in_the_common_list(прайс):
     """Правила поиска те же, что у общего прайса: марка, модель, память и колонка по АКБ."""
-    цена = прайс.цена_в_таблице(ТАБЛИЦА, КОЛОНКИ_АКБ["86-90"], "Apple", "iPhone 14 Pro", 128)
+    цена = прайс.цена_в_таблице(ТАБЛИЦА, "86-90", "Apple", "iPhone 14 Pro", 128)
     assert цена == 240000, "пробел внутри числа — это разделитель тысяч, а не другая цена"
-    assert прайс.цена_в_таблице(ТАБЛИЦА, КОЛОНКИ_АКБ["100"], " apple ", "IPHONE 14 PRO",
+    assert прайс.цена_в_таблице(ТАБЛИЦА, "100", " apple ", "IPHONE 14 PRO",
                                 " 128 ") == 270000, "регистр и пробелы не должны мешать"
     # пустая клетка — это «цены нет», а не ноль
-    assert прайс.цена_в_таблице(ТАБЛИЦА, КОЛОНКИ_АКБ["100"], "Apple", "iPhone 13", 256) is None
+    assert прайс.цена_в_таблице(ТАБЛИЦА, "100", "Apple", "iPhone 13", 256) is None
     # строка короче нужной колонки — тоже «нет цены», а не ошибка
-    assert прайс.цена_в_таблице(ТАБЛИЦА, КОЛОНКИ_АКБ["100"], "Apple", "iPhone 12", 64) is None
-    assert прайс.цена_в_таблице(ТАБЛИЦА, КОЛОНКИ_АКБ["86-90"], "Apple", "iPhone 15", 128) is None
+    assert прайс.цена_в_таблице(ТАБЛИЦА, "100", "Apple", "iPhone 12", 64) is None
+    assert прайс.цена_в_таблице(ТАБЛИЦА, "86-90", "Apple", "iPhone 15", 128) is None
     # шапку за цену не принимаем
-    assert прайс.цена_в_таблице(ТАБЛИЦА, 3, "Марка", "Модель", "Память") is None
+    assert прайс.цена_в_таблице(ТАБЛИЦА, "нет информации", "Марка", "Модель", "Память") is None
 
 
 def test_a_point_without_its_own_price_is_counted_by_the_common_one(прайс, monkeypatch):

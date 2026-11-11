@@ -176,3 +176,24 @@ def test_build_tag_is_absent_in_sources():
     """Из исходников программа не обновляется: метки релиза у неё нет."""
     assert updater.свой_тег() == ""
     assert updater.версия_словами("doctor-46").endswith("(сборка 46)")
+
+
+def test_the_exe_icon_is_in_the_form_windows_shows():
+    """Значок программы: мелкие кадры без сжатия, PNG только у 256×256.
+
+    Pillow по умолчанию сжимает PNG-ом все кадры, а Windows надёжно понимает PNG внутри
+    значка лишь у самого крупного: с таким файлом у exe в Проводнике стояла заглушка.
+    Файл собирает `tools/значок.py`; здесь проверяем, что в репозитории лежит именно он."""
+    import importlib.util
+    путь = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "exe_icon.py")
+    spec = importlib.util.spec_from_file_location("exe_icon", путь)
+    exe_icon = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(exe_icon)
+    кадры = dict(exe_icon.кадры_ico())
+    assert {16, 24, 32, 48, 256} <= set(кадры), sorted(кадры)
+    for сторона, данные in кадры.items():
+        png = данные[:8] == b"\x89PNG\r\n\x1a\n"
+        assert png == (сторона == 256), f"кадр {сторона}: {'PNG' if png else 'без сжатия'}"
+        if not png:
+            assert данные[:4] == (40).to_bytes(4, "little"), f"кадр {сторона}: нет заголовка BMP"
+            assert len(данные) == 40 + сторона * сторона * 4 + ((сторона + 31) // 32) * 4 * сторона

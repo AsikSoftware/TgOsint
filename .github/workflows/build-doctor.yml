@@ -123,6 +123,10 @@ jobs:
           python -c "import json, io; io.open('dist/pintel-kiosk/build_info.json', 'w', encoding='utf-8').write(json.dumps({'тег': 'doctor-${{ github.run_number }}'}, ensure_ascii=False))"
           type dist\pintel-kiosk\build_info.json
 
+      - name: Значок зашит во все три exe
+        # сверка побайтно: сборка без значка тоже зелёная, а на точке у программы заглушка
+        run: python tools/exe_icon.py dist\pintel-kiosk\pintel-kiosk.exe dist\pintel-doctor\pintel-doctor.exe dist\pintel-server\pintel-server.exe
+
       - name: Дымовой тест киоска (импорт без экрана)
         shell: pwsh
         run: |

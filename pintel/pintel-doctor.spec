@@ -36,5 +36,5 @@ a = Analysis(['doctor_main.py'], pathex=['.'], binaries=_pmd_bins + _cd_bins + _
                        'aiohttp', 'fastapi', 'uvicorn', 'starlette'], noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='pintel-doctor',
-          debug=False, strip=False, upx=False, console=True)
+          debug=False, strip=False, upx=False, console=True, icon='pintel_kiosk/assets/icon.ico')
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='pintel-doctor')

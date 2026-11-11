@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Цена из сетки магазина по износу батареи (проверено на живом прайсе).
 
-grid = {"база": {код: {гб: цена_идеала}}, "сетка_износа": {код: {гб: {диапазон: цена|None}}}}
-Пустая ячейка диапазона — стоп-сигнал магазина, а не повод считать по-своему.
+grid = {"база": {код: {гб: цена_идеала}}, "сетка_износа": {код: {гб: {колонка: цена|None}}}}
+Колонки — либо диапазоны («0-74», «75-79», … «100», «100новый», «неизвестно»), либо точные
+проценты («72%» … «100%»): как размечена таблица, так и считаем.
+Пустая ячейка — стоп-сигнал магазина, а не повод считать по-своему.
 """
 import re
 
@@ -27,6 +29,8 @@ def wear_price(cells, health, cycles):
     """(цена|None, ключ|None): ключ без цены = «магазин не задал цену»."""
     if not cells:
         return None, None
+    if any(str(k).endswith("%") for k in cells):
+        return _exact_price(cells, health)
     if health is None:
         k = "неизвестно"
         return (cells.get(k), k) if k in cells else (None, None)
@@ -43,6 +47,20 @@ def wear_price(cells, health, cycles):
     return None, None
 
 
+def _exact_price(cells, health):
+    """Сетка по точным процентам. Ключ есть всегда: «нет цены» здесь — это ответ, а не
+    повод взять базовую цену идеала (так аппарат с 60% получил бы цену нового)."""
+    по_проценту = {int(str(k)[:-1]): v for k, v in cells.items() if str(k).endswith("%")}
+    if health is None:
+        # процента нет: цена только там, где она от батареи не зависит
+        цены = set(по_проценту.values())
+        if len(цены) == 1 and None not in цены:
+            return цены.pop(), "любой %"
+        return None, "нет информации"
+    p = min(int(health), 100)
+    return по_проценту.get(p), f"{p}%"       # ниже таблицы колонки нет — цены нет
+
+
 def estimate(grid, code, gb, health, cycles, currency="₸"):
     base_tbl = (grid.get("база") or {}).get(code, {})
     wg = (grid.get("сетка_износа") or {}).get(code, {})
@@ -53,8 +71,9 @@ def estimate(grid, code, gb, health, cycles, currency="₸"):
         p, rk = wear_price(cells, health, cycles)
         if p:
             out["цена"] = p
-            out["основание"] = (f"прайс: батарея {health}% → столбец «{rk}»" if rk != "100новый"
-                                else "прайс: 100%, до 30 циклов — как новый")
+            out["основание"] = ("прайс: 100%, до 30 циклов — как новый" if rk == "100новый"
+                                else "прайс: цена от батареи не зависит" if rk == "любой %"
+                                else f"прайс: батарея {health}% → столбец «{rk}»")
             return out
         if rk:
             what = f"износа {health}%" if health is not None else "аппарата с нечитаемым износом"

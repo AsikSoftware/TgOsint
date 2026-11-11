@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime
 
 from PySide6.QtCore import QEasingCurve, QRectF, QThread, QTimer, QVariantAnimation, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPainter, QPalette, QShortcut
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QShortcut
 from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsView, QMainWindow, QStackedWidget
 
 from pintel_core import phonetest
@@ -1126,8 +1126,17 @@ def main(argv=None):
     cfg = config.load()
     if sys.platform == "win32":
         os.environ.setdefault("QT_QPA_PLATFORM", "windows:darkmode=0")   # не следовать тёмной теме Windows
+    if sys.platform == "win32":
+        # своя метка приложения: без неё Windows держит на панели задач значок-заглушку
+        # и не знает, что окно и ярлык — одна программа
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Pintel.Diagnostics")
+        except Exception:                                    # noqa: BLE001 — значок не повод не запуститься
+            pass
     app = QApplication(argv or sys.argv)
     app.setApplicationName(ui.НАЗВАНИЕ)
+    app.setWindowIcon(QIcon(os.path.join(ui.ASSETS, "icon.ico")))   # окно и панель задач
     app.setStyle("Fusion")
     app.setPalette(light_palette())
     ui.load_fonts()

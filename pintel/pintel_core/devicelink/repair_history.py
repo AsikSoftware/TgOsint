@@ -166,7 +166,19 @@ def сила_формата(fmt):
 # ним мы и чиним разбор, когда он ошибся. Эталон при этом весит сотню килобайт.
 ПРЕДЕЛ_СТРОК = 1500
 MARKER = "CRRepairHistoryItem"
-RELATED = ("repair", "CoreRepair", "mobilerepaird")
+# «battery health» — строка powerd с тем самым процентом, что телефон показывает в
+# «Максимальной ёмкости». Без неё в списке строка не доходила бы до разбора: фильтр по теме
+# выбрасывает всё, что не про ремонт.
+RELATED = ("repair", "CoreRepair", "mobilerepaird", "battery health")
+
+# Nov 11 12:52:15 iPhone powerd[51] <Notice>: Updated battery health
+#     (packId=0 flags=4 state=0 maxCap=79 cycleCount=1064)
+# Сверено на живых аппаратах 11.11.2026: maxCap — ровно то число, что стоит на экране
+# телефона (iPhone 15 Pro, iOS 27.0.1: экран 79, maxCap 79, наше деление ёмкостей давало 80).
+# Выше ста телефон не рисует: на новом аппарате maxCap=103, а на экране 100.
+POWERD_BAT = re.compile(
+    r"(Updated|Previous) battery health \(packId=(\d+) flags=(\d+) state=(-?\d+) "
+    r"maxCap=(\d+) cycleCount=(\d+)\)")
 # признаки, что раздел на телефоне открыт (iOS 18): UI Настроек и демон проснулись
 OPENED = ("updateSpecifiersWithCompletionHandler", "corerepair.preflightControl", "Getting local sealing manifest",
           "fetched RCHL", "delta components", "No delta components found", "repairHistoryForUI",
@@ -516,6 +528,16 @@ class Listener:
                     self.found_at = time.monotonic()
                     self.log(f"история Apple: {len(self.items)} записей")
             return
+        м = POWERD_BAT.search(line)
+        if м:
+            # Телефон назвал своё здоровье сам. Это надёжнее любого нашего деления ёмкостей:
+            # ёмкости он отдаёт сырыми, а это — то же число, что видит клиент на экране.
+            # «Updated» новее «Previous», поэтому им перезаписываем, а «Previous» берём
+            # только если ничего ещё не слышали.
+            запись = {"процент": int(м.group(5)), "циклы": int(м.group(6)),
+                      "состояние": int(м.group(4)), "свежая": м.group(1) == "Updated"}
+            if запись["свежая"] or not self.meta.get("батарея_телефона"):
+                self.meta["батарея_телефона"] = запись
         low = line.lower()
         if not any(k.lower() in low for k in RELATED):
             return

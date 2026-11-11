@@ -10,7 +10,6 @@ from ..external import sickw as sickw_mod
 def build(snap):
     nodes = snap.get("nodes") or {}
     doms = snap.get("domains") or {}
-    bat = battery.analyze(nodes.get("AppleSmartBattery"))
     sto = storage.analyze(doms.get("com.apple.disk_usage"), nodes.get("nvme"))
     pas = passport.build(snap.get("root"))
     leg = legal.build(snap)
@@ -35,6 +34,9 @@ def build(snap):
         if записи:
             hist, перечитан = dict(записи), True
             hist_meta = {**hist_meta, **(meta2 or {})}
+    # Батарею собираем ПОСЛЕ журнала: процент называет сам телефон (powerd пишет его в
+    # журнал), и до перечитывания сырых строк этого числа ещё нет.
+    bat = battery.analyze(nodes.get("AppleSmartBattery"), hist_meta.get("батарея_телефона"))
     if has_face_id(pas["код_модели"]) is False:            # у SE нет Face ID — сверка его не показывает
         hist.pop("FaceID", None)
     hist_ok, hist_why = rh_mod.supported(pas["код_модели"], pas["ios"])

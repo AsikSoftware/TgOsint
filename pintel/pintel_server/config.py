@@ -3,7 +3,6 @@
 import os
 from dataclasses import dataclass, field
 
-from pintel_core.external import gsheet
 
 
 def _list_int(s, default):
@@ -24,7 +23,6 @@ class Settings:
     kiosk_key: str = os.environ.get("PINTEL_KIOSK_KEY", "pintel-kiosk-2026")
     sickw_key: str = os.environ.get("PINTEL_SICKW_KEY", "")
     sickw_services: list = field(default_factory=lambda: _list_int(os.environ.get("PINTEL_SICKW_SERVICES", "61"), [61]))
-    price_sheet_url: str = os.environ.get("PINTEL_PRICE_SHEET_URL", gsheet.DEFAULT_URL)
     # Таблица заявок с сайта: по ней киоск узнаёт, что по этому IMEI клиенту уже называли
     # цену онлайн. Ссылка живёт в окружении, а не в сборке: репозиторий открытый.
     requests_sheet_url: str = os.environ.get("PINTEL_REQUESTS_SHEET_URL", "")

@@ -3,7 +3,6 @@
 {% block title %}Очередь{% endblock %}
 {% block sidestatus %}
   {% for k in kiosks %}<span class="dot {{ '' if k.last_seen_at and (now - k.last_seen_at).total_seconds() < 180 else 'off' }}"></span>Киоск {{ k.name }}: {{ 'на связи' if k.last_seen_at and (now - k.last_seen_at).total_seconds() < 180 else 'не отвечает' }}<br>{% endfor %}
-  Прайс: {{ ('обновлён ' + grid.fetched_at|dt) if grid else 'не загружен' }}<br>
 {% endblock %}
 {% block content %}
 <div class="head">

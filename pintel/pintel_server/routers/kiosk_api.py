@@ -18,7 +18,6 @@ from ..services import kiosk_settings
 from ..services import references as ref_service
 from ..services import ocenka_import
 from ..services import points as points_service
-from ..services import price as price_service
 from ..services import sickw_service
 
 router = APIRouter(prefix="/api/kiosk", tags=["kiosk"])
@@ -80,7 +79,6 @@ def config(kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db
     этот токен на девятнадцати компьютерах и менять его объездом — то же самое, от чего мы
     и уходим. Канал закрыт HTTPS и токеном точки.
     """
-    grid = price_service.current(db)
     из_базы = kiosk_settings.для_точки(db, kiosk.point)
     return {
         "киоск": kiosk.name, "точка": из_базы["point"],
@@ -89,8 +87,6 @@ def config(kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db
         "точка_id": kiosk.point_id,
         "литера": kiosk.point.litera if kiosk.point else None,
         "валюта": settings.currency,
-        "прайс_обновлён": grid.fetched_at.isoformat() if grid else None,
-        "прайс_версия": grid.id if grid else None,
         "sickw_ключ_есть": bool(settings.sickw_key), "время_сервера": now().isoformat(),
         "публичный_адрес": settings.public_url,
         "настройки": из_базы,
@@ -178,14 +174,6 @@ async def reference_upload(file: UploadFile = File(...), name: str = Form(""),
                            model_name=модель, ios=ios, verdict=вердикт))
     db.commit()
     return {"принят": True}
-
-
-@router.get("/price")
-def price(kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
-    grid = price_service.current(db)
-    if not grid:
-        raise HTTPException(404, "прайс ещё не загружен на сервере — Настройки → Обновить прайс")
-    return {"версия": grid.id, "обновлён": grid.fetched_at.isoformat(), "сетка": grid.grid}
 
 
 @router.post("/sickw")

@@ -68,6 +68,21 @@ AKB_BOUNDS_BY_STATE: dict[str, tuple[int, int]] = {
 }
 
 
+def akb_state_from_percent(percent: int) -> str:
+    """Точный процент → прежняя метка диапазона («88» → «86-90»).
+
+    Продавец диапазон больше не выбирает — вводит процент. Метка осталась только как
+    служебное поле `devices.akb`: по ней МойСклад заполняет характеристику «АКБ», и её же
+    получает Pay. Считается из процента, руками её никто не задаёт."""
+    percent = int(percent)
+    if percent >= 100:
+        return "100"
+    for state, (low, high) in AKB_BOUNDS_BY_STATE.items():
+        if low <= percent <= high:
+            return state
+    return "0-74"
+
+
 def percent_columns(header) -> dict[int, int]:
     """Шапка вкладки → {процент: номер колонки}. Пусто — вкладка по диапазонам."""
     cols: dict[int, int] = {}

@@ -3,7 +3,6 @@
   python -m pintel_server.cli init-db
   python -m pintel_server.cli create-admin --login admin --name "Руслан" [--password …]
   python -m pintel_server.cli create-kiosk --name "Алматы-1" [--point "Алматы-1"]
-  python -m pintel_server.cli fetch-price
   python -m pintel_server.cli run [--port 8000]
 """
 import argparse
@@ -15,7 +14,6 @@ from sqlalchemy import select
 from .auth import hash_password, new_kiosk_token
 from .db import SessionLocal, init_db
 from .models import ROLE_ADMIN, Kiosk, Point, User
-from .services import price as price_service
 
 
 def main(argv=None):
@@ -24,7 +22,6 @@ def main(argv=None):
     sub.add_parser("init-db")
     s = sub.add_parser("create-admin"); s.add_argument("--login", required=True); s.add_argument("--name", required=True); s.add_argument("--password")
     s = sub.add_parser("create-kiosk"); s.add_argument("--name", required=True); s.add_argument("--point")
-    sub.add_parser("fetch-price")
     s_prune = sub.add_parser("prune")        # убрать сырые слепки у старых оценок
     s_prune.add_argument("--days", type=int, default=None)
     sub.add_parser("sync-shops")             # завести точки по магазинам Оценки (те же id)
@@ -58,9 +55,6 @@ def main(argv=None):
             db.add(Kiosk(name=a.name, token_hash=h, point_id=point.id if point else None))
             db.commit()
             print(f"киоск «{a.name}» создан\nтокен (показывается один раз): {token}"); return 0
-        if a.cmd == "fetch-price":
-            row = price_service.refresh(db)
-            print(f"прайс: {row.models_count} моделей, {row.positions_count} позиций"); return 0
         if a.cmd == "sync-shops":
             from .services import points as points_service
             итог = points_service.синхронизировать(db)

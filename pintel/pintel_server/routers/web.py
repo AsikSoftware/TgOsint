@@ -22,13 +22,12 @@ from ..config import settings
 from ..db import get_db, now
 from ..models import (MEDIA_PHOTO, MEDIA_VIDEO, ROLE_ADMIN, ROLE_CASHIER, ROLES, ST_AT_COUNTER, ST_BOUGHT,
                       ST_DECLINED, ST_IN_WORK, ST_NEW, STATUSES, AuditLog, Device, Evaluation, EvaluationMedia,
-                      Kiosk, LoginEvent, PhoneTest, Point, PriceGrid, User)
+                      Kiosk, LoginEvent, PhoneTest, Point, User)
 from ..services import evaluations as ev_service
 from ..services import ocenka_import
 from ..services import kiosk_settings
 from ..services import points as points_service
 from ..services import stats
-from ..services import price as price_service
 from ..services import references as ref_service
 from ..services import sickw_service
 
@@ -117,9 +116,8 @@ def queue(request: Request, q: str = "", period: str = "today", user: User = Dep
         stmt = stmt.where(or_(Evaluation.point_id == user.point_id, Evaluation.point_id.is_(None)))
     rows = db.scalars(stmt).all()
     kiosks = db.scalars(select(Kiosk).where(Kiosk.is_active == True)).all()  # noqa: E712
-    grid = price_service.current(db)
     return render(request, "queue.html", user, rows=rows, stats=ev_service.day_stats(db, day, None if user.role == ROLE_ADMIN else user.point_id),
-                  q=q, period=period, kiosks=kiosks, grid=grid, day=day, now=now())
+                  q=q, period=period, kiosks=kiosks, day=day, now=now())
 
 
 # ---------- карточка оценки ----------
@@ -442,10 +440,9 @@ async def media_receive(request: Request, token: str, db: DbSession = Depends(ge
 
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, user: User = Depends(require_senior), db: DbSession = Depends(get_db)):
-    grid = price_service.current(db)
     kiosks = db.scalars(select(Kiosk).order_by(Kiosk.name)).all()
     points = db.scalars(select(Point).order_by(Point.name)).all()
-    return render(request, "settings.html", user, grid=grid, kiosks=kiosks, points=points,
+    return render(request, "settings.html", user, kiosks=kiosks, points=points,
                   sickw_key_set=bool(settings.sickw_key), gservice_set=os.path.isfile(settings.gservice_json),
                   error=request.query_params.get("e"), new_token=request.query_params.get("t"),
                   для_точки=request.query_params.get("p"),
@@ -500,15 +497,6 @@ def references_export(user: User = Depends(require_senior), db: DbSession = Depe
                     headers={"Content-Disposition": "attachment; filename=\"pintel-references.zip\"; "
                                                     "filename*=UTF-8''" + quote(name),
                              "Cache-Control": "no-store"})
-
-
-@router.post("/settings/price/refresh")
-def settings_price_refresh(user: User = Depends(require_senior), db: DbSession = Depends(get_db)):
-    try:
-        row = price_service.refresh(db, user)
-    except Exception as e:                                       # noqa: BLE001
-        return RedirectResponse(f"/settings?e={str(e)[:300]}", 303)
-    return RedirectResponse(f"/settings?m=Прайс обновлён: {row.models_count} моделей, {row.positions_count} позиций", 303)
 
 
 @router.post("/settings/sickw/balance")

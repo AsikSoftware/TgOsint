@@ -15,7 +15,7 @@ import webbrowser
 
 ENV_MAP = {
     "sickw_key": "PINTEL_SICKW_KEY", "sickw_services": "PINTEL_SICKW_SERVICES",
-    "price_sheet_url": "PINTEL_PRICE_SHEET_URL", "gservice_json": "PINTEL_GSERVICE_JSON",
+    "gservice_json": "PINTEL_GSERVICE_JSON",
     "public_url": "PINTEL_PUBLIC_URL", "tz": "PINTEL_TZ", "currency": "PINTEL_CURRENCY",
     "secret_key": "PINTEL_SECRET_KEY", "database_url": "PINTEL_DATABASE_URL",
     "kiosk_return_seconds": "PINTEL_KIOSK_RETURN_SECONDS", "apple_history_seconds": "PINTEL_APPLE_HISTORY_SECONDS",
@@ -103,8 +103,7 @@ def interactive(rc):
   │  1  Запустить кассу (откроется в браузере)            │
   │  2  Создать администратора                            │
   │  3  Создать киоск и выдать токен                      │
-  │  4  Обновить прайс из Google Таблицы                  │
-  │  5  Проверить настройки (ключи, база, адрес)          │
+  │  4  Проверить настройки (ключи, база, адрес)          │
   │  0  Выход                                             │
   └──────────────────────────────────────────────────────┘
   база: {rc['db']}
@@ -132,12 +131,9 @@ def interactive(rc):
                 point = input("  точка (Enter — без точки): ").strip()
                 cli.main(["create-kiosk", "--name", name] + (["--point", point] if point else []))
             elif choice == "4":
-                cli.main(["fetch-price"])
-            elif choice == "5":
                 say(f"  адрес кассы: {settings.public_url}")
                 say(f"  ключ Sickw: {'задан' if settings.sickw_key else 'нет (server.toml → sickw_key)'}")
                 say(f"  gservice.json: {'найден' if os.path.isfile(settings.gservice_json) else 'не найден: ' + settings.gservice_json}")
-                say(f"  прайс: {settings.price_sheet_url[:60]}…")
                 say(f"  часовой пояс: {settings.tz}, валюта: {settings.currency}")
             elif choice in ("0", "q", ""):
                 return 0

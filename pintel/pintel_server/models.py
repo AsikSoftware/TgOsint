@@ -278,18 +278,6 @@ class ReferenceBundle(Base):
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=now, index=True)
 
 
-class PriceGrid(Base):
-    __tablename__ = "price_grids"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    fetched_at: Mapped[datetime] = mapped_column(TZDateTime, default=now)
-    source: Mapped[Optional[str]] = mapped_column(String(32))
-    models_count: Mapped[int] = mapped_column(Integer, default=0)
-    positions_count: Mapped[int] = mapped_column(Integer, default=0)
-    grid: Mapped[dict] = mapped_column(JSON)
-    is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    fetched_by: Mapped[Optional[str]] = mapped_column(String(120))
-
-
 class SickwCache(Base):
     __tablename__ = "sickw_cache"
     __table_args__ = (UniqueConstraint("imei", "service", name="uq_sickw_imei_service"),)

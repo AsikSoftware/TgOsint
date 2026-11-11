@@ -19,7 +19,6 @@ from pintel_server.db import SessionLocal, init_db
 from pintel_server.models import (AuditLog, Device, Evaluation, Kiosk, LoginEvent, Point, User,
                                    ROLE_ADMIN, ROLE_CASHIER, ROLE_SENIOR)
 from pintel_server.auth import hash_password
-from pintel_server.services import price as price_service
 from pintel_server.services import references
 from pintel_core.devicelink import snapshot
 from pintel_core.analysis import report as report_mod
@@ -115,17 +114,13 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
     k = TestClient(app, follow_redirects=False)
     assert k.get("/api/kiosk/config").status_code == 401
     cfg = k.get("/api/kiosk/config", headers=H).json()
-    assert cfg["точка"] == "Алматы-1" and cfg["прайс_версия"] is None
+    assert cfg["точка"] == "Алматы-1"
+    # прайса на сервере кассы нет: цену сделки считает бот Оценки, второй копии не держим
+    assert "прайс_версия" not in cfg and "прайс_обновлён" not in cfg
     assert "TEST-PC" in cfg["киоск"]           # машина записалась сама
     assert k.get("/api/kiosk/price", headers=H).status_code == 404
 
-    # прайс: подменяем Google Таблицу
-    fake_grid = {"база": {"iPhone13,2": {64: 80000}}, "сетка_износа": {}, "источник": "api", "моделей": 1, "позиций": 1, "не_распознано": []}
-    monkeypatch.setattr(price_service.gsheet, "fetch_grid", lambda url=None, models=None: fake_grid)
-    r = admin.post("/settings/price/refresh")
-    assert r.status_code == 303 and "Прайс обновлён" in loc(r)
-    p = k.get("/api/kiosk/price", headers=H).json()
-    assert p["версия"] >= 1 and p["сетка"]["моделей"] == 1
+    assert admin.post("/settings/price/refresh").status_code in (404, 405)
 
     # оценка с киоска, идемпотентно
     rep, snap = real_report()

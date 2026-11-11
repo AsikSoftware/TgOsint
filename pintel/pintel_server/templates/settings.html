@@ -12,17 +12,6 @@
 {% endif %}
 <div class="grid2">
   <section class="sec">
-    <h2>Прайс из Google Таблицы</h2>
-    {% if grid %}<div class="row"><span class="dot"></span><b class="ok">Обновлён {{ grid.fetched_at|dt }} · {{ grid.models_count }} моделей · {{ grid.positions_count }} позиций · сетка по износу</b></div>
-    {% else %}<div class="row"><span class="dot off"></span><b class="warn">Прайс ещё не загружен</b></div>{% endif %}
-    <div class="note">Таблица закрыта для всех, кроме сервис-аккаунта{{ ' (gservice.json найден)' if gservice_set else ' — gservice.json НЕ найден на сервере' }}. Цена берётся по фактическому износу батареи из вашей сетки.</div>
-    <div class="note">Ссылка: <a href="{{ settings.price_sheet_url }}" target="_blank">{{ settings.price_sheet_url[:70] }}…</a></div>
-    <div class="row">
-      <form method="post" action="/settings/price/refresh"><button class="btn primary" type="submit">Обновить прайс сейчас</button></form>
-      {% if grid and grid.grid.get('не_распознано') %}<details><summary>Не распозналось ({{ grid.grid.get('не_распознано')|length }})</summary><pre>{{ grid.grid.get('не_распознано')|join('\n') }}</pre></details>{% endif %}
-    </div>
-  </section>
-  <section class="sec">
     <h2>Внешние сервисы</h2>
     <div class="kv"><span>Sickw (чёрный список, GSX)</span><span class="{{ 'ok' if sickw_key_set else 'warn' }}">{{ 'ключ задан на сервере' if sickw_key_set else 'ключ не задан (PINTEL_SICKW_KEY)' }}{% if balance %} · баланс {{ balance }}{% endif %}</span></div>
     <div class="row"><form method="post" action="/settings/sickw/balance"><button class="btn sm" type="submit">Проверить баланс</button></form></div>

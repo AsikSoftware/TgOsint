@@ -86,6 +86,25 @@ jobs:
           Copy-Item config.example.toml dist\pintel-doctor\config.example.toml
           Copy-Item README.md dist\pintel-doctor\README.md
 
+      - name: Служба Apple ставится сама (чистая Windows, настоящий сервер Apple)
+        # Весь путь, которым пойдёт новый ноутбук на точке: скачать пакет с сервера Apple,
+        # сверить сумму и подпись, поставить с правами администратора, дождаться порта 27015.
+        # Сборку не роняем: упал сервер Apple — релиз всё равно нужен, а здесь будет жёлтая
+        # пометка. Упало из-за нас — чинить до выката (адрес пакета: apple_service.ПАКЕТ).
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = 'dist\pintel-doctor\pintel-doctor.exe'
+          & $exe link
+          Write-Host "до установки: код $LASTEXITCODE (на чистой машине службы нет — это ожидаемо)"
+          & $exe link --install
+          if ($LASTEXITCODE -ne 0) { Write-Output "::warning::Служба Apple не поставилась сама (код $LASTEXITCODE) — смотри шаг сборки"; exit 1 }
+          sc.exe query "Apple Mobile Device Service"
+          $mux = Test-NetConnection -ComputerName 127.0.0.1 -Port 27015 -WarningAction SilentlyContinue
+          if (-not $mux.TcpTestSucceeded) { Write-Output "::warning::Служба Apple поставлена, но порт 27015 молчит"; exit 1 }
+          & $exe selfcheck
+          Write-Host "служба Apple поставлена программой, порт 27015 отвечает"
+
       - name: Упаковать доктора
         shell: pwsh
         run: Compress-Archive -Path dist\pintel-doctor -DestinationPath pintel-doctor_Windows_x64.zip
@@ -158,4 +177,4 @@ jobs:
         run: |
           gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip pintel-kiosk_Windows_x64.zip pintel-server_Windows_x64.zip `
             --target $env:GITHUB_SHA --title "Pintel Diagnostics — сборка #${{ github.run_number }}" `
-            --notes "pintel-server: касса сотрудника одним файлом (server.toml, gservice.json рядом; пункт 2 — администратор, пункт 1 — запуск). pintel-kiosk: киоск для клиента — распаковать поверх папки программы и запустить, токен точки и настройки лежат в %LOCALAPPDATA%\PintelKiosk. pintel-doctor: консольный врач. Для всех точек — VPS, pintel/deploy."
+            --notes "pintel-server: касса сотрудника одним файлом (server.toml, gservice.json рядом; пункт 2 — администратор, пункт 1 — запуск). pintel-kiosk: киоск для клиента — распаковать поверх папки программы и запустить, токен точки и настройки лежат в %LOCALAPPDATA%\PintelKiosk. iTunes ставить не нужно: службу Apple программа скачивает с сервера Apple и ставит сама — кнопка «Починить связь с iPhone» на экране ожидания (один раз Windows спросит разрешение). pintel-doctor: консольный врач. Для всех точек — VPS, pintel/deploy."

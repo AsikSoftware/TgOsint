@@ -1177,3 +1177,54 @@ def test_panel_istorii_vmeshchaet_svoy_tekst(окно):
     assert not панель.isHidden()
     assert панель.height() >= панель.высота_для(панель.width())
     assert панель.текст.heightForWidth(панель.текст.width()) <= панель.текст.height() + 1
+
+
+def test_a_silent_apple_service_is_fixed_by_the_program_itself(окно, monkeypatch):
+    """Служба Apple молчит: сначала программа молча пробует поднять её сама, и только если
+    не вышло — показывает кнопку. Сотруднику не нужно знать слов «Apple Mobile Device
+    Service»: раньше экран просил перезапустить её руками, и точка стояла."""
+    from pintel_core.devicelink import apple_service
+    from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER
+
+    попытки, по_кнопке = [], []
+    monkeypatch.setattr(окно, "_run", lambda fn, ok=None, err=None: попытки.append((fn, ok)))
+    кнопка = окно.s_main.b_связь
+    assert кнопка.isHidden()
+
+    окно.on_tick(NO_DRIVER, "", 0)
+    assert len(попытки) == 1 and попытки[0][0] is apple_service.починить
+    assert кнопка.isHidden(), "пока идёт тихая попытка, кнопку не показываем"
+    окно.on_tick(NO_DRIVER, "", 0)
+    assert len(попытки) == 1, "вторую попытку поверх первой не запускаем"
+
+    попытки[0][1](apple_service.НУЖНЫ_ПРАВА)            # без прав не вышло
+    окно.on_tick(NO_DRIVER, "", 0)
+    assert not кнопка.isHidden() and "Починить связь" in кнопка.text()
+    assert len(попытки) == 1, "молча пробуем один раз за сбой"
+
+    # по кнопке — полный путь: установка или перезапуск с окном Windows
+    monkeypatch.setattr(apple_service, "обеспечить",
+                        lambda сказать=None: по_кнопке.append(1) or (apple_service.ГОТОВО, "готово"))
+    окно.починить_связь()
+    assert not кнопка.isEnabled() and "Чиним" in кнопка.text()
+    fn, ok = попытки[-1]
+    ok(fn())
+    assert по_кнопке == [1] and кнопка.isHidden()
+
+    # связь вернулась — следующий сбой снова начнётся с тихой попытки
+    окно.on_tick(NO_DEVICE, "", 0)
+    окно.on_tick(NO_DRIVER, "", 0)
+    assert len(попытки) == 3 and попытки[-1][0] is apple_service.починить
+
+
+def test_the_repair_button_is_not_offered_outside_windows(окно, monkeypatch):
+    """На маке и линуксе службы Apple нет вовсе — кнопка там была бы обманом."""
+    from pintel_core.devicelink import apple_service
+    from pintel_core.devicelink.connect import NO_DRIVER
+
+    попытки = []
+    monkeypatch.setattr(окно, "_run", lambda fn, ok=None, err=None: попытки.append((fn, ok)))
+    окно.on_tick(NO_DRIVER, "", 0)
+    попытки[0][1](apple_service.НЕ_WINDOWS)
+    окно.on_tick(NO_DRIVER, "", 0)
+    assert окно.s_main.b_связь.isHidden() and len(попытки) == 1

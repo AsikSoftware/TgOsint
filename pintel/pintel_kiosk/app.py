@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QShor
 from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsView, QMainWindow, QStackedWidget
 
 from pintel_core import phonetest
-from pintel_core.devicelink import connect
+from pintel_core.devicelink import apple_service, connect
 from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER, READY
 from pintel_core.external import ocenka
 
@@ -179,6 +179,7 @@ class ScaledHost(QGraphicsView):
 class KioskWindow(QMainWindow):
     # результат теста с телефона клиента: приходит из потока мини-сервера
     тест_приехал = Signal(dict)
+    связь_сказала = Signal(str)                 # ход починки службы Apple, из потока
 
     def __init__(self, cfg):
         super().__init__()
@@ -189,6 +190,8 @@ class KioskWindow(QMainWindow):
         self.pipeline = None
         self.last = None
         self.tasks = []
+        # служба Apple: пробовали ли поднять её молча, идёт ли починка, наша ли это забота
+        self._связь_пробовали = self._чиним_связь = self._связь_не_чиним = False
         self.setWindowTitle(ui.НАЗВАНИЕ)
         self.stack = QStackedWidget()
         self.host = ScaledHost(self.stack)
@@ -213,6 +216,8 @@ class KioskWindow(QMainWindow):
         self.s_admin.обновить.connect(self._проверить_обновление)
         self.s_main.начать.connect(self.начать_сделку)
         self.s_main.обновить.connect(self.обновиться)
+        self.s_main.починить_связь.connect(self.починить_связь)
+        self.связь_сказала.connect(lambda текст: self.s_main.показать_починку(текст, занято=True))
         self.s_start.далее.connect(self.анкета_готова)
         self.s_start.отмена.connect(self.go_home)
         self.анкета, self.статус_сделки, self.переклассификация = {}, None, None
@@ -509,13 +514,60 @@ class KioskWindow(QMainWindow):
         if self.state == "idle" and self.client.enabled:
             self.s_main.set_status("Готов к работе" if ok else f"Автономно: {text}", ok=ok)
 
+    # ---------- связь с iPhone: служба Apple ----------
+    def _связь_пропала(self):
+        """Служба Apple молчит. Первый раз за сбой поднимаем её сами и молча — на запуск
+        остановленной службы прав не нужно. Не вышло — показываем кнопку: дальше идёт
+        установка или перезапуск, а это уже окно Windows «Разрешить?»."""
+        if self._чиним_связь or self._связь_не_чиним:
+            return
+        if not self._связь_пробовали:
+            self._связь_пробовали = True
+            self._чиним_связь = True
+            self._run(apple_service.починить, ok=self._связь_молча,
+                      err=lambda текст: self._связь_молча(apple_service.НЕ_ВЫШЛО))
+            return
+        self.s_main.показать_починку("Починить связь с iPhone")
+
+    def _связь_молча(self, итог):
+        self._чиним_связь = False
+        self._связь_не_чиним = итог == apple_service.НЕ_WINDOWS
+        log_line(f"связь: служба Apple молчит, попытка без прав — {итог}")
+
+    def _связь_вернулась(self):
+        if self._связь_пробовали and not self._чиним_связь:
+            self._связь_пробовали = False
+            self.s_main.показать_починку("")
+
+    def починить_связь(self):
+        """Кнопка на экране ожидания: запустить службу, а нет её — скачать и поставить."""
+        if self._чиним_связь:
+            return
+        self._чиним_связь = True
+        self.s_main.показать_починку("Чиним связь…", занято=True)
+        self._run(lambda: apple_service.обеспечить(сказать=self.связь_сказала.emit),
+                  ok=self._связь_починили,
+                  err=lambda текст: self._связь_починили((apple_service.НЕ_ВЫШЛО, текст)))
+
+    def _связь_починили(self, пара):
+        итог, текст = пара
+        self._чиним_связь = False
+        log_line(f"связь: починка по кнопке — {итог}: {текст}")
+        готово = итог == apple_service.ГОТОВО
+        self.s_main.set_status(текст, ok=готово)
+        self.s_main.показать_починку("" if готово else "Починить связь с iPhone — повторить")
+
     def on_tick(self, state, detail, count):
         self.net.device_state = state
         self.кабель = state
+        if state == NO_DRIVER:
+            self._связь_пропала()
+        else:
+            self._связь_вернулась()
         if self.state == "idle":
             if state == NO_DRIVER:
-                self.s_main.set_status("Служба Apple не отвечает — перезапустите "
-                                       "Apple Mobile Device Service", ok=False)
+                if not self._чиним_связь:
+                    self.s_main.set_status("Нет связи с iPhone — служба Apple не отвечает", ok=False)
                 self.s_main.set_device("nodriver")
             elif state == READY and count:
                 self.s_main.set_device("found")
@@ -1123,6 +1175,10 @@ def light_palette():
 
 
 def main(argv=None):
+    # повышенный запуск «поставить службу Apple»: без окна, сделал — вышел (apple_service)
+    код = apple_service.точка_входа(list(argv or sys.argv))
+    if код is not None:
+        return код
     cfg = config.load()
     if sys.platform == "win32":
         os.environ.setdefault("QT_QPA_PLATFORM", "windows:darkmode=0")   # не следовать тёмной теме Windows

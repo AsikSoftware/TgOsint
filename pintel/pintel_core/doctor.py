@@ -20,7 +20,7 @@ from datetime import datetime
 from . import __version__
 from .analysis import capabilities, report as report_mod
 from . import reference
-from .devicelink import connect, repair_history, snapshot
+from .devicelink import apple_service, connect, repair_history, snapshot
 from .external import gsheet, pricing, sickw
 
 if os.name == "nt":
@@ -197,9 +197,24 @@ def cmd_selfcheck(args, cfg):
     say(f"туннель CoreDevice (нужен с iOS 17.4): {канал_туннеля()}")
     st, detail, devs = asyncio.run(connect.list_usb())
     say(f"кабель/драйвер: {st} — {connect.HUMAN[st]} {detail}")
+    if sys.platform == "win32":
+        окр = apple_service.Windows()
+        say(f"служба Apple: {apple_service.служба(окр)}; порт {apple_service.ПОРТ[1]} "
+            f"{'отвечает' if окр.порт_жив() else 'молчит'} (чинит: pintel-doctor link --install)")
     if devs:
         say("устройства на USB:", [d.serial for d in devs])
     return 0
+
+
+def cmd_link(args, cfg):
+    """Связь с iPhone на Windows: что со службой Apple; с --install — поставить и починить."""
+    if not args.install:
+        итог = apple_service.починить()
+        say(f"служба Apple: {итог} — {apple_service.ЧЕЛОВЕКУ.get(итог, итог)}")
+        return 0 if итог in (apple_service.ГОТОВО, apple_service.НЕ_WINDOWS) else 1
+    итог, текст = apple_service.обеспечить(сказать=say)
+    say(f"служба Apple: {итог} — {текст}")
+    return 0 if итог in (apple_service.ГОТОВО, apple_service.НЕ_WINDOWS) else 1
 
 
 def cmd_wait(args, cfg):
@@ -564,12 +579,16 @@ def _open_out():
             pass
 
 
-COMMANDS = {"selfcheck": cmd_selfcheck, "wait": cmd_wait, "snapshot": cmd_snapshot,
+COMMANDS = {"selfcheck": cmd_selfcheck, "link": cmd_link, "wait": cmd_wait, "snapshot": cmd_snapshot,
             "report": cmd_report, "apple": cmd_apple, "sickw": cmd_sickw,
             "price": cmd_price, "fixtures": cmd_fixtures, "reference": cmd_reference}
 
 
 def main(argv=None):
+    # повышенный запуск «поставить службу Apple» (apple_service): сделал — вышел
+    код = apple_service.точка_входа(list(argv if argv is not None else sys.argv))
+    if код is not None:
+        return код
     ap = argparse.ArgumentParser(prog="pintel-doctor", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", help="путь к config.toml")
@@ -582,6 +601,8 @@ def main(argv=None):
     s.add_argument("--sickw", action="store_true")
     s = sub.add_parser("report"); s.add_argument("file")
     s = sub.add_parser("apple"); s.add_argument("--seconds", type=int, default=120)
+    s = sub.add_parser("link", help="служба Apple на Windows: проверить, с --install — поставить и починить")
+    s.add_argument("--install", action="store_true")
     s = sub.add_parser("reference", help="эталон: слепок + журнал Apple + правда с экрана телефона")
     s.add_argument("--seconds", type=int, default=180); s.add_argument("--out")
     s = sub.add_parser("sickw"); s.add_argument("imei"); s.add_argument("--fresh", action="store_true")

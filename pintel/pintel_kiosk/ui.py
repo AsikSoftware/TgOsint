@@ -870,6 +870,7 @@ class MainScreen(Screen):
     """
 
     обновить = Signal()
+    починить_связь = Signal()
     начать = Signal()
 
     ПОДСКАЗКА = "Нажмите, чтобы начать"
@@ -893,6 +894,14 @@ class MainScreen(Screen):
         self.root.addStretch(1)
         низ = QHBoxLayout()
         низ.addStretch(1)
+        # Служба Apple молчит — чинит её сама программа, по этой кнопке (см. apple_service)
+        self.b_связь = QPushButton("Починить связь с iPhone")
+        self.b_связь.setObjectName("update")
+        self.b_связь.setCursor(Qt.PointingHandCursor)
+        self.b_связь.setFont(font(FONT_TEXT, 20, W.Bold))
+        self.b_связь.clicked.connect(self.починить_связь.emit)
+        self.b_связь.setVisible(False)
+        низ.addWidget(self.b_связь)
         self.b_обновить = QPushButton("Обновить программу")
         self.b_обновить.setObjectName("update")
         self.b_обновить.setCursor(Qt.PointingHandCursor)
@@ -918,6 +927,13 @@ class MainScreen(Screen):
         """wait | found | nodriver — что с кабелем; меняет строку под знаком."""
         self.device = state
         self.update()
+
+    def показать_починку(self, текст="", занято=False):
+        """Кнопка «Починить связь с iPhone». Пусто — прячем."""
+        self.b_связь.setVisible(bool(текст))
+        self.b_связь.setEnabled(not занято)
+        if текст:
+            self.b_связь.setText(текст)
 
     def показать_обновление(self, текст="", занято=False):
         """Новая версия найдена — кнопка появляется. Пусто — прячем."""
@@ -1065,7 +1081,7 @@ class MainScreen(Screen):
         p.drawPath(стрелка)
         строка, цвет_строки = {
             "found": ("Телефон подключён", C["okdot"]),
-            "nodriver": ("Служба Apple не отвечает — перезапустите Apple Mobile Device Service",
+            "nodriver": ("Нет связи с iPhone — программа чинит её сама, кнопка внизу экрана",
                          C["warntext"]),
         }.get(self.device, ("", C["muted"]))
         if строка:

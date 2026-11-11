@@ -50,6 +50,16 @@ jobs:
         run: |
           & dist\pintel-doctor\pintel-doctor.exe link --install
           if ($LASTEXITCODE -ne 0) { throw "служба Apple не поставилась (код $LASTEXITCODE)" }
+      - name: Пакет подписан Apple
+        # На точке сверяется только сумма; здесь — что файл с этой суммой действительно
+        # подписан Apple. Меняете apple_service.ПАКЕТ — этот шаг обязан остаться зелёным.
+        shell: pwsh
+        run: |
+          $msi = Join-Path $env:LOCALAPPDATA 'Pintel\apple\AppleMobileDeviceSupport64.msi'
+          $s = Get-AuthenticodeSignature -LiteralPath $msi
+          Write-Host "подпись: $($s.Status) | $($s.SignerCertificate.Subject)"
+          Write-Host "sha256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $msi).Hash)"
+          if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'Apple Inc\.') { throw "пакет не подписан Apple" }
       - name: После установки — служба работает и порт отвечает
         shell: pwsh
         run: |

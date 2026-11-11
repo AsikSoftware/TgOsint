@@ -1,0 +1,74 @@
+name: Проверка — служба Apple ставится сама
+
+# Только проверка: ничего не публикует, релиз не создаёт и точки не обновляет.
+# Собирает одного «доктора» и проходит на чистой Windows весь путь нового ноутбука:
+# скачать пакет с сервера Apple, сверить сумму и подпись, поставить, дождаться порта 27015.
+# Запускается руками и когда меняется сам этот файл.
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/new-session-1hqkrp]
+    paths:
+      - '.github/workflows/check-apple-service.yml'
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: '1'
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pintel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Зависимости (ядро)
+        run: python -m pip install --quiet -e ".[test]" pyinstaller
+      - name: Тесты службы Apple на Windows
+        run: python -m pytest tests/test_apple_service.py -q --tb=short
+      - name: Сборка доктора
+        run: python -m PyInstaller --clean --noconfirm pintel-doctor.spec
+      - name: Значок зашит в exe
+        run: python tools/exe_icon.py dist\pintel-doctor\pintel-doctor.exe
+      - name: До установки — службы нет
+        shell: pwsh
+        run: |
+          sc.exe query "Apple Mobile Device Service"
+          Write-Host "sc: код $LASTEXITCODE (1060 — службы нет)"
+          & dist\pintel-doctor\pintel-doctor.exe link
+          Write-Host "link: код $LASTEXITCODE"
+          exit 0
+      - name: Служба Apple ставится сама
+        shell: pwsh
+        run: |
+          & dist\pintel-doctor\pintel-doctor.exe link --install
+          if ($LASTEXITCODE -ne 0) { throw "служба Apple не поставилась (код $LASTEXITCODE)" }
+      - name: После установки — служба работает и порт отвечает
+        shell: pwsh
+        run: |
+          sc.exe query "Apple Mobile Device Service"
+          sc.exe qc "Apple Mobile Device Service"
+          sc.exe qfailure "Apple Mobile Device Service"
+          $mux = Test-NetConnection -ComputerName 127.0.0.1 -Port 27015 -WarningAction SilentlyContinue
+          if (-not $mux.TcpTestSucceeded) { throw "порт 27015 молчит" }
+          & dist\pintel-doctor\pintel-doctor.exe selfcheck
+          if ($LASTEXITCODE -ne 0) { throw "selfcheck упал" }
+      - name: Зависшая служба чинится без скачивания
+        shell: pwsh
+        run: |
+          sc.exe config "Apple Mobile Device Service" start= disabled
+          sc.exe stop "Apple Mobile Device Service"
+          Start-Sleep -Seconds 4
+          & dist\pintel-doctor\pintel-doctor.exe link
+          Write-Host "link при отключённой службе: код $LASTEXITCODE (ждём 1 — нужны права)"
+          & dist\pintel-doctor\pintel-doctor.exe link --install
+          if ($LASTEXITCODE -ne 0) { throw "отключённая служба не починилась (код $LASTEXITCODE)" }
+          $mux = Test-NetConnection -ComputerName 127.0.0.1 -Port 27015 -WarningAction SilentlyContinue
+          if (-not $mux.TcpTestSucceeded) { throw "после починки порт 27015 молчит" }

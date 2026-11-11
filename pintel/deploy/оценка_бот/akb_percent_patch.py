@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Бот Оценки: продавец вводит точный процент АКБ, кнопок-диапазонов больше нет.
+"""Бот Оценки: продавец вводит точный процент АКБ. Кнопок-диапазонов и «нет информации» нет.
 
     python3.13 akb_percent_patch.py <каталог бота>            # поставить
     python3.13 akb_percent_patch.py <каталог бота> --check    # только проверить, ляжет ли
@@ -10,20 +10,21 @@
 Перед записью рядом кладётся копия `<файл>.bak_<дата>`.
 
 Что меняется:
-  • вопрос «Укажи состояние аккумулятора» с девятью кнопками → «Укажи точный процент АКБ»,
-    кнопка одна — «нет информации»;
-  • введённый процент уходит в `devices.akb_exact`, по нему прайс берёт свою колонку;
+  • вопрос «Укажи состояние аккумулятора» с девятью кнопками → «Укажи точный процент АКБ,
+    только цифры». Кнопок нет вовсе: ответ один — число от 1 до 100;
+  • процент уходит в `devices.akb_exact`, по нему прайс берёт свою колонку;
   • `devices.akb` остаётся служебной меткой, выводится из процента сама: по ней МойСклад
     заполняет характеристику «АКБ», и её получает Pay — там ничего не меняется;
   • в карточках сделки вместо «86-90 (88%)» — «88%»;
-  • в меню правки пункт «АКБ» принимает процент цифрами (0 — нет информации), отдельный
-    пункт «АКБ точно» убран.
+  • в меню правки пункт «АКБ» принимает процент цифрами, отдельный пункт «АКБ точно» убран.
+
+Варианта «нет информации» нет нарочно (слово владельца, 11.11.2026): сделка с ним
+оставалась без автоцены и молча уходила админам.
 
 Нужен новый `utils/google_price.py` из этой же папки (функция `akb_state_from_percent`).
 """
 import datetime
 import io
-import os
 import sys
 
 root = sys.argv[1].rstrip("/")
@@ -41,12 +42,15 @@ def писать(p, s):
     _файлы[p] = s
 
 
+def стоп(p, текст):
+    sys.exit(f"СТОП, ничего не записано: {p} — {текст}")
+
+
 def patch(p, pairs):
     s = читать(p)
     for old, new in pairs:
         if s.count(old) != 1:
-            sys.exit(f"СТОП, ничего не записано: {p} — замена не легла ровно один раз "
-                     f"({s.count(old)}): {old[:70]!r}")
+            стоп(p, f"замена не легла ровно один раз ({s.count(old)}): {old[:70]!r}")
         s = s.replace(old, new)
     писать(p, s)
 
@@ -56,20 +60,17 @@ if "akb_state_from_percent" in читать("/handlers/ocenka/flow.py"):
 if "def akb_state_from_percent" not in читать("/utils/google_price.py"):
     sys.exit("СТОП: сначала поставьте utils/google_price.py из этой папки — в нём нет akb_state_from_percent")
 
-# ── клавиатура: одна кнопка вместо девяти диапазонов ──
-s = читать("/keyboards/keyboards.py")
-i = s.index("def akb_kb(lang) -> InlineKeyboardMarkup:\n")
-j = s.index("    kb.adjust(3)\n    return kb.as_markup()\n", i) + len("    kb.adjust(3)\n    return kb.as_markup()\n")
-s = s[:i] + '''def akb_kb(lang) -> InlineKeyboardMarkup:
-    # Диапазонов больше нет: процент АКБ вводят цифрами, и цена берётся из колонки этого
-    # процента. Кнопка одна — для аппаратов, у которых процент не узнать.
-    kb = InlineKeyboardBuilder()
-    kb.button(text="нет информации", callback_data="akb_нет информации")
-    return kb.as_markup()
-''' + s[j:]
-писать("/keyboards/keyboards.py", s)
+# ── клавиатура с диапазонами больше не нужна ──
+p = "/keyboards/keyboards.py"
+s = читать(p)
+начало, конец = "def akb_kb(lang) -> InlineKeyboardMarkup:\n", "    kb.adjust(3)\n    return kb.as_markup()\n"
+if s.count(начало) != 1:
+    стоп(p, "не нашлась akb_kb")
+i = s.index(начало)
+j = s.index(конец, i) + len(конец)
+писать(p, s[:i].rstrip("\n") + "\n" + s[j:])
 
-# ── вопрос про АКБ в оценке ──
+# ── вопрос про АКБ в оценке: без кнопок ──
 patch("/handlers/ocenka/imei.py", [
     ('''    msg = await call.message.answer(
         _("Укажи состояние аккумулятора", lang),
@@ -77,67 +78,56 @@ patch("/handlers/ocenka/imei.py", [
     )
 ''', '''    msg = await call.message.answer(
         _("Укажи точный процент АКБ, только цифры", lang),
-        reply_markup=keyboards.akb_kb(lang),
     )
 '''),
 ])
 
-# ── приём ответа ──
+# ── приём ответа: только число ──
 p = "/handlers/ocenka/flow.py"
 patch(p, [
     ("from utils.google_price import get_price_for_device\n",
      "from utils.google_price import akb_state_from_percent, get_price_for_device\n"),
     ("from utils.utils import (\n    build_grade_text,\n", "from utils.utils import (\n    akb_text,\n    build_grade_text,\n"),
-    ('''async def select_battery_health(call: CallbackQuery, bot: Bot, state: FSMContext, lang: str):
+    ('''@router_ocenka_flow.callback_query(OcenkaState.akb, F.data.startswith("akb_"))
+async def select_battery_health(call: CallbackQuery, bot: Bot, state: FSMContext, lang: str):
     await call.answer()
 
     akb = call.data.split("akb_", 1)[1]
     data = await state.get_data()
     await del_message(data.get("mes_del"), bot, call.message.chat.id)
     await state.update_data(akb=akb)
-''', '''async def select_battery_health(call: CallbackQuery, bot: Bot, state: FSMContext, lang: str):
-    # кнопка осталась одна — «нет информации»; процент вводят цифрами (ниже)
-    await call.answer()
-    await battery_entered(call.message, bot, state, lang, call.data.split("akb_", 1)[1], None)
-
-
-@router_ocenka_flow.message(OcenkaState.akb)
+''', '''@router_ocenka_flow.message(OcenkaState.akb)
 async def enter_battery_percent(message: Message, bot: Bot, state: FSMContext, lang: str):
-    """Точный процент АКБ цифрами: по нему берётся своя колонка прайса."""
+    """Точный процент АКБ цифрами — другого ответа нет: по проценту берётся колонка прайса.
+
+    `akb_exact` — сам процент. `akb` — служебная метка из него же: по ней МойСклад
+    заполняет характеристику «АКБ», и её получает Pay."""
     text = (message.text or "").strip().rstrip("%").strip()
     if not text.isdigit() or not 1 <= int(text) <= 100:
-        await message.answer(
-            _("Укажи точный процент АКБ, только цифры", lang),
-            reply_markup=keyboards.akb_kb(lang),
-        )
+        await message.answer(_("Укажи точный процент АКБ, только цифры", lang))
         return
-    await battery_entered(message, bot, state, lang, akb_state_from_percent(int(text)), int(text))
 
-
-async def battery_entered(message: Message, bot: Bot, state: FSMContext, lang: str, akb: str, akb_exact):
-    """АКБ названа — дальше всё как раньше. `akb_exact` — процент, `akb` — служебная метка
-    из него же: по ней МойСклад заполняет характеристику «АКБ», и её получает Pay."""
     data = await state.get_data()
     await del_message(data.get("mes_del"), bot, message.chat.id)
-    await state.update_data(akb=akb, akb_exact=akb_exact)
+    await state.update_data(akb=akb_state_from_percent(int(text)), akb_exact=int(text))
 '''),
     ('''        f"<b>Состояние АКБ:</b> {device.akb}\\n"
 ''', '''        f"<b>Состояние АКБ:</b> {akb_text(device)}\\n"
 '''),
 ])
 s = читать(p)
-i = s.index("async def battery_entered(")
+i = s.index("async def enter_battery_percent(")
 j = s.index("@router_ocenka_flow.callback_query(OcenkaState.box", i)
 тело = s[i:j]
-assert "call.message" in тело and "call." not in тело.replace("call.message", "")
-s = s[:i] + тело.replace("call.message", "message") + s[j:]
-писать(p, s)
+if "call.message" not in тело or "call." in тело.replace("call.message", ""):
+    стоп(p, "тело обработчика АКБ не такое, как ожидалось")
+писать(p, s[:i] + тело.replace("call.message", "message") + s[j:])
 
 # ── карточки и меню правки ──
 patch("/utils/utils.py", [
     ('''async def create_tex(device_id: int, lang: str, redact: bool = False) -> str:
 ''', '''def akb_text(device) -> str:
-    """АКБ в карточке: точный процент, а когда его нет — что есть («нет информации»)."""
+    """АКБ в карточке: точный процент; у старых сделок без него — что записано."""
     exact = getattr(device, "akb_exact", None)
     return f"{exact}%" if exact else str(getattr(device, "akb", None) or "-")
 
@@ -164,7 +154,7 @@ async def create_tex(device_id: int, lang: str, redact: bool = False) -> str:
 ''', '''        "akb": RedactFieldConfig(
             label=_("АКБ", lang),
             kind="text",
-            prompt=_("Укажи точный процент АКБ, только цифры. Нет информации — отправь 0", lang),
+            prompt=_("Укажи точный процент АКБ, только цифры", lang),
             db_target="device",
             db_field="akb",
         ),
@@ -178,17 +168,7 @@ patch("/handlers/ocenka/helpers.py", [
 ])
 patch("/handlers/redact.py", [
     ('''    if field_name == "akb_exact":
-        digits = value.rstrip("%").strip()
-        if not digits.isdigit() or not 1 <= int(digits) <= 100:
-            raise RedactValidationError(_("Укажи точный процент АКБ, только цифры", lang))
-        return int(digits)
 ''', '''    if field_name in {"akb", "akb_exact"}:
-        digits = value.rstrip("%").strip()
-        if field_name == "akb" and digits == "0":
-            return 0                                   # «нет информации»
-        if not digits.isdigit() or not 1 <= int(digits) <= 100:
-            raise RedactValidationError(_("Укажи точный процент АКБ, только цифры", lang))
-        return int(digits)
 '''),
     ('''    if source == "fsm":
         update_data = {
@@ -196,12 +176,11 @@ patch("/handlers/redact.py", [
             "field_name": None,
         }
 ''', '''    # АКБ — это точный процент; служебная метка (для МойСклада и Pay) выводится из него,
-    # чтобы они не разошлись. 0 — «нет информации».
+    # чтобы они не разошлись
     akb_fields = None
     if field_name in {"akb", "akb_exact"}:
         from utils.google_price import akb_state_from_percent
-        akb_fields = ({"akb": akb_state_from_percent(value), "akb_exact": value} if value
-                      else {"akb": "нет информации", "akb_exact": None})
+        akb_fields = {"akb": akb_state_from_percent(value), "akb_exact": value}
 
     if source == "fsm":
         update_data = {
@@ -229,6 +208,9 @@ patch("/handlers/redact.py", [
 # ── запись: всё или ничего ──
 for p, s in _файлы.items():
     compile(s, root + p, "exec")                               # файл обязан остаться рабочим
+for p, s in _файлы.items():
+    if p != "/keyboards/keyboards.py" and "akb_kb" in s:
+        стоп(p, "остался вызов убранной клавиатуры akb_kb")
 изменённые = [p for p, s in _файлы.items() if s != io.open(root + p, encoding="utf-8").read()]
 if ТОЛЬКО_ПРОВЕРКА:
     print("проверка: все замены ложатся, изменится файлов:", len(изменённые))

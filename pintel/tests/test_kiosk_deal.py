@@ -198,9 +198,11 @@ def test_repaired_phone_is_reclassified_not_refused(окно):
     _медиа_собраны(окно)
     assert окно.s_work.b_отправить.isEnabled() and окно.код_медиа
     assert окно.статус_сделки == "Ранее был в ремонте"
+    # на экране — новое состояние и ничего больше; причина уходит оценщику, а не в плашку
     текст = окно.s_work.состояние.text()
-    assert "был в ремонте" in текст and "изменено проверкой" in текст
-    assert ("по данным Apple" in текст or "по кабелю" in текст) and "Экран" in текст
+    assert "был в ремонте" in текст and "изменено" not in текст and "Экран" not in текст
+    причина = окно.переклассификация
+    assert ("по данным Apple" in причина or "по кабелю" in причина) and "Экран" in причина
 
 
 def test_repair_chosen_by_hand_is_not_argued_with(окно):
@@ -286,7 +288,7 @@ def test_media_code_is_made_on_the_point(окно):
     окно.cfg["ocenka_bot"] = "PintelOlxBot"
     окно.новый_код_медиа()
     assert окно.код_медиа and окно.s_work.код.text() == окно.код_медиа
-    assert f"?start=p{окно.код_медиа}" in окно.s_work.ссылка.text()
+    assert f"?start=p{окно.код_медиа}" in окно.s_work.адрес_бота       # он в QR, на экране его нет
 
 
 def test_media_without_config_says_so(окно):
@@ -1071,7 +1073,8 @@ def test_otkaz_po_germetiku_vidno_na_plashke(окно):
     окно.s_work.пункты_ряды["glue"].нажали.emit("glue")        # второе нажатие — «НЕ работает»
     assert окно.статус_сделки == ocenka.СТАТУС_ДЕФЕКТ
     надпись = окно.s_work.состояние.text()
-    assert "дефект" in надпись.lower() and "Герметик" in надпись
+    assert "дефект" in надпись.lower() and "Герметик" not in надпись    # причина — не на экран
+    assert "Герметик" in окно.переклассификация
 
 
 # ---------------------------------------------------------------- новый облик: Pintel Diagnostics

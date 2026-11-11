@@ -180,7 +180,11 @@ def test_clean_phone_fills_the_window(окно):
     _чистый(окно)
     assert окно.state == "work"
     assert "iPhone 14 Pro" in окно.s_work.аппарат.text()
-    assert окно.s_work.данные()["sim"] in ("Стандарт", "Dual sim", "E-sim", "Прочее")
+    assert окно.s_work.данные()["sim"] == "Стандарт" and окно.s_work.лоток.isChecked()
+    # лоток — галочка рядом с коробкой и шнуром; сняли — в Оценку уйдёт «E-sim»
+    окно.s_work.лоток.setChecked(False)
+    assert окно.s_work.данные()["sim"] == "E-sim"
+    окно.s_work.лоток.setChecked(True)
     assert окно.код_медиа and окно.s_work.код.text() == окно.код_медиа
 
 
@@ -261,7 +265,9 @@ def test_sealed_phone_goes_by_imei_without_the_cable(окно, monkeypatch):
     assert окно.s_work.шаги["connect"].isHidden() and not окно.s_work.шаги["rfs"].isHidden()
     assert окно.статус_сделки == "Прочее" and окно.код_медиа
     d = окно.s_work.данные()
-    assert d["коробка"] and d["шнур"] and d["sim"] == "Dual sim"
+    assert d["коробка"] and d["шнур"] and d["sim"] == "Стандарт"
+    assert "SIM-лоток" in окно.s_work.sim_подпись.text() and not окно.s_work.sim_подпись.isHidden(), \
+        "у запечатанного лоток по кабелю не узнать — экран просит отметить"
     запуски = []
     окно.start_check = lambda: запуски.append(1)
     окно.on_tick(READY, "", 1)

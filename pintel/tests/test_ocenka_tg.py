@@ -71,7 +71,10 @@ def test_card_shows_what_will_be_written():
     assert "panic full" not in текст                             # паники нет — и строки нет
     с_паникой = ocenka_tg.карточка(ocenka.посылка({**ДАННЫЕ, "panic_full": True}, "7KQ4M"))
     assert "⚠ panic full" in с_паникой
-    assert "коробка" in текст and "шнур" not in текст.split("SIM:")[1].split("\n")[0]
+    assert "коробка" in текст and "шнур" not in текст.split("SIM-лоток:")[1].split("\n")[0]
+    assert "SIM-лоток: есть" in текст
+    без_лотка = ocenka_tg.карточка(ocenka.посылка({**ДАННЫЕ, "sim": "E-sim"}, "7KQ4M"))
+    assert "SIM-лоток: нет" in без_лотка
 
 
 def test_card_fits_telegram_caption():

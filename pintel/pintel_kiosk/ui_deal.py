@@ -548,16 +548,18 @@ class WorkScreen(Screen):
         ряд.setSpacing(22)
         self.коробка = QCheckBox("Коробка")
         self.шнур = QCheckBox("Шнур")
+        # Тип SIM не выбирают: вопрос один — есть ли SIM-лоток. Лотка нет — в Оценке это
+        # строка прайса «(Esim)», другая цена.
+        self.лоток = QCheckBox("SIM-лоток")
+        self.лоток.setChecked(True)
         ряд.addWidget(self.коробка)
         ряд.addWidget(self.шнур)
+        ряд.addWidget(self.лоток)
         ряд.addStretch(1)
         внутри.addLayout(ряд)
-        self.sim = QComboBox()
-        self.sim.addItems(["Стандарт", "Dual sim", "E-sim", "Прочее"])
-        внутри.addWidget(self.sim)
-        # SIM кассе не надо спрашивать: лоток и eSIM видно по кабелю (SIMTrayStatus, профиль
-        # eSIM, второй IMEI). Подпись появляется, только когда по кабелю не вышло и выбрать
-        # должен сотрудник; когда определилось само — молчим, поле и так заполнено.
+        # Про лоток кассе спрашивать не надо: его видно по кабелю (SIMTrayStatus, профиль
+        # eSIM, второй IMEI). Подпись появляется, только когда по кабелю не вышло и отметить
+        # должен сотрудник; когда определилось само — молчим, галочка и так стоит как надо.
         self.sim_подпись = label("", wrap=True, font_=font(FONT_TEXT, 15), color=C["muted"])
         self.sim_подпись.hide()
         внутри.addWidget(self.sim_подпись)
@@ -745,7 +747,7 @@ class WorkScreen(Screen):
         self.комментарий.clear()
         self.коробка.setChecked(False)
         self.шнур.setChecked(False)
-        self.sim.setCurrentIndex(0)
+        self.лоток.setChecked(True)
         self.sim_подпись.setText("")
         self.sim_подпись.hide()
         self.аппарат.setText("Подключите телефон кабелем")
@@ -1125,7 +1127,7 @@ class WorkScreen(Screen):
         self.стопка.setCurrentIndex(1)
 
         from pintel_core.external import ocenka
-        self.sim.setCurrentText(ocenka.sim_для_оценки(пас))
+        self.лоток.setChecked(ocenka.sim_для_оценки(пас) == ocenka.SIM_ЛОТОК)
         self._сказать_про_sim(пас)
         if not self.отправлено:
             # проверка кабелем кончилась — теперь тест на телефоне, он идёт перед медиа
@@ -1168,23 +1170,15 @@ class WorkScreen(Screen):
         self._проверить()
 
     def _сказать_про_sim(self, пас):
-        """Откуда взялся тип SIM: это читается по кабелю, а не спрашивается у сотрудника."""
-        если = []
-        if пас.get("esim_only"):
-            если.append("лотка нет, только eSIM")
-        else:
-            if пас.get("sim_в_лотке"):
-                если.append("SIM в лотке")
-            if пас.get("esim"):
-                если.append("профиль eSIM")
-            if (пас.get("imei2") or "").strip():
-                если.append("второй IMEI")
+        """Есть ли SIM-лоток, читается по кабелю, а не спрашивается у сотрудника. Подпись —
+        только когда прочитать не вышло и галочку надо поставить самому."""
+        from pintel_core.external import ocenka
         if self.rep.get("запечатанный"):
-            подпись = "Запечатанный: SIM по кабелю не читается — выберите сами."
-        elif если:
+            подпись = "Запечатанный: SIM-лоток по кабелю не читается — отметьте сами."
+        elif ocenka.лоток_определён(пас):
             подпись = ""
         else:
-            подпись = "SIM по телефону не определился — выберите сами."
+            подпись = "SIM-лоток по телефону не определился — отметьте сами."
         self.sim_подпись.setText(подпись)
         self.sim_подпись.setVisible(bool(подпись))
 
@@ -1238,7 +1232,7 @@ class WorkScreen(Screen):
         цифра всё равно была бы другой."""
         return {"имя": self.имя.text().strip(), "телефон": нормальный_телефон(self.телефон.text()),
                 "коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
-                "sim": self.sim.currentText(),
+                "sim": "Стандарт" if self.лоток.isChecked() else "E-sim",   # есть лоток / нет
                 "комментарий": self.комментарий.toPlainText().strip(),
                 "тест": dict(self.тест), "тест_пропущен": self.тест_пропущен,
                 "ручная": ocenka_media.разобрать(self.ручная)}

@@ -14,17 +14,23 @@ from pintel_core.external import ocenka
 
 
 @pytest.mark.parametrize("паспорт,ждём", [
-    ({"esim_only": True}, "E-sim"),
-    ({"esim": True}, "Dual sim"),
-    ({"imei2": "350585881725184"}, "Dual sim"),
+    ({"esim_only": True}, "E-sim"),                          # лотка нет
+    ({"esim": True}, "Стандарт"),                            # лоток и eSIM — лоток есть
+    ({"imei2": "350585881725184"}, "Стандарт"),
     ({"sim": "SIM не вставлена", "sim_в_лотке": False}, "Стандарт"),
-    ({}, "Прочее"),
+    ({}, "Стандарт"),                                        # промолчал — отметит сотрудник
 ])
-def test_sim_uses_ocenka_vocabulary(паспорт, ждём):
-    """В карточке было «SIM-слот: None» — пустое поле она печатает как есть.
-    Значения берём её же: Dual sim / E-sim / Прочее / Стандарт."""
+def test_sim_is_one_question_is_there_a_tray(паспорт, ждём):
+    """Тип SIM больше не выбирают: вопрос один — есть ли SIM-лоток. В Оценку идут прежние
+    слова её поля: «Стандарт» — лоток есть, «E-sim» — лотка нет (и это другая строка прайса)."""
     assert ocenka.sim_для_оценки(паспорт) == ждём
-    assert ocenka.sim_для_оценки(паспорт) in ocenka.SIM_ВАРИАНТЫ
+    assert ocenka.sim_для_оценки(паспорт) in ocenka.SIM_ВАРИАНТЫ == ("Стандарт", "E-sim")
+
+
+def test_the_screen_asks_only_when_the_phone_kept_silent_about_the_tray():
+    assert ocenka.лоток_определён({"esim_only": True}) and ocenka.лоток_определён({"sim_в_лотке": False})
+    assert ocenka.лоток_определён({"imei2": "350585881725184"}) and ocenka.лоток_определён({"esim": True})
+    assert not ocenka.лоток_определён({}) and not ocenka.лоток_определён({"imei2": " "})
 
 
 @pytest.mark.parametrize("вход,ждём", [
@@ -241,7 +247,7 @@ def test_sealed_phone_is_built_from_the_imei_database():
     assert сд["model"] == "iPhone 15 Pro" and сд["ddr"] == 256 and сд["color"] == "NATURAL"
     assert сд["akb"] == "100 (0-30)" and сд["akb_exact"] is None
     assert сд["phone_status"] == "Прочее" and сд["box"] is True and сд["cord"] is True
-    assert сд["panic_full"] is None and сд["sim"] == "Dual sim"
+    assert сд["panic_full"] is None and сд["sim"] == "Стандарт"
     assert п["imei"] == ["350585886690250", "350585881725184"]
     assert п["состояние"] == "📦 Запечатанный (новый)"
     assert сд["comment_ocenka"].startswith("Состояние: 📦 Запечатанный (новый)")

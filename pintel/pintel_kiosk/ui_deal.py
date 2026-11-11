@@ -52,8 +52,8 @@ QPushButton#small { background: %(tint)s; color: %(brand)s; border: none; border
     font-size: 19px; font-weight: 700; min-height: 48px; padding: 0 22px; }
 QPushButton#small:pressed { background: %(tint_border)s; }
 QFrame#карточка { background: %(card)s; border: 1px solid %(border)s; border-radius: 22px; }
-QFrame#фокус { background: %(card_hi)s; border: 1px solid %(tint_border)s; border-radius: 26px; }
-QFrame#всплывашка { background: #0F1B30; border: 1px solid %(tint_border)s; border-radius: 20px; }
+QFrame#фокус { background: %(card_hi)s; border: 2px solid %(tint_border)s; border-radius: 26px; }
+QFrame#всплывашка { background: #FFFFFF; border: 2px solid %(tint_border)s; border-radius: 20px; }
 QFrame#плашка_истории { background: %(card)s; border: 1px solid %(line)s; border-radius: 19px; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
@@ -144,8 +144,8 @@ def _плашка(текст, фон, цвет):
 
 # Вид пункта по ответу: подпись состояния, цвет текста, фон и рамка ряда.
 ВИД_ПУНКТА = {None: ("не отмечено", C["muted"], C["field"], C["line"]),
-              True: ("работает", C["ok"], C["okbg"], "#1D6A4C"),
-              False: ("НЕ работает", C["badtext"], C["badbg"], "#8A2F2F")}
+              True: ("работает", C["ok"], C["okbg"], "#8FD3B7"),
+              False: ("НЕ работает", C["badtext"], C["badbg"], "#F0A29C")}
 
 
 class Отметка(QWidget):
@@ -177,7 +177,7 @@ class Отметка(QWidget):
         p.drawRoundedRect(поле, 8, 8)
         if self.ответ is None:
             return
-        p.setPen(QPen(QColor("#04121C"), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setPen(QPen(QColor(C["на_цвете"]), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         if self.ответ:                       # галочка
             p.drawPolyline([поле.topLeft() + QPointF(6, с * 0.52),
                             поле.topLeft() + QPointF(с * 0.40, с * 0.72),

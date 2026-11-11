@@ -140,7 +140,7 @@ class ScaledHost(QGraphicsView):
     def set_bg(self, color):
         self.setBackgroundBrush(QColor(color))
 
-    # Смена экрана — не щелчок, а короткое проявление из темноты. Рисуется на переднем плане
+    # Смена экрана — не щелчок, а короткое проявление из белого. Рисуется на переднем плане
     # самой сцены, а не отдельным виджетом поверх экранов: виджет-занавес был бы соседом
     # всего остального и мешал бы и мыши, и раскладке.
     def проявить(self):
@@ -1110,8 +1110,7 @@ class KioskWindow(QMainWindow):
 
 
 def light_palette():
-    """Палитра программы — своя, тёмная, какая бы тема ни стояла в Windows. Имя прежнее:
-    так её зовут из main(), и светлой она была до нового облика."""
+    """Программа всегда светлая, какая бы тема ни стояла в Windows."""
     pal = QPalette()
     for role in (QPalette.Window, QPalette.Base, QPalette.AlternateBase, QPalette.Button, QPalette.ToolTipBase):
         pal.setColor(role, QColor(ui.C["ground"]))

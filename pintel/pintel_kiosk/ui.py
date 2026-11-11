@@ -2,9 +2,9 @@
 """Pintel Diagnostics — общий язык экранов: цвета, шрифты, фон, анимированные детали.
 
 Всё свёрстано на 1920×1080 и масштабируется целиком (app.ScaledHost). Облик идёт от знака:
-глубокая чернота, синие волны по углам, неоновый синий как единственный акцент. Правило одно
-на все экраны — **на экране одно главное**: остальное приглушено, чтобы и сотрудник, и клиент
-с полувзгляда видели, что происходит и что делать дальше.
+белый фон, знак как есть, синий — единственный акцент, по углам едва заметный синий свет.
+Правило одно на все экраны — **на экране одно главное**: остальное приглушено, чтобы и
+сотрудник, и клиент с полувзгляда видели, что происходит и что делать дальше.
 
 Движение здесь не украшение, а подсказка: пульсирует то, чего ждём; заполняется то, что
 идёт; вспыхивает то, что только что изменилось. Все анимации — на таймерах и только пока
@@ -25,19 +25,19 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLay
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 НАЗВАНИЕ = "Pintel Diagnostics"
 
-# Цвета. Имена ключей прежние — по ним красится весь остальной код, — значения новые:
-# тёмная тема от знака. «ink» — основной текст (теперь светлый), «ground» — фон экрана.
+# Цвета. Фон белый: знак вырезан с тёмной подложки и стоит на белом, как на бумаге.
+# «ink» — основной текст, «ground» — фон экрана, «cyan» — акцент (тот же синий, что в знаке),
+# «на_цвете» — штрих галочки и креста поверх цветной заливки.
 C = {
-    "ink": "#F2F6FF", "body": "#B9C7DE", "muted": "#8496B3", "brand": "#59B8FF",
-    "action": "#1E8BFF", "action_dark": "#1672DB", "tint": "#0E2242", "tint_border": "#1D4175",
-    "ground": "#03060D", "border": "#18253C", "screen": "#0A1220",
-    "ok": "#43E0A0", "okdot": "#2BD98F", "okbg": "#0C2A20",
-    "warn": "#FFB547", "warntext": "#FFC670", "warnbg": "#2D2110",
-    "bad": "#FF5C5C", "badtext": "#FF8F89", "badbg": "#321517",
-    "pale": "#8FC1FF", "ring": "#2B3D5C", "ghost": "#506383",
-    # новые
-    "card": "#0A111F", "card_hi": "#0D1728", "field": "#060B15", "line": "#1B2A45",
-    "glow": "#2A9BFF", "cyan": "#5CD0FF", "qr": "#0A1220",
+    "ink": "#0B1B33", "body": "#3A4D69", "muted": "#64799A", "brand": "#0F5FD6",
+    "action": "#1677FF", "action_dark": "#0F5FD6", "tint": "#EAF3FF", "tint_border": "#BBD6FB",
+    "ground": "#FFFFFF", "border": "#E2E9F3", "screen": "#F5F8FC",
+    "ok": "#12805A", "okdot": "#16A870", "okbg": "#E5F7EF",
+    "warn": "#E0931C", "warntext": "#9A5B07", "warnbg": "#FFF4DA",
+    "bad": "#E0463F", "badtext": "#B3261E", "badbg": "#FDECEA",
+    "pale": "#7FB2F5", "ring": "#C7D3E3", "ghost": "#A3B1C6",
+    "card": "#F7FAFE", "card_hi": "#FFFFFF", "field": "#FFFFFF", "line": "#D6E0EE",
+    "glow": "#2A8CFF", "cyan": "#1677FF", "qr": "#0A1220", "на_цвете": "#FFFFFF",
 }
 FONT_TEXT, FONT_HEAD, FONT_NUM = "Inter", "Inter Display", "Space Grotesk"
 W = QFont.Weight
@@ -61,7 +61,7 @@ QPushButton#primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0
     color: #FFFFFF; border-radius: 18px; font-size: 26px; font-weight: 700; min-height: 76px;
     border: none; padding: 0 34px; }
 QPushButton#primary:pressed { background: %(action_dark)s; }
-QPushButton#primary:disabled { background: #0E1626; color: %(ghost)s; }
+QPushButton#primary:disabled { background: #E9EEF6; color: %(ghost)s; }
 QPushButton#update { background: %(tint)s; color: %(brand)s; border: 1px solid %(tint_border)s;
     border-radius: 14px; font-size: 20px; font-weight: 700; min-height: 54px; padding: 0 24px; }
 QPushButton#update:pressed { background: %(tint_border)s; }
@@ -210,7 +210,7 @@ def _пятно(p, cx, cy, r, цвет, альфа):
 
 
 def аврора(t=0.0, сила=1.0, размер=(320, 180)):
-    """Фон знака: чернота и синие волны света по углам. → маленький QPixmap.
+    """Фон: белый, по углам — мягкий синий свет, который медленно течёт. → маленький QPixmap.
 
     Рисуем нарочно в малом размере и растягиваем: свечение размыто по природе, на глаз
     разницы нет, а закрашивать градиентами два миллиона пикселей тридцать раз в секунду
@@ -218,17 +218,17 @@ def аврора(t=0.0, сила=1.0, размер=(320, 180)):
     """
     w, h = размер
     img = QImage(w, h, QImage.Format_RGB32)
-    img.fill(QColor("#02040A"))
+    img.fill(QColor("#FFFFFF"))
     p = QPainter(img)
     p.setRenderHint(QPainter.Antialiasing)
     p.setPen(Qt.NoPen)
     a, b = math.sin(t * 0.23), math.cos(t * 0.17)
     c, d = math.sin(t * 0.11 + 1.3), math.cos(t * 0.13 + 0.4)
-    _пятно(p, w * 0.00 + 16 * a, h * 0.00 + 9 * b, h * 0.95, "#0B55FF", 0.60 * сила)
-    _пятно(p, w * 1.00 - 14 * b, h * 1.02 - 10 * a, h * 1.05, "#0A7BFF", 0.55 * сила)
-    _пятно(p, w * (0.50 + 0.20 * c), h * 1.25, h * 0.80, "#0D3BD9", 0.26 * сила)
-    _пятно(p, w * (0.80 + 0.10 * d), -h * 0.28, h * 0.70, "#19A0FF", 0.18 * сила)
-    _пятно(p, w * (0.16 + 0.06 * d), h * (0.92 + 0.05 * a), h * 0.42, "#0A2FBF", 0.16 * сила)
+    # Середина остаётся чисто белой: свет только по углам и слабый — фон обязан читаться белым.
+    _пятно(p, w * 0.00 + 16 * a, h * 0.00 + 9 * b, h * 0.70, "#2A8CFF", 0.11 * сила)
+    _пятно(p, w * 1.00 - 14 * b, h * 1.02 - 10 * a, h * 0.78, "#35B2FF", 0.12 * сила)
+    _пятно(p, w * (0.50 + 0.20 * c), h * 1.32, h * 0.56, "#5CC8FF", 0.06 * сила)
+    _пятно(p, w * (0.82 + 0.10 * d), -h * 0.34, h * 0.52, "#7FB8FF", 0.06 * сила)
     p.end()
     return QPixmap.fromImage(img)
 
@@ -241,8 +241,8 @@ def фон_статичный(размер):
     ключ = (размер.width(), размер.height())
     if ключ not in _ФОН:
         _ФОН.clear()                                  # размер один на всю программу
-        _ФОН[ключ] = аврора(t=2.4, сила=0.42).scaled(размер, Qt.IgnoreAspectRatio,
-                                                      Qt.SmoothTransformation)
+        _ФОН[ключ] = аврора(t=2.4, сила=0.5).scaled(размер, Qt.IgnoreAspectRatio,
+                                                     Qt.SmoothTransformation)
     return _ФОН[ключ]
 
 
@@ -368,7 +368,7 @@ class Dot(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(col))
             p.drawEllipse(QRectF(0, 0, s, s))
-            p.setPen(QPen(QColor("#04121C"), s * 0.085, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.setPen(QPen(QColor(C["на_цвете"]), s * 0.095, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             p.setBrush(Qt.NoBrush)
             u = s / 42.0
             if self.state == "done":
@@ -382,7 +382,7 @@ class Dot(QWidget):
             else:
                 p.drawLine(QPointF(21 * u, 12 * u), QPointF(21 * u, 24 * u))
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor("#04121C"))
+                p.setBrush(QColor(C["на_цвете"]))
                 p.drawEllipse(QPointF(21 * u, 30.5 * u), 2.3 * u, 2.3 * u)
 
 
@@ -627,7 +627,7 @@ class Stepper(QWidget):
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor(C["okdot"]))
                 p.drawEllipse(c, кружок / 2, кружок / 2)
-                p.setPen(QPen(QColor("#04121C"), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                p.setPen(QPen(QColor(C["на_цвете"]), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
                 path = QPainterPath(c + QPointF(-7, 0.5))
                 path.lineTo(c + QPointF(-2, 5.5))
                 path.lineTo(c + QPointF(7.5, -5))
@@ -828,11 +828,11 @@ class QrBlock(QWidget):
 # ---------- каркас ----------
 
 class Screen(QWidget):
-    """Экран: тёмный фон со светом по углам рисует сам, детей кладёт в `self.root`.
+    """Экран: белый фон с лёгким светом по углам рисует сам, детей кладёт в `self.root`.
 
     Фон именно рисуется, а не лежит отдельным виджетом под остальными: любой виджет-подложка
     был бы «соседом» каждой карточки, и тест вёрстки справедливо счёл бы это наездом.
-    `gray` оставлен в подписи ради прежних вызовов — светлых экранов больше нет."""
+    `gray` оставлен в подписи ради прежних вызовов — фон у всех экранов теперь один."""
 
     def __init__(self, gray=False, margins=(88, 72, 88, 72), spacing=24):
         super().__init__()
@@ -965,7 +965,14 @@ class MainScreen(Screen):
             if знак.isNull():
                 self._знак_пара = (знак, знак)
             else:
-                self._знак_пара = (знак, размыть(знак, 30))
+                # Свечение на белом — это синяя тень той же формы: размытую копию знака
+                # целиком красим в синий, иначе тёмные буквы дали бы серую грязь под собой.
+                ореол = размыть(знак, 34)
+                q = QPainter(ореол)
+                q.setCompositionMode(QPainter.CompositionMode_SourceIn)
+                q.fillRect(ореол.rect(), QColor(C["glow"]))
+                q.end()
+                self._знак_пара = (знак, ореол)
             self._знак_ширина = ширина
         return self._знак_пара
 
@@ -994,10 +1001,10 @@ class MainScreen(Screen):
                     путь.cubicTo(w * 0.93, h * (0.62 + 0.03 * math.cos(фаза)), w * 0.80, h * 0.84,
                                  w * 0.52 - сдвиг, h + 20)
                     g = QLinearGradient(w, h * 0.40, w * 0.52, h)
-                яркость = 0.55 - 0.15 * k
-                g.setColorAt(0.0, QColor(40, 160, 255, 0))
-                g.setColorAt(0.5, QColor(70, 180, 255, int(255 * яркость)))
-                g.setColorAt(1.0, QColor(40, 120, 255, 0))
+                яркость = 0.50 - 0.13 * k
+                g.setColorAt(0.0, QColor(42, 140, 255, 0))
+                g.setColorAt(0.5, QColor(42, 140, 255, int(255 * яркость)))
+                g.setColorAt(1.0, QColor(53, 178, 255, 0))
                 p.setPen(QPen(g, 2.4 - 0.5 * k))
                 p.drawPath(путь)
 
@@ -1008,8 +1015,8 @@ class MainScreen(Screen):
             x = x0 + 0.012 * math.sin(t * 0.5 * скорость + x0 * 9)
             мерц = 0.35 + 0.65 * (0.5 + 0.5 * math.sin(t * 1.3 * скорость + y0 * 20))
             край = smoothstep(min(y, 1 - y) / 0.12)
-            c = QColor(140, 205, 255)
-            c.setAlphaF(0.55 * мерц * край)
+            c = QColor(42, 140, 255)
+            c.setAlphaF(0.38 * мерц * край)
             p.setBrush(c)
             p.drawEllipse(QPointF(x * w, y * h), размер, размер)
 
@@ -1020,7 +1027,7 @@ class MainScreen(Screen):
             вход = smoothstep(t / 1.1)                       # появление при показе экрана
             cx, cy = w / 2, h * 0.455 + парение + 26 * (1 - вход)
             дыхание = 0.5 + 0.5 * math.sin(t * 1.25)
-            p.setOpacity((0.45 + 0.55 * дыхание) * вход)      # свечение дышит
+            p.setOpacity((0.12 + 0.22 * дыхание) * вход)      # свечение дышит
             p.drawPixmap(int(cx - ореол.width() / 2), int(cy - ореол.height() / 2), ореол)
             p.setOpacity(вход)
             x, y = int(cx - знак.width() / 2), int(cy - знак.height() / 2)
@@ -1035,7 +1042,7 @@ class MainScreen(Screen):
                 bx = -0.25 * знак.width() + 1.5 * знак.width() * u
                 g = QLinearGradient(bx, 0, bx + 0.22 * знак.width(), знак.height() * 0.4)
                 g.setColorAt(0.0, QColor(255, 255, 255, 0))
-                g.setColorAt(0.5, QColor(255, 255, 255, 150))
+                g.setColorAt(0.5, QColor(255, 255, 255, 190))
                 g.setColorAt(1.0, QColor(255, 255, 255, 0))
                 q.fillRect(блик.rect(), g)
                 q.end()

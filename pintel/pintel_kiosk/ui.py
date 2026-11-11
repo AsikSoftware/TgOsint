@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Экраны киоска по утверждённому концепту (1920×1080, масштабируется целиком).
+"""Pintel Diagnostics — общий язык экранов: цвета, шрифты, фон, анимированные детали.
 
-Шрифты: Inter — текст, Inter Display — заголовки (в них есть кириллица),
-Space Grotesk — крупные цифры и латинские названия моделей (кириллицы в нём нет).
-Анимации лёгкие, на таймерах и только пока виджет виден: бесконечные — на экране
-ожидания (телефон, кольца, кабель, мигающая точка), одноразовые — на результате
-(заполнение батареи, появление номера и QR).
+Всё свёрстано на 1920×1080 и масштабируется целиком (app.ScaledHost). Облик идёт от знака:
+глубокая чернота, синие волны по углам, неоновый синий как единственный акцент. Правило одно
+на все экраны — **на экране одно главное**: остальное приглушено, чтобы и сотрудник, и клиент
+с полувзгляда видели, что происходит и что делать дальше.
+
+Движение здесь не украшение, а подсказка: пульсирует то, чего ждём; заполняется то, что
+идёт; вспыхивает то, что только что изменилось. Все анимации — на таймерах и только пока
+виджет виден: невидимый экран не тратит процессор кассы.
+
+Шрифты: Inter — текст, Inter Display — заголовки, Space Grotesk — цифры и латиница.
 """
 import math
 import os
@@ -13,63 +18,54 @@ import time
 
 from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer,
                             QVariantAnimation, Signal)
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient,
+                           QPainter, QPainterPath, QPalette, QPen, QPixmap, QRadialGradient)
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+НАЗВАНИЕ = "Pintel Diagnostics"
+
+# Цвета. Имена ключей прежние — по ним красится весь остальной код, — значения новые:
+# тёмная тема от знака. «ink» — основной текст (теперь светлый), «ground» — фон экрана.
 C = {
-    "ink": "#0C1A2E", "body": "#3B4F6B", "muted": "#5B7392", "brand": "#16417A",
-    "action": "#2E6BE6", "action_dark": "#1D4ED8", "tint": "#EAF1FD", "tint_border": "#D7E4F6",
-    "ground": "#F5F8FC", "border": "#E3EAF3", "screen": "#13325B",
-    "ok": "#15724C", "okdot": "#1E9E6A", "okbg": "#E6F6EE",
-    "warn": "#D98B1E", "warntext": "#9A5B07", "warnbg": "#FFF3D6",
-    "bad": "#D64541", "badtext": "#B3261E", "badbg": "#FCE9E8",
-    "pale": "#AFCBEC", "ring": "#C9D5E3", "ghost": "#C3CEDB",
+    "ink": "#F2F6FF", "body": "#B9C7DE", "muted": "#8496B3", "brand": "#59B8FF",
+    "action": "#1E8BFF", "action_dark": "#1672DB", "tint": "#0E2242", "tint_border": "#1D4175",
+    "ground": "#03060D", "border": "#18253C", "screen": "#0A1220",
+    "ok": "#43E0A0", "okdot": "#2BD98F", "okbg": "#0C2A20",
+    "warn": "#FFB547", "warntext": "#FFC670", "warnbg": "#2D2110",
+    "bad": "#FF5C5C", "badtext": "#FF8F89", "badbg": "#321517",
+    "pale": "#8FC1FF", "ring": "#2B3D5C", "ghost": "#506383",
+    # новые
+    "card": "#0A111F", "card_hi": "#0D1728", "field": "#060B15", "line": "#1B2A45",
+    "glow": "#2A9BFF", "cyan": "#5CD0FF", "qr": "#0A1220",
 }
 FONT_TEXT, FONT_HEAD, FONT_NUM = "Inter", "Inter Display", "Space Grotesk"
 W = QFont.Weight
 
-# Шрифты в QSS только размер/насыщенность: семейство приходит от шрифта приложения (Inter),
-# а заголовки и кикеры с межбуквенным интервалом задаются кодом (QSS его не умеет).
+# В QSS только размер и насыщенность: семейство приходит от шрифта приложения (Inter), а
+# заголовки и надзаголовки с межбуквенным интервалом задаются кодом (QSS его не умеет).
 QSS = """
 QWidget { color: %(ink)s; }
-QWidget#screen { background: #FFFFFF; }
-QWidget#screen_gray { background: %(ground)s; }
 QLabel#lead { font-size: 30px; font-weight: 500; color: %(body)s; }
 QLabel#lead_s { font-size: 24px; font-weight: 500; color: %(body)s; }
-QLabel#muted { font-size: 19px; font-weight: 600; color: %(muted)s; }
+QLabel#muted { font-size: 19px; font-weight: 500; color: %(muted)s; }
 QLabel#step { font-size: 28px; font-weight: 600; }
-QLabel#num { background: %(action)s; color: white; border-radius: 16px; min-width: 58px; max-width: 58px; min-height: 58px; max-height: 58px; }
-QLabel#cardtext { font-size: 20px; font-weight: 400; color: %(body)s; }
-QLabel#cardstatus { font-size: 20px; font-weight: 700; color: %(brand)s; }
-QFrame#row { background: %(ground)s; border-radius: 18px; }
-QFrame#row_active { background: %(tint)s; border: 2px solid %(action)s; border-radius: 18px; }
-QLabel#rowtitle { font-size: 24px; font-weight: 700; }
-QLabel#rowtitle_wait { font-size: 24px; font-weight: 700; color: %(body)s; }
-QLabel#rowstate { font-size: 19px; font-weight: 600; color: %(muted)s; }
-QLabel#rowstate_active { font-size: 19px; font-weight: 700; color: %(action)s; }
-QFrame#bluecard { background: qlineargradient(x1:0, y1:0, x2:0.45, y2:1, stop:0 #1F5FB0, stop:1 #13325B); border-radius: 36px; }
-QLabel#bluestep { font-size: 23px; font-weight: 500; color: white; }
-QLabel#bluenote { font-size: 20px; font-weight: 500; color: #DCE8F5; background: rgba(255,255,255,0.12); border-radius: 16px; padding: 18px 22px; }
-QPushButton#skip { font-size: 20px; font-weight: 700; color: %(pale)s; background: transparent; border: 2px solid %(pale)s; border-radius: 14px; padding: 14px 26px; }
-QPushButton#skip:pressed { background: rgba(255,255,255,0.12); }
-QFrame#card { background: white; border: 1px solid %(border)s; border-radius: 24px; }
-QFrame#card_main { background: white; border: 1px solid %(border)s; border-radius: 28px; }
-QLabel#line { font-size: 22px; font-weight: 600; }
-QLabel#line_s { font-size: 21px; font-weight: 600; }
+QFrame#row { background: transparent; border: 1px solid transparent; border-radius: 14px; }
+QFrame#row_active { background: %(tint)s; border: 1px solid %(tint_border)s; border-radius: 14px; }
+QLabel#rowtitle { font-size: 20px; font-weight: 600; color: %(ink)s; }
+QLabel#rowtitle_wait { font-size: 20px; font-weight: 500; color: %(ghost)s; }
+QLabel#rowstate { font-size: 17px; font-weight: 500; color: %(muted)s; }
+QLabel#rowstate_active { font-size: 17px; font-weight: 700; color: %(brand)s; }
 QLabel#note { font-size: 19px; font-weight: 400; color: %(muted)s; }
-QLabel#qrtext { font-size: 23px; font-weight: 500; color: %(body)s; }
-QLabel#kv_k { font-size: 19px; font-weight: 400; color: %(muted)s; }
-QLabel#kv_v { font-size: 19px; font-weight: 700; }
-QLabel#chip_ok { background: %(okbg)s; color: %(ok)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
-QLabel#chip_warn { background: %(warnbg)s; color: %(warntext)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
-QLabel#chip_bad { background: %(badbg)s; color: %(badtext)s; border-radius: 26px; padding: 12px 24px; font-size: 22px; font-weight: 700; }
-QPushButton#primary { background: %(action)s; color: white; border-radius: 20px; font-size: 28px;
-    font-weight: 700; min-height: 80px; border: none; padding: 0 34px; }
+QPushButton#primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1A7CFF, stop:1 #35B2FF);
+    color: #FFFFFF; border-radius: 18px; font-size: 26px; font-weight: 700; min-height: 76px;
+    border: none; padding: 0 34px; }
 QPushButton#primary:pressed { background: %(action_dark)s; }
-QPushButton#update { background: %(tint)s; color: %(brand)s; border: 2px solid %(tint_border)s;
+QPushButton#primary:disabled { background: #0E1626; color: %(ghost)s; }
+QPushButton#update { background: %(tint)s; color: %(brand)s; border: 1px solid %(tint_border)s;
     border-radius: 14px; font-size: 20px; font-weight: 700; min-height: 54px; padding: 0 24px; }
 QPushButton#update:pressed { background: %(tint_border)s; }
+QPushButton#update:disabled { color: %(ghost)s; }
 QLabel#footer { font-size: 18px; font-weight: 500; color: %(muted)s; }
 """ % C
 
@@ -111,12 +107,12 @@ def label(text, name=None, wrap=False, font_=None, color=None):
 
 
 def kicker(text, px=14, spacing=2.0, color=None):
-    """Надзаголовок капителью: «ВАШ НОМЕР», «БАТАРЕЯ»…"""
+    """Надзаголовок капителью: «ТЕЛЕФОН», «КЛИЕНТ»…"""
     return label(text, font_=font(FONT_TEXT, px, W.Bold, spacing), color=color or C["muted"])
 
 
 def ease_out():
-    """cubic-bezier(.2,.8,.2,1) из макета."""
+    """cubic-bezier(.2,.8,.2,1)."""
     c = QEasingCurve(QEasingCurve.Type.BezierSpline)
     c.addCubicBezierSegment(QPointF(0.2, 0.8), QPointF(0.2, 1.0), QPointF(1.0, 1.0))
     return c
@@ -127,18 +123,61 @@ def smoothstep(x):
     return x * x * (3 - 2 * x)
 
 
+_КАРТИНКИ = {}
+
+
+def картинка(имя, высота=None, ширина=None):
+    """Картинка из assets, один раз загруженная и ужатая. Нет файла — пустой QPixmap."""
+    ключ = (имя, высота, ширина)
+    if ключ not in _КАРТИНКИ:
+        pm = QPixmap(os.path.join(ASSETS, имя))
+        if not pm.isNull():
+            if высота:
+                pm = pm.scaledToHeight(int(высота), Qt.SmoothTransformation)
+            elif ширина:
+                pm = pm.scaledToWidth(int(ширина), Qt.SmoothTransformation)
+        _КАРТИНКИ[ключ] = pm
+    return _КАРТИНКИ[ключ]
+
+
+def размыть(pm, радиус=26):
+    """Гауссово размытие картинки с прозрачностью — из него получается свечение знака.
+
+    Считается один раз при первом показе. Ужать и растянуть картинку было бы дешевле, но
+    такое «размытие» видно квадратами и оно съезжает относительно оригинала — на экране
+    знак двоился, вместо того чтобы светиться."""
+    from PySide6.QtWidgets import QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene
+    поле = int(радиус * 2.5)
+    сцена = QGraphicsScene()
+    элемент = QGraphicsPixmapItem(pm)
+    эффект = QGraphicsBlurEffect()
+    эффект.setBlurRadius(радиус)
+    эффект.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+    элемент.setGraphicsEffect(эффект)
+    сцена.addItem(элемент)
+    итог = QImage(pm.width() + 2 * поле, pm.height() + 2 * поле, QImage.Format_ARGB32_Premultiplied)
+    итог.fill(Qt.transparent)
+    p = QPainter(итог)
+    сцена.render(p, QRectF(0, 0, итог.width(), итог.height()),
+                 QRectF(-поле, -поле, итог.width(), итог.height()))
+    p.end()
+    return QPixmap.fromImage(итог)
+
+
 def logo_label(height=44):
+    """Знак (два телефона с лупой) — для шапок рабочих экранов."""
     lab = QLabel()
-    p = os.path.join(ASSETS, "logo.png")
-    if os.path.isfile(p):
-        lab.setPixmap(QPixmap(p).scaledToHeight(height, Qt.SmoothTransformation))
-    else:
+    pm = картинка("logo_mark.png", высота=height)
+    if pm.isNull():
         lab.setText("PINTEL")
+    else:
+        lab.setPixmap(pm)
+        lab.setFixedSize(pm.size())
     return lab
 
 
 def point_text(point):
-    return f"Выкуп iPhone · {point}" if point else "Выкуп iPhone"
+    return f"{НАЗВАНИЕ} · {point}" if point else НАЗВАНИЕ
 
 
 def header(point_label, right=None):
@@ -153,8 +192,58 @@ def header(point_label, right=None):
 
 
 def status_label(text, ok=True):
-    return label(("● " if ok else "○ ") + text, font_=font(FONT_TEXT, 19, W.DemiBold),
+    return label(("● " if ok else "○ ") + text, font_=font(FONT_TEXT, 18, W.DemiBold),
                  color=C["okdot"] if ok else C["muted"])
+
+
+# ---------- фон ----------
+
+def _пятно(p, cx, cy, r, цвет, альфа):
+    g = QRadialGradient(QPointF(cx, cy), r)
+    c0, c1 = QColor(цвет), QColor(цвет)
+    c0.setAlphaF(max(0.0, min(1.0, альфа)))
+    c1.setAlphaF(0.0)
+    g.setColorAt(0.0, c0)
+    g.setColorAt(1.0, c1)
+    p.setBrush(g)
+    p.drawEllipse(QPointF(cx, cy), r, r)
+
+
+def аврора(t=0.0, сила=1.0, размер=(320, 180)):
+    """Фон знака: чернота и синие волны света по углам. → маленький QPixmap.
+
+    Рисуем нарочно в малом размере и растягиваем: свечение размыто по природе, на глаз
+    разницы нет, а закрашивать градиентами два миллиона пикселей тридцать раз в секунду
+    касса на слабом ноутбуке не обязана.
+    """
+    w, h = размер
+    img = QImage(w, h, QImage.Format_RGB32)
+    img.fill(QColor("#02040A"))
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    a, b = math.sin(t * 0.23), math.cos(t * 0.17)
+    c, d = math.sin(t * 0.11 + 1.3), math.cos(t * 0.13 + 0.4)
+    _пятно(p, w * 0.00 + 16 * a, h * 0.00 + 9 * b, h * 0.95, "#0B55FF", 0.60 * сила)
+    _пятно(p, w * 1.00 - 14 * b, h * 1.02 - 10 * a, h * 1.05, "#0A7BFF", 0.55 * сила)
+    _пятно(p, w * (0.50 + 0.20 * c), h * 1.25, h * 0.80, "#0D3BD9", 0.26 * сила)
+    _пятно(p, w * (0.80 + 0.10 * d), -h * 0.28, h * 0.70, "#19A0FF", 0.18 * сила)
+    _пятно(p, w * (0.16 + 0.06 * d), h * (0.92 + 0.05 * a), h * 0.42, "#0A2FBF", 0.16 * сила)
+    p.end()
+    return QPixmap.fromImage(img)
+
+
+_ФОН = {}
+
+
+def фон_статичный(размер):
+    """Фон рабочих экранов: тот же свет по углам, но тихий и неподвижный — за ним работают."""
+    ключ = (размер.width(), размер.height())
+    if ключ not in _ФОН:
+        _ФОН.clear()                                  # размер один на всю программу
+        _ФОН[ключ] = аврора(t=2.4, сила=0.42).scaled(размер, Qt.IgnoreAspectRatio,
+                                                      Qt.SmoothTransformation)
+    return _ФОН[ключ]
 
 
 # ---------- анимированные примитивы ----------
@@ -203,23 +292,45 @@ class Pulse(QWidget):
 
 
 class Dot(QWidget):
-    """Индикатор шага проверки: ждёт, крутится, готово, внимание, ошибка."""
+    """Индикатор шага проверки: ждёт, крутится, готово, внимание, ошибка.
 
-    def __init__(self):
+    Готовность не просто появляется, а «щёлкает»: кружок вырастает, галочка на месте.
+    За минуту проверки это восемь маленьких подтверждений, что дело идёт."""
+
+    def __init__(self, сторона=30):
         super().__init__()
-        self.setFixedSize(42, 42)
+        self.s = int(сторона)
+        self.setFixedSize(self.s, self.s)
         self.state = "wait"
         self.t0 = time.monotonic()
+        self.появление = 1.0
         self.timer = QTimer(self)
         self.timer.setInterval(33)
         self.timer.timeout.connect(self.update)
+        self.anim = QVariantAnimation(self)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setDuration(420)
+        self.anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        self.anim.valueChanged.connect(self._шаг)
+
+    def _шаг(self, v):
+        self.появление = float(v)
+        self.update()
 
     def set_state(self, state):
+        было = self.state
         self.state = state
         if state == "run" and self.isVisible():
             self.timer.start()
         else:
             self.timer.stop()
+        if state in ("done", "warn", "fail") and было != state and self.isVisible():
+            self.появление = 0.0
+            self.anim.start()
+        else:
+            self.anim.stop()
+            self.появление = 1.0
         self.update()
 
     def showEvent(self, e):
@@ -234,64 +345,376 @@ class Dot(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(2.5, 2.5, 37, 37)
+        s = self.s
+        r = QRectF(2.5, 2.5, s - 5, s - 5)
         p.setBrush(Qt.NoBrush)
         if self.state == "wait":
-            p.setPen(QPen(QColor(C["ring"]), 3))
+            p.setPen(QPen(QColor(C["ring"]), 2.5))
             p.drawEllipse(r)
         elif self.state == "run":
             faint = QColor(C["action"])
             faint.setAlphaF(0.22)
-            p.setPen(QPen(faint, 4))
+            p.setPen(QPen(faint, 3.5))
             p.drawEllipse(r)
-            p.setPen(QPen(QColor(C["action"]), 4, Qt.SolidLine, Qt.RoundCap))
+            p.setPen(QPen(QColor(C["cyan"]), 3.5, Qt.SolidLine, Qt.RoundCap))
             ang = int((time.monotonic() - self.t0) * 300) % 360          # оборот за 1,2 с
             p.drawArc(r, (90 - ang) * 16, -110 * 16)
         else:
             col = {"done": C["okdot"], "warn": C["warn"], "fail": C["bad"]}.get(self.state, C["okdot"])
+            k = max(0.0, self.появление)
+            p.translate(s / 2, s / 2)
+            p.scale(k, k)
+            p.translate(-s / 2, -s / 2)
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(col))
-            p.drawEllipse(QRectF(0, 0, 42, 42))
-            p.setPen(QPen(QColor("white"), 3.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawEllipse(QRectF(0, 0, s, s))
+            p.setPen(QPen(QColor("#04121C"), s * 0.085, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             p.setBrush(Qt.NoBrush)
+            u = s / 42.0
             if self.state == "done":
-                path = QPainterPath(QPointF(13, 21.5))
-                path.lineTo(QPointF(18.5, 27))
-                path.lineTo(QPointF(29.5, 15.5))
+                path = QPainterPath(QPointF(13 * u, 21.5 * u))
+                path.lineTo(QPointF(18.5 * u, 27 * u))
+                path.lineTo(QPointF(29.5 * u, 15.5 * u))
                 p.drawPath(path)
             elif self.state == "fail":
-                p.drawLine(QPointF(15, 15), QPointF(27, 27))
-                p.drawLine(QPointF(27, 15), QPointF(15, 27))
+                p.drawLine(QPointF(15 * u, 15 * u), QPointF(27 * u, 27 * u))
+                p.drawLine(QPointF(27 * u, 15 * u), QPointF(15 * u, 27 * u))
             else:
-                p.drawLine(QPointF(21, 12), QPointF(21, 24))
+                p.drawLine(QPointF(21 * u, 12 * u), QPointF(21 * u, 24 * u))
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor("white"))
-                p.drawEllipse(QPointF(21, 30.5), 2.3, 2.3)
+                p.setBrush(QColor("#04121C"))
+                p.drawEllipse(QPointF(21 * u, 30.5 * u), 2.3 * u, 2.3 * u)
 
 
-class ConnectArt(QWidget):
-    """Телефон, кабель и расходящиеся кольца — как в макете. Рисуется в своих 240×410
-    (хвост кабеля уходит за нижний край) и масштабируется под отведённое место;
-    анимация идёт только пока виджет виден."""
-    AW, AH = 240, 410
-    PW, PH = 188, 330
+class Ring(QWidget):
+    """Кольцо батареи: процент крупно в центре, дуга заполняется при появлении числа.
 
-    def __init__(self):
+    Цвет говорит то же, что и число: зелёный — батарея в порядке, жёлтый — на грани,
+    красный — ниже восьмидесяти, где сам телефон уже просит обслуживание."""
+
+    def __init__(self, сторона=150):
         super().__init__()
-        self.setMinimumSize(120, 200)
-        self.state = "wait"
+        self.s = int(сторона)
+        self.setFixedSize(self.s, self.s)
+        self.значение = None
+        self.показано = 0.0
+        self.anim = QVariantAnimation(self)
+        self.anim.setDuration(1300)
+        self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.anim.valueChanged.connect(self._шаг)
+
+    def _шаг(self, v):
+        self.показано = float(v)
+        self.update()
+
+    def set(self, значение):
+        """Число 0…100 или None, если батарея не прочиталась."""
+        новое = None if значение is None else max(0, min(100, int(значение)))
+        if новое == self.значение:
+            return
+        self.значение = новое
+        self.anim.stop()
+        if новое is None:
+            self.показано = 0.0
+            self.update()
+            return
+        if self.isVisible():
+            self.anim.setStartValue(0.0)
+            self.anim.setEndValue(float(новое))
+            self.anim.start()
+        else:
+            self.показано = float(новое)
+            self.update()
+
+    @staticmethod
+    def цвет_для(значение):
+        if значение is None:
+            return C["ghost"]
+        return C["okdot"] if значение >= 85 else (C["warn"] if значение >= 80 else C["bad"])
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        s = self.s
+        толщина = s * 0.085
+        r = QRectF(толщина / 2 + 5, толщина / 2 + 5, s - толщина - 10, s - толщина - 10)
+        p.setPen(QPen(QColor(C["line"]), толщина))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(r)
+        цвет = QColor(self.цвет_для(self.значение))
+        if self.значение is not None and self.показано > 0:
+            мягко = QColor(цвет)
+            мягко.setAlphaF(0.20)
+            p.setPen(QPen(мягко, толщина + 8, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(r, 90 * 16, int(-360 * 16 * self.показано / 100))
+            p.setPen(QPen(цвет, толщина, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(r, 90 * 16, int(-360 * 16 * self.показано / 100))
+        p.setPen(QColor(C["ink"]))
+        if self.значение is None:
+            p.setFont(font(FONT_NUM, int(s * 0.26), W.Bold))
+            p.drawText(self.rect(), Qt.AlignCenter, "—")
+            return
+        число = str(int(round(self.показано)))
+        шрифт = font(FONT_NUM, int(s * 0.30), W.Bold)
+        p.setFont(шрифт)
+        ш_числа = p.fontMetrics().horizontalAdvance(число)
+        малый = font(FONT_NUM, int(s * 0.15), W.Medium)
+        p.setFont(малый)
+        ш_знака = p.fontMetrics().horizontalAdvance("%")
+        x0 = (s - ш_числа - ш_знака - 2) / 2
+        p.setFont(шрифт)
+        p.drawText(QRectF(x0, 0, ш_числа + 2, s), Qt.AlignVCenter | Qt.AlignLeft, число)
+        p.setFont(малый)
+        p.setPen(QColor(C["muted"]))
+        p.drawText(QRectF(x0 + ш_числа + 2, s * 0.06, ш_знака + 4, s), Qt.AlignVCenter | Qt.AlignLeft, "%")
+
+
+class Stepper(QWidget):
+    """Шаги сделки одной строкой: что сделано, что сейчас, что впереди.
+
+    Это и карта, и навигация: по шагу можно нажать и вернуться к нему. Раньше для этого в
+    каждой карточке стояла пара кнопок «К тесту», «К фото», и сотрудник читал их вместо того,
+    чтобы смотреть на телефон. Текущий шаг дышит, линия между шагами заполняется по мере
+    того, как сделка идёт."""
+
+    выбран = Signal(int)
+
+    def __init__(self, названия):
+        super().__init__()
+        self.названия = list(названия)
+        self.готово = [False] * len(self.названия)
+        self.текущий = 0
+        self.доступны = set()
+        self.идут = set()
+        self.setFixedHeight(64)
+        self.setMouseTracking(True)
+        self._области = []
+        self._доля = 0.0                      # заполнение линии, анимируется
+        self._всплеск = None                  # когда сменился текущий шаг: от него расходится кольцо
         self.t0 = time.monotonic()
         self.timer = QTimer(self)
-        self.timer.setInterval(33)
-        self.timer.timeout.connect(self.update)
+        self.timer.setInterval(40)
+        self.timer.timeout.connect(self._тик)
 
-    def set_state(self, state):
-        self.state = state
+    def set(self, готово, текущий, доступны=(), идут=()):
+        """`идут` — шаги, которые выполняются сами (проверка по кабелю): у них крутится дуга."""
+        if int(текущий) != self.текущий and self.isVisible():
+            self._всплеск = time.monotonic()
+        self.готово = list(готово)
+        self.текущий = int(текущий)
+        self.доступны = set(доступны)
+        self.идут = set(идут)
+        self.update()
+
+    def _цель(self):
+        """До какого шага дотянута линия: до последнего сделанного подряд."""
+        n = 0
+        for есть in self.готово:
+            if not есть:
+                break
+            n += 1
+        return min(n, len(self.названия) - 1) / max(1, len(self.названия) - 1)
+
+    def _тик(self):
+        цель = self._цель()
+        if abs(цель - self._доля) > 0.002:
+            self._доля += (цель - self._доля) * 0.14
         self.update()
 
     def showEvent(self, e):
         super().showEvent(e)
+        self.timer.start()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.timer.stop()
+
+    def _на_шаге(self, pos):
+        for i, область in enumerate(self._области):
+            if область.contains(pos):
+                return i
+        return None
+
+    def mouseMoveEvent(self, e):
+        i = self._на_шаге(e.position())
+        self.setCursor(Qt.PointingHandCursor if i in self.доступны else Qt.ArrowCursor)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        i = self._на_шаге(e.position())
+        if e.button() == Qt.LeftButton and i is not None and i in self.доступны:
+            self.выбран.emit(i)
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        n = len(self.названия)
+        w, h = self.width(), self.height()
+        кружок = 34
+        шрифт = font(FONT_TEXT, 19, W.DemiBold)
+        p.setFont(шрифт)
+        fm = p.fontMetrics()
+        ширины = [кружок + 12 + fm.horizontalAdvance(имя) for имя in self.названия]
+        зазор = (w - sum(ширины) - 8) / max(1, n - 1)
+        y = h / 2
+        t = time.monotonic() - self.t0
+        x = 4.0
+        края = []
+        for ш in ширины:
+            края.append((x, x + ш))
+            x += ш + зазор
+        p.setPen(QPen(QColor(C["line"]), 2))
+        for i in range(n - 1):
+            p.drawLine(QPointF(края[i][1] + 14, y), QPointF(края[i + 1][0] - 14, y))
+        полная = (n - 1) * self._доля
+        for i in range(n - 1):
+            доля = max(0.0, min(1.0, полная - i))
+            if доля <= 0:
+                continue
+            a, b = края[i][1] + 14, края[i + 1][0] - 14
+            g = QLinearGradient(a, y, b, y)
+            g.setColorAt(0, QColor(C["okdot"]))
+            g.setColorAt(1, QColor(C["cyan"]))
+            p.setPen(QPen(g, 2.5, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(a, y), QPointF(a + (b - a) * доля, y))
+        self._области = []
+        for i, имя in enumerate(self.названия):
+            x0, x1 = края[i]
+            self._области.append(QRectF(x0 - 8, 0, x1 - x0 + 16, h))
+            сделан, сейчас = self.готово[i], i == self.текущий
+            c = QPointF(x0 + кружок / 2, y)
+            if сейчас:
+                пульс = 0.5 + 0.5 * math.sin(t * 2.6)
+                ореол = QColor(C["glow"])
+                ореол.setAlphaF(0.10 + 0.16 * пульс)
+                p.setPen(Qt.NoPen)
+                p.setBrush(ореол)
+                p.drawEllipse(c, кружок / 2 + 4 + 3 * пульс, кружок / 2 + 4 + 3 * пульс)
+                if self._всплеск is not None:
+                    u = (time.monotonic() - self._всплеск) / 0.7
+                    if u < 1.0:
+                        кольцо = QColor(C["cyan"])
+                        кольцо.setAlphaF(0.7 * (1 - u))
+                        p.setPen(QPen(кольцо, 2))
+                        p.setBrush(Qt.NoBrush)
+                        r = кружок / 2 + 26 * (1 - (1 - u) ** 2)
+                        p.drawEllipse(c, r, r)
+                    else:
+                        self._всплеск = None
+            if i in self.идут and not сделан:
+                слабая = QColor(C["action"])
+                слабая.setAlphaF(0.25)
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(слабая, 3))
+                дуга = QRectF(c.x() - кружок / 2 + 1.5, y - кружок / 2 + 1.5, кружок - 3, кружок - 3)
+                p.drawEllipse(дуга)
+                p.setPen(QPen(QColor(C["cyan"]), 3, Qt.SolidLine, Qt.RoundCap))
+                угол = int(t * 300) % 360
+                p.drawArc(дуга, (90 - угол) * 16, -110 * 16)
+                p.setPen(QColor(C["body"]))
+                p.setFont(font(FONT_NUM, 17, W.Bold))
+                p.drawText(QRectF(c.x() - кружок / 2, y - кружок / 2, кружок, кружок),
+                           Qt.AlignCenter, str(i + 1))
+            elif сделан:
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(C["okdot"]))
+                p.drawEllipse(c, кружок / 2, кружок / 2)
+                p.setPen(QPen(QColor("#04121C"), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                path = QPainterPath(c + QPointF(-7, 0.5))
+                path.lineTo(c + QPointF(-2, 5.5))
+                path.lineTo(c + QPointF(7.5, -5))
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(path)
+            else:
+                p.setPen(QPen(QColor(C["cyan"] if сейчас else C["ring"]), 2.5))
+                p.setBrush(QColor(C["tint"]) if сейчас else Qt.NoBrush)
+                p.drawEllipse(c, кружок / 2 - 1.5, кружок / 2 - 1.5)
+                p.setPen(QColor(C["ink"] if сейчас else C["ghost"]))
+                p.setFont(font(FONT_NUM, 17, W.Bold))
+                p.drawText(QRectF(c.x() - кружок / 2, y - кружок / 2, кружок, кружок),
+                           Qt.AlignCenter, str(i + 1))
+            p.setFont(шрифт)
+            p.setPen(QColor(C["ink"] if сейчас else (C["body"] if (сделан or i in self.идут) else C["ghost"])))
+            p.drawText(QRectF(x0 + кружок + 12, 0, x1 - x0 - кружок - 12 + 6, h),
+                       Qt.AlignVCenter | Qt.AlignLeft, имя)
+
+
+class Успех(QWidget):
+    """Сделка ушла: кольцо замыкается, галочка прорисовывается. Один раз, при показе."""
+
+    def __init__(self, сторона=132):
+        super().__init__()
+        self.s = int(сторона)
+        self.setFixedSize(self.s, self.s)
+        self.v = 1.0
+        self.anim = QVariantAnimation(self)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setDuration(900)
+        self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.anim.valueChanged.connect(self._шаг)
+
+    def _шаг(self, v):
+        self.v = float(v)
+        self.update()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.v = 0.0
+        self.anim.start()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        s = self.s
+        r = QRectF(8, 8, s - 16, s - 16)
+        ореол = QColor(C["okdot"])
+        ореол.setAlphaF(0.14 * self.v)
+        p.setPen(Qt.NoPen)
+        p.setBrush(ореол)
+        p.drawEllipse(QRectF(0, 0, s, s))
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(C["okdot"]), 6, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(r, 90 * 16, int(-360 * 16 * min(1.0, self.v / 0.6)))
+        k = max(0.0, (self.v - 0.45) / 0.55)
+        if k > 0:
+            a, b, c = QPointF(s * 0.30, s * 0.52), QPointF(s * 0.44, s * 0.66), QPointF(s * 0.72, s * 0.36)
+            path = QPainterPath(a)
+            path.lineTo(a + (b - a) * min(1.0, k / 0.4))
+            if k > 0.4:
+                path.lineTo(b + (c - b) * ((k - 0.4) / 0.6))
+            p.setPen(QPen(QColor(C["okdot"]), 8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawPath(path)
+
+
+class SheenButton(QPushButton):
+    """Главная кнопка: когда она готова к нажатию, по ней раз в несколько секунд пробегает
+    блик. Глаз сам находит на экране то, что движется, — искать «куда нажать» не приходится."""
+
+    def __init__(self, text=""):
+        super().__init__(text)
         self.t0 = time.monotonic()
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self._тик)
+
+    def _живая(self):
+        return self.isEnabled() and self.objectName() == "primary"
+
+    def _тик(self):
+        if self._живая():
+            self.update()
+
+    def showEvent(self, e):
+        super().showEvent(e)
         self.timer.start()
 
     def hideEvent(self, e):
@@ -299,183 +722,46 @@ class ConnectArt(QWidget):
         self.timer.stop()
 
     def paintEvent(self, e):
-        t = time.monotonic() - self.t0
+        super().paintEvent(e)
+        if not self._живая():
+            return
+        u = ((time.monotonic() - self.t0) % 3.6) / 1.1          # блик идёт 1,1 с из каждых 3,6
+        if u >= 1.0:
+            return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        k = min(self.width() / self.AW, self.height() / self.AH)
-        p.translate((self.width() - self.AW * k) / 2, (self.height() - self.AH * k) / 2)
-        p.scale(k, k)
-        # парение всей группы: 0 → −10 px → 0 за 4,5 с
-        p.translate(0, -10 * (0.5 - 0.5 * math.cos(2 * math.pi * t / 4.5)))
-        ox, oy = (self.AW - self.PW) / 2, 8
-        cx = ox + self.PW / 2
-        base = oy + self.PH - 6                                           # верх нижнего блока
-        # кольца — только пока ждём кабель
-        if self.state == "wait":
-            for delay in (0.0, 0.9):
-                if t < delay:
-                    continue
-                u = ((t - delay) % 2.2) / 2.2
-                ue = 1 - (1 - u) ** 2
-                col = QColor(C["action"])
-                col.setAlphaF(0.95 * (1 - ue))
-                p.setPen(QPen(col, 3))
-                p.setBrush(Qt.NoBrush)
-                rr = 30 * (0.55 + 1.35 * ue)
-                p.drawEllipse(QPointF(cx, base + 12), rr, rr)
-        # тень телефона: несколько полупрозрачных слоёв
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), 18, 18)
+        p.setClipPath(clip)
+        w, h = self.width(), self.height()
+        x = -0.40 * w + 1.8 * w * u
+        g = QLinearGradient(x, 0, x + 0.38 * w, 0)
+        g.setColorAt(0.0, QColor(255, 255, 255, 0))
+        g.setColorAt(0.5, QColor(255, 255, 255, 70))
+        g.setColorAt(1.0, QColor(255, 255, 255, 0))
         p.setPen(Qt.NoPen)
-        for i in range(8):
-            sh = QColor(C["ink"])
-            sh.setAlphaF(0.035)
-            p.setBrush(sh)
-            g = i * 5
-            p.drawRoundedRect(QRectF(ox - g, oy + 22 - g, self.PW + 2 * g, self.PH + 2 * g), 34 + g, 34 + g)
-        # телефон
-        p.setBrush(QColor(C["ink"]))
-        p.drawRoundedRect(QRectF(ox, oy, self.PW, self.PH), 34, 34)
-        p.setBrush(QColor(C["screen"]))
-        p.drawRoundedRect(QRectF(ox + 9, oy + 9, 170, 312), 27, 27)
-        p.setBrush(QColor(C["ink"]))
-        p.drawRoundedRect(QRectF(ox + 59, oy + 20, 70, 18), 9, 9)
-        p.setBrush(QColor(255, 255, 255, 46))
-        p.drawRoundedRect(QRectF(ox + 40, oy + 120, 108, 12), 6, 6)
-        p.setBrush(QColor(255, 255, 255, 31))
-        p.drawRoundedRect(QRectF(ox + 54, oy + 146, 80, 12), 6, 6)
-        p.setBrush(QColor("#0A1526"))
-        p.drawRoundedRect(QRectF(ox + 76, oy + 314, 36, 9), 5, 5)
-        # кабель: снизу вверх в разъём, пауза, снова
-        if self.state == "found":
-            dy, a = 0.0, 1.0
-        elif self.state == "nodriver":
-            dy, a = 84.0, 0.3
-        else:
-            u = (t % 3.4) / 3.4
-            kk = 0.0 if u < 0.12 else (smoothstep((u - 0.12) / 0.28) if u < 0.40 else 1.0)
-            dy, a = 84 * (1 - kk), kk
-        if a > 0:
-            p.setOpacity(a)
-            p.setBrush(QColor(C["action"]))
-            head = QPainterPath()
-            head.addRoundedRect(QRectF(cx - 17, base + 2 + dy, 34, 22), 6, 6)
-            p.drawPath(head)
-            p.drawRoundedRect(QRectF(cx - 4, base + 22 + dy, 8, 100), 4, 4)
-            p.setOpacity(1.0)
-
-
-class Bar(QWidget):
-    """Полоска батареи. Заполняется один раз после показа экрана (1,6 с, задержка 0,35 с)."""
-
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(12)
-        self.value, self.progress, self.color = 0, 1.0, QColor(C["okdot"])
-        self.pending = False
-        self.anim = QVariantAnimation(self)
-        self.anim.setStartValue(0.0)
-        self.anim.setEndValue(1.0)
-        self.anim.setDuration(1600)
-        self.anim.setEasingCurve(ease_out())
-        self.anim.valueChanged.connect(self._step)
-
-    def prepare(self, value, color, animate):
-        self.value, self.color = max(0, min(100, value or 0)), QColor(color)
-        self.pending = bool(animate)
-        self.progress = 0.0 if animate else 1.0
-        self.update()
-
-    def play(self):
-        if self.pending:
-            self.pending = False
-            QTimer.singleShot(350, self.anim.start)
-
-    def _step(self, v):
-        self.progress = float(v)
-        self.update()
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(C["border"]))
-        p.drawRoundedRect(QRectF(0, 0, self.width(), 12), 6, 6)
-        w = self.width() * self.value / 100 * self.progress
-        if w > 0:
-            p.setBrush(self.color)
-            p.drawRoundedRect(QRectF(0, 0, max(w, 12), 12), 6, 6)
-
-
-class PopNumber(QWidget):
-    """Номер заявки 150 px (Space Grotesk). «—» серым, пока номера нет; номер появляется
-    один раз с лёгким подскоком (0,55 → 1,06 → 1 за 0,9 с)."""
-
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(150)
-        self.setMinimumWidth(320)
-        self.text, self.color = "—", QColor(C["ghost"])
-        self.scale_, self.alpha, self.pending = 1.0, 1.0, False
-        self.font_ = font(FONT_NUM, 150, W.Bold)
-        self.anim = QVariantAnimation(self)
-        self.anim.setStartValue(0.0)
-        self.anim.setEndValue(1.0)
-        self.anim.setDuration(900)
-        self.anim.setEasingCurve(ease_out())
-        self.anim.valueChanged.connect(self._step)
-
-    def set_text(self, text, number, pop):
-        self.text = text
-        self.color = QColor(C["brand"] if number else C["ghost"])
-        self.pending = bool(pop)
-        self.scale_, self.alpha = (0.55, 0.0) if pop else (1.0, 1.0)
-        self.update()
-
-    def play(self):
-        if self.pending:
-            self.pending = False
-            QTimer.singleShot(200, self.anim.start)
-
-    def _step(self, v):
-        v = float(v)
-        if v < 0.6:
-            k = v / 0.6
-            self.scale_, self.alpha = 0.55 + 0.51 * k, k
-        else:
-            self.scale_, self.alpha = 1.06 - 0.06 * (v - 0.6) / 0.4, 1.0
-        self.update()
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.TextAntialiasing)
-        p.setOpacity(self.alpha)
-        h = self.height()
-        p.translate(0, h / 2)
-        p.scale(self.scale_, self.scale_)
-        p.translate(0, -h / 2)
-        p.setFont(self.font_)
-        p.setPen(self.color)
-        p.drawText(QRectF(0, 0, self.width() / max(self.scale_, 0.01), h), Qt.AlignLeft | Qt.AlignVCenter, self.text)
+        p.setBrush(g)
+        полоса = QPainterPath()
+        полоса.moveTo(x + 0.10 * w, 0)
+        полоса.lineTo(x + 0.38 * w, 0)
+        полоса.lineTo(x + 0.28 * w, h)
+        полоса.lineTo(x, h)
+        полоса.closeSubpath()
+        p.drawPath(полоса)
 
 
 class QrBlock(QWidget):
-    """QR в белой рамке с подписью. Умеет один раз «всплыть» снизу (0,7 с, задержка 0,6 с).
+    """QR на белой плитке с подписью.
 
-    `сторона` — желаемый размер кода. По умолчанию 200: столько занимает QR на экране
-    сделки. Карточке теста на телефоне клиента нужен поменьше: там под кодом ещё семь
-    строк результата, и в полный размер содержимое карточки не помещается.
-
-    Размер не жёсткий, а предельный: под давлением QR ужимается (до `МИНИМУМ`), и сам
-    решает, насколько. Так было не всегда, и платили за это на точке. Жёсткий размер
-    ужиматься отказывается, и когда содержимому карточки переставало хватать высоты —
-    из-за длинного текста или просто более крупного системного шрифта, — раскладка Qt
-    укладывала следующие подписи ПОВЕРХ него: код и ссылка оказывались написаны по
-    самому коду. Ужавшийся QR читается телефоном, текст по тексту — не читается никем.
+    `сторона` — желаемый размер кода. Размер не жёсткий, а предельный: под давлением QR
+    ужимается (до `МИНИМУМ`). Так было не всегда, и платили за это на точке: жёсткий размер
+    ужиматься отказывался, и когда содержимому карточки переставало хватать высоты — из-за
+    длинного текста или более крупного системного шрифта, — раскладка Qt укладывала
+    следующие подписи ПОВЕРХ него. Ужавшийся QR читается телефоном, текст по тексту — никем.
     """
 
-    # До этого размера QR ужимается молча: ссылка в нём короткая (t.me с кодом из шести
-    # знаков либо адрес теста), это 29–37 модулей, то есть около трёх пикселей на модуль —
-    # телефон наводится с ладони. Меньше — уже наугад, и тогда пусть лучше станет тесно.
+    # До этого размера QR ужимается молча: ссылка в нём короткая, это 29–37 модулей, то есть
+    # около трёх пикселей на модуль — телефон наводится с ладони.
     МИНИМУМ = 100
 
     def __init__(self, сторона=200):
@@ -528,7 +814,7 @@ class QrBlock(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setOpacity(self.alpha)
         p.translate(0, self.dy)
-        p.setPen(QPen(QColor(C["border"]), 1))
+        p.setPen(Qt.NoPen)
         p.setBrush(QColor("white"))
         рамка = бок + 15
         p.drawRoundedRect(QRectF(0.5, 0.5, рамка, рамка), 18, 18)
@@ -542,75 +828,85 @@ class QrBlock(QWidget):
 # ---------- каркас ----------
 
 class Screen(QWidget):
+    """Экран: тёмный фон со светом по углам рисует сам, детей кладёт в `self.root`.
+
+    Фон именно рисуется, а не лежит отдельным виджетом под остальными: любой виджет-подложка
+    был бы «соседом» каждой карточки, и тест вёрстки справедливо счёл бы это наездом.
+    `gray` оставлен в подписи ради прежних вызовов — светлых экранов больше нет."""
+
     def __init__(self, gray=False, margins=(88, 72, 88, 72), spacing=24):
         super().__init__()
-        self.setObjectName("screen_gray" if gray else "screen")
-        self.setAutoFillBackground(True)
+        self.setObjectName("screen")
+        self.setAutoFillBackground(False)
+        pal = self.palette()
+        for роль in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+            pal.setColor(роль, QColor(C["ink"]))
+        pal.setColor(QPalette.PlaceholderText, QColor(C["ghost"]))
+        pal.setColor(QPalette.Highlight, QColor(C["action"]))
+        pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        self.setPalette(pal)
         self.root = QVBoxLayout(self)
         self.root.setContentsMargins(*margins)
         self.root.setSpacing(spacing)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.drawPixmap(0, 0, фон_статичный(self.size()))
 
 
 # ---------- 1. Ожидание ----------
 
 class MainScreen(Screen):
-    """Экран ожидания. Отсюда же ставится обновление: ездить по точкам с флешкой незачем."""
+    """Экран ожидания: знак Pintel Diagnostics, живой свет и одна подсказка.
+
+    Здесь нарочно почти ничего нет. Перед стойкой стоит клиент, и первое, что он видит, —
+    не инструкция из трёх пунктов, а знак и одна фраза. Начать можно нажатием в любое место
+    экрана или клавишей: искать кнопку незачем.
+
+    Знак, свет, искры и подсказка нарисованы в `paintEvent`, а не собраны из виджетов: они
+    движутся и накладываются друг на друга, чего раскладка Qt не умеет. Виджетами остались
+    только статус связи, имя точки и кнопка обновления — то, что должно нажиматься и
+    читаться тестом вёрстки.
+    """
 
     обновить = Signal()
-
     начать = Signal()
 
+    ПОДСКАЗКА = "Нажмите, чтобы начать"
+
     def __init__(self, point=""):
-        super().__init__()
-        self.point_label = label(point_text(point), "muted")
+        super().__init__(margins=(56, 40, 56, 40), spacing=0)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.device = "wait"
+        self.t0 = time.monotonic()
+        self._искры = [((i * 0.6180339887) % 1.0, (i * 0.3819660113 + 0.17) % 1.0,
+                        0.5 + ((i * 7) % 10) / 10.0, 1.2 + (i % 4) * 0.7) for i in range(46)]
+
+        верх = QHBoxLayout()
+        self.point_label = label(point_text(point), font_=font(FONT_TEXT, 18, W.Medium), color=C["muted"])
         self.status = status_label("Готов к работе")
-        self.root.addLayout(header(self.point_label, self.status))
-        body = QHBoxLayout()
-        body.setSpacing(88)
-        left = QVBoxLayout()
-        left.setSpacing(0)
-        left.addStretch(1)
-        left.addWidget(label("Оценка iPhone", wrap=True, font_=font(FONT_HEAD, 78, W.Bold, -1.5)))
-        left.addSpacing(28)
-        lead = label("Проверяем телефон по кабелю и данным Apple, оформляем сделку и печатаем чек клиенту.",
-                     "lead", wrap=True)
-        lead.setMaximumWidth(760)
-        left.addWidget(lead)
-        left.addSpacing(48)
-        steps = ("Нажмите «Начать оценку»", "Подключите iPhone кабелем",
-                 "Заполним сделку и отправим в Оценку")
-        for i, t in enumerate(steps, 1):
-            r = QHBoxLayout()
-            r.setSpacing(22)
-            n = label(str(i), "num", font_=font(FONT_NUM, 26, W.Bold))
-            n.setAlignment(Qt.AlignCenter)
-            r.addWidget(n)
-            r.addWidget(label(t, "step"))
-            r.addStretch(1)
-            left.addLayout(r)
-            if i < len(steps):
-                left.addSpacing(22)
-        left.addSpacing(44)
-        self.b_начать = QPushButton("Начать оценку")
-        self.b_начать.setObjectName("primary")
-        self.b_начать.setCursor(Qt.PointingHandCursor)
-        self.b_начать.setMinimumWidth(420)
-        self.b_начать.clicked.connect(self.начать.emit)
-        left.addWidget(self.b_начать, 0, Qt.AlignLeft)
-        left.addSpacing(18)
+        верх.addWidget(self.point_label)
+        верх.addStretch(1)
+        верх.addWidget(self.status)
+        self.root.addLayout(верх)
+        self.root.addStretch(1)
+        низ = QHBoxLayout()
+        низ.addStretch(1)
         self.b_обновить = QPushButton("Обновить программу")
         self.b_обновить.setObjectName("update")
         self.b_обновить.setCursor(Qt.PointingHandCursor)
+        self.b_обновить.setFont(font(FONT_TEXT, 20, W.Bold))
         self.b_обновить.clicked.connect(self.обновить.emit)
         self.b_обновить.setVisible(False)
-        left.addWidget(self.b_обновить, 0, Qt.AlignLeft)
-        left.addStretch(1)
-        body.addLayout(left, 1)
-        self.card = ConnectCard()
-        body.addWidget(self.card, 0, Qt.AlignVCenter)
-        self.root.addLayout(body, 1)
-        self.root.addWidget(label("Ничего не устанавливаем. Данные читаем только с вашего согласия.", "footer"))
+        низ.addWidget(self.b_обновить)
+        self.root.addLayout(низ)
 
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self.update)
+
+    # ---------- то, что зовёт приложение ----------
     def set_point(self, point):
         self.point_label.setText(point_text(point))
 
@@ -619,8 +915,9 @@ class MainScreen(Screen):
         self.status.setStyleSheet(f"color: {C['okdot'] if ok else C['bad']};")
 
     def set_device(self, state):
-        """wait | found | nodriver — состояние правой карточки."""
-        self.card.set_state(state)
+        """wait | found | nodriver — что с кабелем; меняет строку под знаком."""
+        self.device = state
+        self.update()
 
     def показать_обновление(self, текст="", занято=False):
         """Новая версия найдена — кнопка появляется. Пусто — прячем."""
@@ -629,78 +926,155 @@ class MainScreen(Screen):
         if текст:
             self.b_обновить.setText(текст)
 
+    # ---------- жизнь ----------
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.t0 = time.monotonic()
+        self.timer.start()
+        self.setFocus()
 
-class ConnectCard(QFrame):
-    """Правая часть экрана ожидания: светлая карточка с живой иллюстрацией."""
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.timer.stop()
 
-    def __init__(self):
-        super().__init__()
-        self.setFixedSize(620, 620)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(52, 48, 52, 40)
-        lay.setSpacing(0)
-        self.kicker = kicker("ШАГ 1 ИЗ 3", 15, 3.0, C["brand"])
-        self.title = label("Подключите телефон кабелем", wrap=True, font_=font(FONT_HEAD, 38, W.Bold))
-        lay.addWidget(self.kicker)
-        lay.addSpacing(10)
-        lay.addWidget(self.title)
-        lay.addSpacing(6)
-        self.art = ConnectArt()
-        lay.addWidget(self.art, 1)
-        lay.addSpacing(6)
-        self.text = label("Кабели Lightning и USB‑C — справа. Телефон остаётся у вас в руках.", "cardtext", wrap=True)
-        lay.addWidget(self.text)
-        lay.addSpacing(16)
-        row = QHBoxLayout()
-        row.setSpacing(12)
-        self.pulse = Pulse(C["action"])
-        self.status = label("ждём подключения", "cardstatus")
-        row.addWidget(self.pulse)
-        row.addWidget(self.status)
-        row.addStretch(1)
-        lay.addLayout(row)
-        self.state = "wait"
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            e.accept()
+            return
+        super().mousePressEvent(e)
 
-    def set_state(self, state):
-        """wait | found | nodriver"""
-        self.state = state
-        self.art.set_state(state)
-        if state == "found":
-            self.kicker.setText("ШАГ 2 ИЗ 3")
-            self.title.setText("Телефон найден")
-            self.text.setText("Разблокируйте его и нажмите «Доверять» на экране телефона.")
-            self.status.setText("подключён")
-            self.status.setStyleSheet(f"color: {C['ok']};")
-            self.pulse.set(C["okdot"], blink=False)
-        elif state == "nodriver":
-            self.kicker.setText("ТЕХНИЧЕСКАЯ ПАУЗА")
-            self.title.setText("Киоск временно не принимает")
-            self.text.setText("Подойдите к сотруднику — он проверит телефон на кассе.")
-            self.status.setText("нет связи с кабелем")
-            self.status.setStyleSheet(f"color: {C['badtext']};")
-            self.pulse.set(C["bad"], blink=False)
-        else:
-            self.kicker.setText("ШАГ 1 ИЗ 3")
-            self.title.setText("Подключите телефон кабелем")
-            self.text.setText("Кабели Lightning и USB‑C — справа. Телефон остаётся у вас в руках.")
-            self.status.setText("ждём подключения")
-            self.status.setStyleSheet(f"color: {C['brand']};")
-            self.pulse.set(C["action"], blink=True)
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.начать.emit()
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.начать.emit()
+            return
+        super().keyPressEvent(e)
+
+    # ---------- рисунок ----------
+    def _знак(self):
+        """Знак с надписью и его размытый двойник для свечения. Считаются один раз."""
+        ширина = int(min(self.width() * 0.60, 1180))
+        if getattr(self, "_знак_ширина", None) != ширина:
+            знак = картинка("logo_full.png", ширина=ширина)
+            if знак.isNull():
+                self._знак_пара = (знак, знак)
+            else:
+                self._знак_пара = (знак, размыть(знак, 30))
+            self._знак_ширина = ширина
+        return self._знак_пара
 
     def paintEvent(self, e):
+        t = time.monotonic() - self.t0
+        w, h = self.width(), self.height()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor(C["tint_border"]), 1))
-        p.setBrush(QColor(C["tint"]))
-        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 36, 36)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.drawPixmap(self.rect(), аврора(t))
+
+        # волны по углам — тонкие светящиеся кромки, как на знаке
+        p.setBrush(Qt.NoBrush)
+        for угол in (0, 1):
+            for k in range(3):
+                фаза = t * (0.20 + 0.05 * k) + угол * 1.7 + k * 0.9
+                сдвиг = 46 * k + 16 * math.sin(фаза)
+                путь = QPainterPath()
+                if угол == 0:
+                    путь.moveTo(-20, h * 0.34 + сдвиг)
+                    путь.cubicTo(w * 0.10, h * (0.26 + 0.03 * math.sin(фаза)), w * 0.16, h * 0.08,
+                                 w * 0.34 + сдвиг, -20)
+                    g = QLinearGradient(0, h * 0.34, w * 0.34, 0)
+                else:
+                    путь.moveTo(w + 20, h * 0.40 - сдвиг)
+                    путь.cubicTo(w * 0.93, h * (0.62 + 0.03 * math.cos(фаза)), w * 0.80, h * 0.84,
+                                 w * 0.52 - сдвиг, h + 20)
+                    g = QLinearGradient(w, h * 0.40, w * 0.52, h)
+                яркость = 0.55 - 0.15 * k
+                g.setColorAt(0.0, QColor(40, 160, 255, 0))
+                g.setColorAt(0.5, QColor(70, 180, 255, int(255 * яркость)))
+                g.setColorAt(1.0, QColor(40, 120, 255, 0))
+                p.setPen(QPen(g, 2.4 - 0.5 * k))
+                p.drawPath(путь)
+
+        # искры: медленно всплывают и мерцают
+        p.setPen(Qt.NoPen)
+        for x0, y0, скорость, размер in self._искры:
+            y = (y0 - t * 0.012 * скорость) % 1.0
+            x = x0 + 0.012 * math.sin(t * 0.5 * скорость + x0 * 9)
+            мерц = 0.35 + 0.65 * (0.5 + 0.5 * math.sin(t * 1.3 * скорость + y0 * 20))
+            край = smoothstep(min(y, 1 - y) / 0.12)
+            c = QColor(140, 205, 255)
+            c.setAlphaF(0.55 * мерц * край)
+            p.setBrush(c)
+            p.drawEllipse(QPointF(x * w, y * h), размер, размер)
+
+        # знак: парит, свечение дышит, раз в несколько секунд по нему проходит блик
+        знак, ореол = self._знак()
+        if not знак.isNull():
+            парение = 7 * math.sin(t * 0.8)
+            вход = smoothstep(t / 1.1)                       # появление при показе экрана
+            cx, cy = w / 2, h * 0.455 + парение + 26 * (1 - вход)
+            дыхание = 0.5 + 0.5 * math.sin(t * 1.25)
+            p.setOpacity((0.45 + 0.55 * дыхание) * вход)      # свечение дышит
+            p.drawPixmap(int(cx - ореол.width() / 2), int(cy - ореол.height() / 2), ореол)
+            p.setOpacity(вход)
+            x, y = int(cx - знак.width() / 2), int(cy - знак.height() / 2)
+            p.drawPixmap(x, y, знак)
+            u = (t % 5.5) / 1.3
+            if u < 1.0 and вход >= 1.0:
+                блик = QPixmap(знак.size())
+                блик.fill(Qt.transparent)
+                q = QPainter(блик)
+                q.drawPixmap(0, 0, знак)
+                q.setCompositionMode(QPainter.CompositionMode_SourceAtop)
+                bx = -0.25 * знак.width() + 1.5 * знак.width() * u
+                g = QLinearGradient(bx, 0, bx + 0.22 * знак.width(), знак.height() * 0.4)
+                g.setColorAt(0.0, QColor(255, 255, 255, 0))
+                g.setColorAt(0.5, QColor(255, 255, 255, 150))
+                g.setColorAt(1.0, QColor(255, 255, 255, 0))
+                q.fillRect(блик.rect(), g)
+                q.end()
+                p.drawPixmap(x, y, блик)
+            p.setOpacity(1.0)
+
+        # одна фраза под знаком и строка про кабель
+        пульс = 0.5 + 0.5 * math.sin(t * 2.0)
+        цвет = QColor(C["ink"])
+        цвет.setAlphaF((0.45 + 0.50 * пульс) * smoothstep((t - 0.6) / 1.0))
+        p.setPen(цвет)
+        p.setFont(font(FONT_TEXT, 30, W.Medium, 0.6))
+        p.drawText(QRectF(0, h * 0.775, w, 46), Qt.AlignHCenter | Qt.AlignVCenter, self.ПОДСКАЗКА)
+        ya = h * 0.775 + 62 + 6 * пульс                      # стрелка под фразой покачивается
+        p.setPen(QPen(цвет, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        стрелка = QPainterPath(QPointF(w / 2 - 13, ya))
+        стрелка.lineTo(QPointF(w / 2, ya + 12))
+        стрелка.lineTo(QPointF(w / 2 + 13, ya))
+        p.drawPath(стрелка)
+        строка, цвет_строки = {
+            "found": ("Телефон подключён", C["okdot"]),
+            "nodriver": ("Служба Apple не отвечает — перезапустите Apple Mobile Device Service",
+                         C["warntext"]),
+        }.get(self.device, ("", C["muted"]))
+        if строка:
+            p.setFont(font(FONT_TEXT, 21, W.DemiBold))
+            p.setPen(QColor(цвет_строки))
+            p.drawText(QRectF(0, h * 0.775 + 96, w, 34), Qt.AlignHCenter | Qt.AlignVCenter,
+                       "●  " + строка)
 
 
 # ---------- 2. Проверка ----------
 
-STEPS = [("connect", "Подключение и доверие"), ("passport", "Модель, память, серийный номер"),
-         ("battery", "Батарея: здоровье и циклы"), ("locks", "Блокировки: Найти iPhone, активация, корпоративный надзор"),
-         ("apple", "История обслуживания от Apple"), ("sickw", "Проверка по базе IMEI"),
-         ("rfs", "Реестр IMEI РК (РФС)"), ("upload", "Отправка на кассу")]
+# Короткие названия: строка шага должна читаться целиком и с двух метров.
+STEPS = [("connect", "Подключение"), ("passport", "Модель и память"),
+         ("battery", "Батарея"), ("locks", "Блокировки"),
+         ("apple", "Данные Apple"), ("sickw", "База IMEI"),
+         ("rfs", "Реестр IMEI РК"), ("upload", "Отправка на кассу")]
 
 
 class StepRow(QFrame):
@@ -708,8 +1082,8 @@ class StepRow(QFrame):
         super().__init__()
         self.setObjectName("row")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(24, 18, 24, 18)
-        lay.setSpacing(20)
+        lay.setContentsMargins(14, 9, 16, 9)
+        lay.setSpacing(14)
         self.dot = Dot()
         self.title = label(title, "rowtitle_wait")
         self.state = label("", "rowstate")
@@ -723,407 +1097,11 @@ class StepRow(QFrame):
         self.setObjectName("row_active" if state == "run" else "row")
         self.title.setObjectName("rowtitle_wait" if state == "wait" else "rowtitle")
         self.state.setObjectName("rowstate_active" if state == "run" else "rowstate")
-        self.state.setText(text or {"wait": "следом", "run": "…", "done": "готово", "warn": "", "fail": ""}.get(state, ""))
+        self.state.setText(text or {"wait": "", "run": "…", "done": "готово", "warn": "", "fail": ""}.get(state, ""))
         for w in (self, self.title, self.state):                  # перечитать QSS после смены objectName
             w.style().unpolish(w)
             w.style().polish(w)
             w.update()
-
-
-class ScanScreen(Screen):
-    skip_requested = Signal()
-
-    def __init__(self, point=""):
-        super().__init__()
-        self.point_label = label(point_text(point), "muted")
-        self.device_label = status_label("Телефон подключён")
-        self.root.addLayout(header(self.point_label, self.device_label))
-        body = QHBoxLayout()
-        body.setSpacing(64)
-        left = QVBoxLayout()
-        left.setSpacing(0)
-        left.addWidget(label("Проверяем телефон", font_=font(FONT_HEAD, 60, W.Bold, -1.0)))
-        left.addSpacing(10)
-        self.lead = label("Не отключайте кабель. Обычно это занимает около минуты.", "lead_s", wrap=True)
-        left.addWidget(self.lead)
-        left.addSpacing(30)
-        self.rows = {}
-        for i, (key, title) in enumerate(STEPS):
-            r = StepRow(title)
-            self.rows[key] = r
-            if i:
-                left.addSpacing(12)
-            left.addWidget(r)
-        left.addStretch(1)
-        body.addLayout(left, 1)
-        self.panel = QFrame()
-        self.panel.setObjectName("bluecard")
-        self.panel.setFixedWidth(680)
-        pl = QVBoxLayout(self.panel)
-        pl.setContentsMargins(48, 48, 48, 48)
-        pl.setSpacing(0)
-        pl.addWidget(kicker("ОДИН ШАГ НА ТЕЛЕФОНЕ · ПОДТВЕРЖДЕНИЕ APPLE", 16, 3.0, C["pale"]))
-        pl.addSpacing(14)
-        pl.addWidget(label("Откройте на телефоне «Об этом устройстве» — Apple сама скажет, что менялось",
-                           wrap=True, font_=font(FONT_HEAD, 34, W.Bold), color="white"))
-        pl.addSpacing(34)
-        for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
-                               "если появится «Детали и обслуживание» —\nзайдите в неё"), 1):
-            if i > 1:
-                pl.addSpacing(18)
-            pl.addWidget(label(f"{i} · {t}", "bluestep", wrap=True))
-        pl.addStretch(1)
-        pl.addWidget(label("По кабелю мы видим привязку модулей, но подтвердить подлинность может только Apple — "
-                           "и только с этого экрана. Строки «Детали и обслуживание» может не быть: "
-                           "Apple показывает её, только если деталь меняли — проверка всё равно уйдёт. "
-                           "Если экран уже открыт, выйдите и зайдите снова.",
-                           "bluenote", wrap=True))
-        pl.addSpacing(22)
-        self.skip = QPushButton("Сделает сотрудник")
-        self.skip.setObjectName("skip")
-        self.skip.setCursor(Qt.PointingHandCursor)
-        self.skip.clicked.connect(self.skip_requested.emit)
-        pl.addWidget(self.skip, 0, Qt.AlignLeft)
-        body.addWidget(self.panel)
-        self.root.addLayout(body, 1)
-        self.show_prompt(False)
-
-    def set_point(self, point):
-        self.point_label.setText(point_text(point))
-
-    def reset(self, device_text="Телефон подключён"):
-        for r in self.rows.values():
-            r.set("wait", "")
-        self.rows["connect"].set("run", "ждём «Доверять»")
-        self.device_label.setText("● " + device_text)
-        self.lead.setText("Не отключайте кабель. Обычно это занимает около минуты.")
-        self.show_prompt(False)
-
-    def show_prompt(self, on):
-        self.panel.setVisible(bool(on))
-
-    def set_step(self, key, state, text):
-        if key in self.rows:
-            self.rows[key].set(state, text)
-
-    def set_trouble(self, text):
-        self.lead.setText(text)
-
-
-# ---------- 3. Результат ----------
-
-def _changed_verb(name):
-    """«Экран — менялся», «Камера — менялась», «Заднее стекло — менялось»."""
-    w = name.strip().split()[-1].lower()
-    if w.endswith(("а", "я")):
-        return "менялась"
-    if w.endswith(("о", "е")):
-        return "менялось"
-    return "менялся"
-
-
-def card():
-    f = QFrame()
-    f.setObjectName("card")
-    lay = QVBoxLayout(f)
-    lay.setContentsMargins(30, 30, 30, 30)
-    lay.setSpacing(8)
-    return f, lay
-
-
-def line(text, colour=None, small=False):
-    lab = label(text, "line_s" if small else "line", wrap=True)
-    if colour:
-        lab.setText(f'<span style="color:{colour}">●</span>&nbsp;&nbsp;{text}')
-    return lab
-
-
-def kv(k, v):
-    row = QHBoxLayout()
-    row.addWidget(label(k, "kv_k"))
-    row.addStretch(1)
-    vl = label(v, "kv_v")
-    vl.setAlignment(Qt.AlignRight)
-    row.addWidget(vl)
-    return row
-
-
-def clear_layout(lay):
-    """Убрать всё из раскладки сразу: deleteLater без setParent(None) оставляет
-    старые подписи нарисованными поверх новых до следующего цикла событий."""
-    while lay.count():
-        it = lay.takeAt(0)
-        w = it.widget()
-        if w is not None:
-            w.hide()
-            w.setParent(None)
-            w.deleteLater()
-        elif it.layout() is not None:
-            clear_layout(it.layout())
-
-
-class ResultScreen(Screen):
-    sell = Signal()
-    just_looking = Signal()
-    TEXT_WAIT = ("Подойдите к сотруднику — он запишет ваши имя и телефон, и здесь появится номер заявки. "
-                 f'<b style="color:{C["ink"]}">Цену назовёт сотрудник</b> после осмотра. '
-                 "По QR — отчёт о проверке, его можно забрать с собой.")
-    TEXT_NUMBER = ("Заявка оформлена. Сотрудник сфотографирует телефон и "
-                   f'<b style="color:{C["ink"]}">назовёт цену</b> после осмотра. '
-                   "По QR — отчёт о проверке, его можно забрать с собой.")
-    TEXT_LOCAL = "Назовите этот номер сотруднику — он осмотрит телефон и назовёт цену."
-
-    def __init__(self):
-        super().__init__(gray=True, margins=(72, 64, 72, 64), spacing=28)
-        self.title = label("iPhone", font_=font(FONT_NUM, 40, W.Bold, -0.5))
-        self.sub = label("", font_=font(FONT_TEXT, 22, W.DemiBold), color=C["muted"])
-        self.chip = label("Хорошее состояние", "chip_ok")
-        head = QHBoxLayout()
-        head.setSpacing(24)
-        head.addWidget(self.title)
-        head.addWidget(self.sub)
-        head.addStretch(1)
-        head.addWidget(self.chip)
-        self.root.addLayout(head)
-        body = QHBoxLayout()
-        body.setSpacing(28)
-        # номер + QR; цены на киоске нет — её называет сотрудник
-        self.next_card = QFrame()
-        self.next_card.setObjectName("card_main")
-        self.next_card.setFixedWidth(600)
-        pl = QVBoxLayout(self.next_card)
-        pl.setContentsMargins(44, 44, 44, 44)
-        pl.setSpacing(0)
-        pl.addWidget(kicker("ВАШ НОМЕР", 15))
-        pl.addSpacing(6)
-        self.number = PopNumber()
-        pl.addWidget(self.number)
-        pl.addSpacing(10)
-        qrow = QHBoxLayout()
-        qrow.setSpacing(24)
-        self.qr = QrBlock()
-        qrow.addWidget(self.qr, 0, Qt.AlignTop)
-        self.qr_text = label(self.TEXT_WAIT, "qrtext", wrap=True)
-        qrow.addWidget(self.qr_text, 1, Qt.AlignVCenter)
-        pl.addLayout(qrow)
-        pl.addSpacing(22)
-        srow = QHBoxLayout()
-        srow.setSpacing(12)
-        self.pulse = Pulse(C["action"])
-        self.status = label("ожидаем оформление у сотрудника", "cardstatus")
-        self.note = label("", "qrtext", wrap=True, color=C["warntext"])
-        self.note.hide()
-        srow.addWidget(self.pulse)
-        srow.addWidget(self.status)
-        pl.addSpacing(10)
-        pl.addWidget(self.note)
-        srow.addStretch(1)
-        pl.addLayout(srow)
-        pl.addStretch(1)
-        self.btn_done = QPushButton("Готово")
-        self.btn_done.setObjectName("primary")
-        self.btn_done.setCursor(Qt.PointingHandCursor)
-        self.btn_done.clicked.connect(self.just_looking.emit)
-        pl.addWidget(self.btn_done)
-        body.addWidget(self.next_card)
-        grid = QGridLayout()
-        grid.setSpacing(24)
-        self.c_bat, self.l_bat = card()
-        self.c_apple, self.l_apple = card()
-        self.c_locks, self.l_locks = card()
-        self.c_pass, self.l_pass = card()
-        grid.addWidget(self.c_bat, 0, 0)
-        grid.addWidget(self.c_apple, 0, 1)
-        grid.addWidget(self.c_locks, 1, 0)
-        grid.addWidget(self.c_pass, 1, 1)
-        body.addLayout(grid, 1)
-        self.root.addLayout(body, 1)
-        self.bar = None
-        self._mode = None
-        self._qr_url = None
-
-    def fill(self, rep, server=None):
-        pas, bat, leg = rep.get("паспорт") or {}, rep.get("батарея") or {}, rep.get("правовой") or {}
-        sk, sto, hist = rep.get("sickw") or {}, rep.get("память") or {}, rep.get("apple_история") or {}
-        itog = rep.get("итог") or {}
-        self.title.setText(pas.get("модель") or "iPhone")
-        self.sub.setText(" · ".join(x for x in (f"{sto.get('объём_гб')} ГБ" if sto.get("объём_гб") else None,
-                                                 pas.get("цвет"), f"iOS {pas.get('ios')}" if pas.get("ios") else None) if x))
-        # цену на киоске НЕ показываем — её называет сотрудник. Чип отражает только состояние.
-        verdict = itog.get("вердикт")
-        if verdict == "ПРОБЛЕМНЫЙ":
-            self.chip.setObjectName("chip_bad")
-            self.chip.setText("● Есть вопросы — к сотруднику")
-        elif verdict in ("ИДЕАЛ", "ХОРОШИЙ"):
-            self.chip.setObjectName("chip_ok")
-            self.chip.setText("● Хорошее состояние")
-        else:
-            self.chip.setObjectName("chip_warn")
-            self.chip.setText("● Нужен осмотр сотрудника")
-        self.chip.style().unpolish(self.chip)
-        self.chip.style().polish(self.chip)
-        if not self.isVisible():                        # новый телефон: состояние заявки с нуля
-            self._mode = None
-            self._qr_url = None
-            self.set_intake(server or {})
-        # батарея
-        clear_layout(self.l_bat)
-        self.l_bat.addWidget(kicker("БАТАРЕЯ"))
-        h = bat.get("здоровье_%")
-        good = h is not None and h >= 85
-        row = QHBoxLayout()
-        row.setSpacing(16)
-        row.addWidget(label(f"{h} %" if h is not None else "—", font_=font(FONT_NUM, 54, W.Bold)))
-        st = "хорошее состояние" if good else ("заметный износ" if h is not None else "не прочиталась")
-        sl = label(st, font_=font(FONT_TEXT, 20, W.Bold), color=C["ok"] if good else C["warntext"])
-        sl.setContentsMargins(0, 0, 0, 9)
-        row.addWidget(sl, 0, Qt.AlignBottom)
-        row.addStretch(1)
-        self.l_bat.addLayout(row)
-        self.l_bat.addSpacing(4)
-        self.bar = Bar()
-        self.bar.prepare(h or 0, C["okdot"] if good else C["warn"], animate=not self.isVisible())
-        self.l_bat.addWidget(self.bar)
-        self.l_bat.addSpacing(4)
-        fake = bat.get("подделка") or []
-        self.l_bat.addWidget(label(f"{bat.get('циклы') if bat.get('циклы') is not None else '?'} циклов · "
-                                   + ("признаки неоригинальной батареи" if fake else "оригинальный аккумулятор Apple"),
-                                   "note", wrap=True))
-        self.l_bat.addStretch(1)
-        # подлинность деталей
-        clear_layout(self.l_apple)
-        pv = rep.get("детали_вердикт") or {}
-        self.l_apple.addWidget(kicker("ПОДЛИННОСТЬ ДЕТАЛЕЙ"))
-        self.l_apple.addSpacing(6)
-        itog_pv = pv.get("итог")
-        if itog_pv == "родные":
-            self.l_apple.addWidget(line("Все проверенные детали родные", C["okdot"]))
-            self.l_apple.addWidget(label("Привязка модулей по кабелю и проверка Apple сошлись." if pv.get("apple_подтверждено")
-                                         else "Проверено по кабелю: у этой модели Apple историю деталей не ведёт.",
-                                         "note", wrap=True))
-        elif itog_pv == "ремонт":
-            for d in pv.get("детали", []):
-                if d["статус"] in ("used", "repaired"):
-                    self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["warn"]))
-        elif itog_pv == "замена":
-            for d in pv.get("детали", []):
-                if d["статус"] == "bad":
-                    self.l_apple.addWidget(line(f"{d['деталь']}: {d['почему']}", C["bad"]))
-        elif rep.get("apple_подтверждение_возможно") is False:
-            # на iOS 15 телефон пишет только отказы: ждать подтверждения бессмысленно,
-            # и просить клиента открывать экран незачем — честнее сказать прямо
-            self.l_apple.addWidget(line("На этой версии iOS Apple подлинность не подтверждает", C["warn"]))
-            self.l_apple.addWidget(label("Детали проверит сотрудник — по кабелю и на экране телефона.",
-                                         "note", wrap=True))
-        else:                                           # кабель / неполно: без Apple зелёного не бывает
-            self.l_apple.addWidget(line("Подлинность подтвердит только Apple", C["warn"]))
-            self.l_apple.addWidget(label("Один шаг на телефоне — и этот экран обновится сам:", "note", wrap=True))
-            for i, t in enumerate(("Настройки → Основные", "Об этом устройстве",
-                                   "если появится «Детали и обслуживание» — зайдите в неё"), 1):
-                row = QHBoxLayout()
-                row.setSpacing(12)
-                num = label(str(i), font_=font(FONT_NUM, 17, W.Bold), color="white")
-                num.setAlignment(Qt.AlignCenter)
-                num.setFixedSize(28, 28)
-                num.setStyleSheet(f"background: {C['warn']}; border-radius: 14px; color: white;")
-                row.addWidget(num, 0, Qt.AlignTop)
-                row.addWidget(label(t, "line_s", wrap=True), 1)
-                self.l_apple.addLayout(row)
-        if hist:
-            groups = {}
-            for v in hist.values():
-                groups.setdefault(v["деталь"], v)
-            for name, v in list(groups.items())[:5]:
-                verb = _changed_verb(name)
-                if v.get("записи_без_деталей"):
-                    self.l_apple.addWidget(line("У Apple есть записи о ремонте — подробности на экране телефона", C["warn"]))
-                elif v.get("неизвестная"):
-                    self.l_apple.addWidget(line(f"{name} — деталь неизвестного происхождения", C["bad"]))
-                elif v.get("меняли"):
-                    self.l_apple.addWidget(line(f"{name} — {verb}, " + ("б/у деталь" if v.get("бу") else "деталь Apple, новая"),
-                                                C["warn"] if not v.get("бу") else C["bad"]))
-                elif pv.get("apple_подтверждено"):
-                    self.l_apple.addWidget(line(f"{name} — не {verb}", C["okdot"]))
-                else:
-                    self.l_apple.addWidget(line(f"{name} — ремонтов Apple не отмечено", C["muted"], small=True))
-            self.l_apple.addWidget(label("По проверке Apple на вашем телефоне" if any(
-                str(v.get("источник") or "").startswith(("сверка", "проверка")) for v in hist.values())
-                else "Из записей обслуживания вашего телефона", "note", wrap=True))
-        else:
-            st = rep.get("apple_история_статус")
-            if st == "формат не распознан":
-                self.l_apple.addWidget(line("Раздел открыт — сотрудник сверит его на экране телефона", C["warn"]))
-            elif itog_pv in ("ремонт", "замена"):
-                self.l_apple.addWidget(label("Хотите увидеть ДАТЫ ремонтов — откройте на телефоне «Детали и обслуживание».",
-                                             "note", wrap=True))
-        self.l_apple.addStretch(1)
-        # блокировки
-        clear_layout(self.l_locks)
-        self.l_locks.addWidget(kicker("БЛОКИРОВКИ И БАЗЫ"))
-        self.l_locks.addSpacing(6)
-        blk = sk.get("в_чёрном_списке")
-        self.l_locks.addWidget(line("Не в чёрном списке" if blk is False else ("В ЧЁРНОМ СПИСКЕ" if blk else "База IMEI не проверялась"),
-                                    C["okdot"] if blk is False else (C["bad"] if blk else C["warn"]), small=True))
-        fmi_on = leg.get("найти_iphone") == "включён" or sk.get("fmi_включён") is True
-        self.l_locks.addWidget(line("«Найти iPhone» включён — выключите перед продажей" if fmi_on else "Найти iPhone выключен",
-                                    C["warn"] if fmi_on else C["okdot"], small=True))
-        mdm = leg.get("mdm")
-        self.l_locks.addWidget(line("Без корпоративного надзора" if mdm is False else ("Корпоративный надзор (MDM)" if mdm else "Надзор уточнит сотрудник"),
-                                    C["okdot"] if mdm is False else (C["bad"] if mdm else C["warn"]), small=True))
-        if leg.get("пароль"):
-            self.l_locks.addWidget(line("Стоит пароль — попросим снять при продаже", C["warn"], small=True))
-        self.l_locks.addStretch(1)
-        # паспорт
-        clear_layout(self.l_pass)
-        self.l_pass.addWidget(kicker("ПАСПОРТ"))
-        self.l_pass.addSpacing(6)
-        self.l_pass.addLayout(kv("Серийный", pas.get("серийник") or "?"))
-        self.l_pass.addLayout(kv("IMEI", pas.get("imei") or "—"))
-        self.l_pass.addLayout(kv("Память", f"{sto.get('объём_гб') or '?'} ГБ, свободно {int(sto.get('свободно_гб') or 0)}"))
-        self.l_pass.addLayout(kv("Куплен (по базе)", sk.get("дата_покупки") or "—"))
-        self.l_pass.addLayout(kv("Уже приносили", "да" if (server or {}).get("уже_приносили") else "нет"))
-        self.l_pass.addStretch(1)
-
-    def set_note(self, text):
-        """Строка под карточкой: почему сделку не оформляем. Пусто — строки нет."""
-        self.note.setText(text or "")
-        self.note.setVisible(bool(text))
-
-    def set_intake(self, st):
-        """Номер заявки появляется, когда сотрудник в кассе записал имя и телефон клиента
-        (киоск опрашивает сервер); клиент сам ничего не вводит. QR всегда ведёт на отчёт
-        о проверке. Появление номера анимируется один раз, QR всплывает при первом показе."""
-        num = st.get("номер")
-        url = st.get("ссылка_отчёта")
-        if num and not st.get("локально"):
-            mode, text = "number", self.TEXT_NUMBER
-            status, colour, blink = "заявка оформлена", C["ok"], False
-        elif num:                                         # автономно, без сервера — только номер
-            mode, text = "local", self.TEXT_LOCAL
-            status, colour, blink = "номер выдан", C["ok"], False
-        else:
-            mode, text = "wait", self.TEXT_WAIT
-            status, colour, blink = "ожидаем оформление у сотрудника", C["brand"], True
-        changed, first = mode != self._mode, self._mode is None
-        self._mode = mode
-        self.number.set_text(str(num) if num else "—", number=bool(num), pop=changed and bool(num))
-        if url != self._qr_url or first:
-            self._qr_url = url
-            self.qr.set(qr_pixmap(url, 200) if url else None, "ОТЧЁТ", rise=first)
-        self.qr_text.setText(text)
-        self.status.setText(status)
-        self.status.setStyleSheet(f"color: {colour};")
-        self.pulse.set(C["okdot"] if not blink else C["action"], blink)
-        if self.isVisible():
-            self.number.play()
-            self.qr.play()
-
-    def showEvent(self, e):
-        super().showEvent(e)
-        self.number.play()
-        self.qr.play()
-        if self.bar is not None:
-            self.bar.play()
 
 
 def qr_pixmap(text, size=200):
@@ -1141,7 +1119,7 @@ def qr_pixmap(text, size=200):
     pm.fill(Qt.white)
     p = QPainter(pm)
     p.setPen(Qt.NoPen)
-    p.setBrush(QColor(C["ink"]))
+    p.setBrush(QColor(C["qr"]))
     for y, row in enumerate(m):
         for x, v in enumerate(row):
             if v:

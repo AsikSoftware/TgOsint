@@ -60,7 +60,7 @@ cd /home/www/code/pintel_src/pintel
 ## 5. systemd — `/etc/systemd/system/pintel-kiosk.service`
 ```ini
 [Unit]
-Description=Pintel Kiosk Server
+Description=Pintel Diagnostics Server
 After=network.target postgresql.service
 
 [Service]

@@ -8,7 +8,7 @@ import time
 import traceback
 from datetime import datetime
 
-from PySide6.QtCore import QRectF, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QRectF, QThread, QTimer, QVariantAnimation, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPalette, QShortcut
 from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsView, QMainWindow, QStackedWidget
 
@@ -118,6 +118,13 @@ class ScaledHost(QGraphicsView):
 
     def __init__(self, inner):
         super().__init__()
+        self._затемнение = 0.0
+        self._переход = QVariantAnimation(self)
+        self._переход.setStartValue(1.0)
+        self._переход.setEndValue(0.0)
+        self._переход.setDuration(340)
+        self._переход.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._переход.valueChanged.connect(self._шаг_перехода)
         self.scene_ = QGraphicsScene(self)
         self.setScene(self.scene_)
         inner.setFixedSize(DESIGN_W, DESIGN_H)
@@ -128,10 +135,29 @@ class ScaledHost(QGraphicsView):
         self.setFrameShape(QFrame.NoFrame)
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing)
         self.setAlignment(Qt.AlignCenter)
-        self.set_bg("#FFFFFF")
+        self.set_bg(ui.C["ground"])
 
     def set_bg(self, color):
         self.setBackgroundBrush(QColor(color))
+
+    # Смена экрана — не щелчок, а короткое проявление из темноты. Рисуется на переднем плане
+    # самой сцены, а не отдельным виджетом поверх экранов: виджет-занавес был бы соседом
+    # всего остального и мешал бы и мыши, и раскладке.
+    def проявить(self):
+        self._переход.stop()
+        self._затемнение = 1.0
+        self._переход.start()
+
+    def _шаг_перехода(self, v):
+        self._затемнение = float(v)
+        self.viewport().update()
+
+    def drawForeground(self, painter, rect):
+        if self._затемнение <= 0.004:
+            return
+        цвет = QColor(ui.C["ground"])
+        цвет.setAlphaF(min(1.0, self._затемнение))
+        painter.fillRect(rect, цвет)
 
     def _fit(self):
         if self.width() < 10 or self.height() < 10:
@@ -163,7 +189,7 @@ class KioskWindow(QMainWindow):
         self.pipeline = None
         self.last = None
         self.tasks = []
-        self.setWindowTitle("Pintel Kiosk")
+        self.setWindowTitle(ui.НАЗВАНИЕ)
         self.stack = QStackedWidget()
         self.host = ScaledHost(self.stack)
         self.setCentralWidget(self.host)
@@ -248,8 +274,11 @@ class KioskWindow(QMainWindow):
 
     # ---------- служебное ----------
     def show_screen(self, w):
+        сменился = self.stack.currentWidget() is not w
         self.stack.setCurrentWidget(w)
-        self.host.set_bg(ui.C["ground"] if w in (self.s_work, self.s_start) else "#FFFFFF")
+        self.host.set_bg(ui.C["ground"])
+        if сменился and self.isVisible():
+            self.host.проявить()
 
     def _убрать_старое(self):
         """Старые оценки с диска — при запуске и в фоне: их бывает много, а экран ждать
@@ -1081,10 +1110,11 @@ class KioskWindow(QMainWindow):
 
 
 def light_palette():
-    """Киоск всегда светлый, какая бы тема ни стояла в Windows."""
+    """Палитра программы — своя, тёмная, какая бы тема ни стояла в Windows. Имя прежнее:
+    так её зовут из main(), и светлой она была до нового облика."""
     pal = QPalette()
     for role in (QPalette.Window, QPalette.Base, QPalette.AlternateBase, QPalette.Button, QPalette.ToolTipBase):
-        pal.setColor(role, QColor("#FFFFFF"))
+        pal.setColor(role, QColor(ui.C["ground"]))
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText, QPalette.ToolTipText):
         pal.setColor(role, QColor(ui.C["ink"]))
     pal.setColor(QPalette.Highlight, QColor(ui.C["action"]))
@@ -1098,7 +1128,7 @@ def main(argv=None):
     if sys.platform == "win32":
         os.environ.setdefault("QT_QPA_PLATFORM", "windows:darkmode=0")   # не следовать тёмной теме Windows
     app = QApplication(argv or sys.argv)
-    app.setApplicationName("Pintel Kiosk")
+    app.setApplicationName(ui.НАЗВАНИЕ)
     app.setStyle("Fusion")
     app.setPalette(light_palette())
     ui.load_fonts()

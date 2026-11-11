@@ -62,7 +62,7 @@ def create_app(init_sqlite=True) -> FastAPI:
         _синхронизировать_точки()
         yield
 
-    app = FastAPI(title="Pintel Server", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="Pintel Diagnostics", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
     app.include_router(kiosk_api.router)
     app.include_router(web.router)

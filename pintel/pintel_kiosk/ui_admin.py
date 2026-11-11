@@ -17,11 +17,11 @@ from .ui import C, FONT_HEAD, FONT_NUM, Screen, W, font, kicker, label
 from .ui_deal import QSS_DEAL, _карточка, _кнопка
 
 QSS_ТОЧКИ = """
-QPushButton#точка { background: #FFFFFF; color: %(ink)s; border: 2px solid %(border)s;
+QPushButton#точка { background: %(field)s; color: %(ink)s; border: 1px solid %(line)s;
     border-radius: 14px; font-size: 21px; font-weight: 700; min-height: 64px;
     padding: 0 20px; text-align: left; }
-QPushButton#точка:checked { background: %(tint)s; border-color: %(action)s; color: %(brand)s; }
-QPushButton#точка:pressed { background: %(ground)s; }
+QPushButton#точка:checked { background: %(tint)s; border-color: %(cyan)s; color: %(ink)s; }
+QPushButton#точка:pressed { background: %(card_hi)s; }
 """ % C
 
 
@@ -42,9 +42,7 @@ class TokenScreen(Screen):
         self.кнопки = []
 
         self.root.addWidget(label("Первая настройка", font_=font(FONT_HEAD, 40, W.Bold)))
-        self.root.addWidget(label("Выберите свою точку и введите её токен. Токен лежит в базе, "
-                                  "в таблице точек. Больше на этом компьютере настраивать нечего: "
-                                  "имя точки, бот Оценки, сроки и реквизиты чека придут с сервера.",
+        self.root.addWidget(label("Выберите свою точку и введите её токен. Остальное придёт с сервера.",
                                   "muted", wrap=True))
         self.root.addSpacing(14)
 
@@ -155,8 +153,7 @@ class AdminScreen(Screen):
         тело.addWidget(левая, 1)
 
         правая, пв = _карточка("ТОКЕН ТОЧКИ")
-        пв.addWidget(label("Токен выдают в кассе: Настройки → Точки. Меняют его, когда точку "
-                           "перевыпустили или компьютер переставили на другую.", "muted", wrap=True))
+        пв.addWidget(label("Токен выдают в кассе: Настройки → Точки.", "muted", wrap=True))
         self.поле = QLineEdit()
         self.поле.setPlaceholderText("pk_…")
         self.поле.setMinimumHeight(56)

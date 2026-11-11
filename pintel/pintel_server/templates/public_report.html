@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Оценка вашего iPhone · Pintel</title><link rel="icon" href="/static/logo.png"><link rel="stylesheet" href="/static/app.css"></head>
+<title>Оценка вашего iPhone · Pintel Diagnostics</title><link rel="icon" href="/static/logo.png"><link rel="stylesheet" href="/static/app.css"></head>
 <body>
 {% set pas = rep.get('паспорт') or {} %}{% set bat = rep.get('батарея') or {} %}{% set hist = rep.get('apple_история') or {} %}{% set leg = rep.get('правовой') or {} %}{% set sk = rep.get('sickw') or {} %}
 <main class="client" style="max-width:720px">
-  <div class="brand"><img src="/static/logo.png" alt="Pintel"></div>
+  <div class="brand"><img src="/static/logo.png" alt="Pintel Diagnostics"></div>
   <div><h1>{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}</h1>
     <div class="sub">Оценка {{ '№' ~ ev.number if ev.number else 'без номера' }} от {{ ev.created_at|dt }}{% if ev.point %} · {{ ev.point.name }}{% endif %}</div></div>
   <section class="sec"><h2>Итог проверки</h2>

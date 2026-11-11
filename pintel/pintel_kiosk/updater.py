@@ -176,7 +176,7 @@ def сценарий(новая: str, установлена: str, exe: str) -> 
     return (
         "@echo off\r\n"
         "chcp 65001 >nul\r\n"
-        "echo Обновление Pintel Check...\r\n"
+        "echo Обновление Pintel Diagnostics...\r\n"
         ":ожидание\r\n"
         "timeout /t 2 /nobreak >nul\r\n"
         f'tasklist /fi "imagename eq {os.path.basename(exe)}" | find /i "{os.path.basename(exe)}" >nul '

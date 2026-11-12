@@ -9,8 +9,8 @@ State:… MaxCapacity:75 CycleCount:1756» и следом «Updated Battery Hea
 Вторая форма одна и та же с iOS 14: исходники powerd открыты
 (apple-oss-distributions/PowerManagement, pmconfigd/BatteryTimeRemaining.m,
 `_setBatteryHealthData`), вживую она снята на iOS 18.7.8 и на iOS 26. Число приходит из
-слушателя журнала (`repair_history`), и касса ждёт первую строку до 25 секунд от
-подключения (`worker.ЖДАТЬ_БАТАРЕЮ`).
+слушателя журнала (`repair_history`), и касса ждёт первую строку до 25 секунд после
+чтения слепка (`worker.ЖДАТЬ_БАТАРЕЮ`).
 
 **Строка не пришла — считаем сами, и это нижняя граница экрана.** Правило телефона из тех
 же исходников (`checkNominalCapacity`): процент = ceil(NominalChargeCapacity /

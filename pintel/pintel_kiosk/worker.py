@@ -135,9 +135,13 @@ def проверить_рфс(cfg, имеи, step):
     return итог, ""
 
 
-# Сколько секунд от старта слушателя ждать, пока телефон сам назовёт процент батареи. На
+# Сколько секунд после чтения слепка ждать, пока телефон сам назовёт процент батареи. На
 # кабеле powerd печатает его раз в 20 секунд (iOS 14 и новее), так что за 25 первая строка
 # приходит наверняка; быстрая проверка без этого заканчивалась раньше неё.
+# Отсчёт — от КОНЦА слепка, а не от подключения: пока читается занятое место, служба
+# `deleted` на телефоне заваливает журнал (iPhone 12, 12.11.2026 — до 12 тысяч строк в
+# секунду), и касса на точке получает из этого потока малую часть — строка powerd в нём
+# терялась (проверка 57: 47 секунд слепка, 49 тысяч строк, ни одной от powerd).
 ЖДАТЬ_БАТАРЕЮ = 25
 
 
@@ -162,7 +166,7 @@ class Pipeline(QThread):
         self.started = datetime.now()                 # имя эталона за этот прогон — одно на все перезаписи
         self._listener = None                         # чтобы закрыть канал к телефону снаружи
         self._loop = None
-        self._слушаем_с = None                        # когда запущен слушатель журнала
+        self._слепок_готов_в = None                   # от этого момента ждём процент батареи
 
     def run(self):
         try:
@@ -233,7 +237,6 @@ class Pipeline(QThread):
         listener = repair_history.Listener(ld, log=log_line)
         self._listener = listener
         await listener.start()
-        self._слушаем_с = time.monotonic()
         self.apple_prompt.emit(True)
         try:
             await self._flow(ld, st, listener)
@@ -241,16 +244,17 @@ class Pipeline(QThread):
             await listener.stop()
 
     async def _дождаться_батареи(self, listener):
-        """Дать телефону назвать процент батареи — не дольше ЖДАТЬ_БАТАРЕЮ секунд от старта
-        слушателя. Обычно ждать нечего: к этому месту проверка идёт дольше."""
-        if self._слушаем_с is None:
+        """Дать телефону назвать процент батареи — не дольше ЖДАТЬ_БАТАРЕЮ секунд после
+        чтения слепка. Обычно ждать почти нечего: за это время сотрудник делает шаг с
+        историей Apple, идут Sickw и реестр."""
+        if self._слепок_готов_в is None:
             return
         сказали = False
         while not self.cancel.is_set():
             meta = getattr(listener, "meta", None) or {}
             if meta.get("батарея_телефона") or meta.get("канал_потерян"):
                 return
-            if time.monotonic() - self._слушаем_с >= ЖДАТЬ_БАТАРЕЮ:
+            if time.monotonic() - self._слепок_готов_в >= ЖДАТЬ_БАТАРЕЮ:
                 log_line(f"батарея: за {ЖДАТЬ_БАТАРЕЮ} с телефон свой процент не назвал — считаем сами")
                 return
             if not сказали:
@@ -362,6 +366,7 @@ class Pipeline(QThread):
         diag, tries = await connect.open_diagnostics(ld)
         self._step("passport", "run")
         snap = await snapshot.collect(ld, diag)
+        self._слепок_готов_в = time.monotonic()
         snap["quality"]["диагностика_попыток"] = tries
         snap["quality"]["подключение"] = st.timings
         try:

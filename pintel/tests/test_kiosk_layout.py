@@ -202,6 +202,11 @@ def test_the_link_screen_fits(открыть):
     экран.начать()
     экран.показать_код("", "")
     assert _замечания(экран) == [], "бот не задан"
+    экран.начать()
+    экран.показать_код("K7M3QA", "https://t.me/pintel_ocenka_bot?start=kK7M3QA")
+    экран._начали -= ui_link.ТЕРПЕНИЕ_С + 1
+    экран.set_состояние({"известно": True, "начали": False})
+    assert _замечания(экран) == [], "долго ждём — предложен обход"
 
 
 def test_the_price_page_and_the_linked_media_page_fit(открыть, отчёт):

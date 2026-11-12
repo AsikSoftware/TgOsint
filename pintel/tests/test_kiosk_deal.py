@@ -1355,6 +1355,17 @@ def test_a_blind_server_does_not_hold_the_point_at_the_link_screen(окно):
     окно.s_link.b_без.click()
     assert окно.state == "intake" and окно.привязан is False and окно.s_work.привязка is None
 
+    # привязка не приходит полминуты (бот лежит или ещё не знает такой ссылки) — касса не
+    # встаёт: тот же выход на прежний порядок
+    окно.go_home()
+    окно.начать_сделку()
+    окно._медиа_спросили({"известно": True, "начали": False})
+    assert окно.s_link.b_без.isHidden(), "сразу уходить не предлагаем"
+    from pintel_kiosk import ui_link
+    окно.s_link._начали -= ui_link.ТЕРПЕНИЕ_С + 1
+    окно._медиа_спросили({"известно": True, "начали": False})
+    assert not окно.s_link.b_без.isHidden()
+
     # бот в кассе не задан вовсе — привязывать не к чему, и это сказано сразу
     окно.go_home()
     окно.cfg["ocenka_bot"] = ""

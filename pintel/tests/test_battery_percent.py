@@ -2,10 +2,9 @@
 """Процент батареи — тот же, что в Настройках телефона.
 
 Сотрудник и клиент смотрят на экран телефона: «Аккумулятор → Состояние аккумулятора →
-Максимальная ёмкость». Там стоит минимум за жизнь (NCCMin), а текущая ёмкость
-(NominalChargeCapacity) гуляет выше на процент-два — и наш процент выходил больше того, что
-видит клиент. По этому проценту выбирается колонка прайса, то есть это прямо деньги и
-прямой спор у стойки.
+Максимальная ёмкость». По этому проценту выбирается колонка прайса, то есть это прямо
+деньги и прямой спор у стойки. iOS 26 и 27 называют это число сами, в журнале; iOS 18 и
+старше — нет, и там оно считается от минимума за жизнь (NCCMin) с округлением вверх.
 """
 from pintel_core.analysis import battery
 
@@ -31,6 +30,23 @@ def test_schitaem_po_minimumu_za_zhizn():
     assert b["здоровье_%"] == 78                      # 2470/3181 — ближе всего к экрану
     assert b["здоровье_текущее_%"] == 79              # 2506/3181 — столько показывают сторонние
     assert b["минимум_мАч"] == 2470 and "минимум" in b["здоровье_основание"]
+
+
+def test_ot_minimuma_okruglyaem_vverh():
+    """iPhone 12 на iOS 18.7.8, 12.11.2026: на экране телефона 79, программа показала 78.
+
+    Телефон своё число в журнал не назвал, и считали мы сами: 2194/2798 = 78,41 → 78.
+    Экран телефона всегда чуть выше доли минимума за жизнь (на шести аппаратах — на
+    0,2–1,3 процента), поэтому округляем вверх, а не к ближайшему."""
+    b = battery.analyze(узел(nominal=2235, design=2798, NCCMin=2194))
+    assert b["здоровье_%"] == 79 and b["здоровье_основание"] == "минимум за жизнь"
+    # те же аппараты, где известны и экран, и ёмкости: экран 77, 76, 94, 82
+    for design, минимум, экран in ((3092, 2366, 77), (4395, 3332, 76), (3544, 3301, 94),
+                                   (4395, 3581, 82)):
+        b = battery.analyze(узел(nominal=минимум + 5, design=design, NCCMin=минимум))
+        assert b["здоровье_%"] == экран, (design, минимум, b["здоровье_%"])
+    ровно = battery.analyze(узел(nominal=2600, design=3125, NCCMin=2500))
+    assert ровно["здоровье_%"] == 80, "ровные 80,0 остаются 80, а не 81"
 
 
 def test_bez_minimuma_schitaem_kak_prezhde():
@@ -79,6 +95,64 @@ def test_slushatel_lovit_chislo_telefona():
     assert сказал["процент"] == 79 and сказал["циклы"] == 1064 and сказал["состояние"] == 1
     lst._feed(СТРОКА_ПРЕЖНЯЯ)
     assert lst.meta["батарея_телефона"]["процент"] == 79, "«Previous» не затирает свежее"
+
+
+# Сняты с проверок 11.11.2026, iPhone 16 Pro на iOS 26.6.2 (имя телефона заменено).
+СТРОКИ_IOS26 = [
+    "Nov 11 16:42:46 iPhone powerd[48] <Notice>: Previous Battery Health: Flags:3 State:0 "
+    "MaxCapacity:94 CycleCount:423",
+    "Nov 11 16:42:46 iPhone powerd[48] <Notice>: Updated Battery Health: Flags:3",
+    "Nov 11 16:42:46 iPhone powerd[48] <Notice>: Updated Battery Health: State:0",
+    "Nov 11 16:42:46 iPhone powerd[48] <Notice>: Updated Battery Health: MaxCapacity:94",
+    "Nov 11 16:42:46 iPhone powerd[48] <Notice>: Updated Battery Health: CycleCount:423",
+]
+
+
+def test_slushatel_lovit_chislo_ios26():
+    """iOS 26 пишет число телефона другими словами, и «Updated» — по полю в строке.
+
+    Пока узнавали только вид iOS 27, на этом аппарате выходило 93 по нашему расчёту, а
+    телефон говорил 94 — и по 94 его видел клиент."""
+    from pintel_core.devicelink import repair_history as rh
+
+    lst = rh.Listener(None)
+    for строка in СТРОКИ_IOS26:
+        lst._feed(строка)
+    сказал = lst.meta["батарея_телефона"]
+    assert сказал == {"процент": 94, "циклы": 423, "состояние": 0, "свежая": True}, сказал
+    b = battery.analyze(узел(nominal=3311, design=3544, NCCMin=3301), сказал)
+    assert b["здоровье_%"] == 94 and b["здоровье_основание"] == "сказал сам телефон"
+
+
+def test_ios26_previous_goditsya_poka_net_svezhego():
+    """Одна строка «Previous» — уже число телефона; свежие поля потом ложатся поверх."""
+    from pintel_core.devicelink import repair_history as rh
+
+    lst = rh.Listener(None)
+    lst._feed(СТРОКИ_IOS26[0].replace("MaxCapacity:94", "MaxCapacity:95"))
+    assert lst.meta["батарея_телефона"] == {"процент": 95, "циклы": 423, "состояние": 0,
+                                            "свежая": False}
+    lst._feed(СТРОКИ_IOS26[1])                       # свежая, но про флаги — процент прежний
+    assert lst.meta["батарея_телефона"]["процент"] == 95
+    lst._feed(СТРОКИ_IOS26[3])
+    assert lst.meta["батарея_телефона"]["процент"] == 94
+    lst._feed(СТРОКИ_IOS26[0].replace("MaxCapacity:94", "MaxCapacity:95"))
+    assert lst.meta["батарея_телефона"]["процент"] == 94, "«Previous» не затирает свежее"
+
+
+def test_chuzhie_stroki_ne_schitayutsya_chislom_telefona():
+    """Раздел ремонта тоже пишет «Battery Health State{» — это не процент."""
+    from pintel_core.devicelink import repair_history as rh
+
+    for строка in ("Nov 12 01:23:20 iPhone Preferences(CoreRepairUI)[1868] <Notice>: Battery Health State{",
+                   "    IOPSBatteryHealthState = 3;",
+                   "Nov 11 16:42:46 iPhone powerd[48] <Notice>: Updated Battery Health: Flags:3"):
+        сказал = rh.батарея_из_строки(строка)
+        assert сказал is None or "процент" not in сказал[1], строка
+    lst = rh.Listener(None)
+    lst._feed("Nov 11 16:42:46 iPhone powerd[48] <Notice>: Updated Battery Health: Flags:3")
+    b = battery.analyze(узел(NCCMin=2470), lst.meta.get("батарея_телефона"))
+    assert b["здоровье_основание"] == "минимум за жизнь", "одни флаги — ещё не число телефона"
 
 
 def test_chislo_telefona_glavnee_nashego_scheta():

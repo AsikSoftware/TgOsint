@@ -179,6 +179,39 @@ RELATED = ("repair", "CoreRepair", "mobilerepaird", "battery health")
 POWERD_BAT = re.compile(
     r"(Updated|Previous) battery health \(packId=(\d+) flags=(\d+) state=(-?\d+) "
     r"maxCap=(\d+) cycleCount=(\d+)\)")
+# iOS 26 говорит то же другими словами, причём «Updated» — по одному полю в строке:
+#   powerd[48] <Notice>: Previous Battery Health: Flags:3 State:0 MaxCapacity:94 CycleCount:423
+#   powerd[48] <Notice>: Updated Battery Health: Flags:3
+#   powerd[48] <Notice>: Updated Battery Health: State:0
+#   powerd[48] <Notice>: Updated Battery Health: MaxCapacity:94
+#   powerd[48] <Notice>: Updated Battery Health: CycleCount:423
+# Строки сняты с проверок 11–12.11.2026 (iPhone 15 Pro Max, 16 Pro, 17 Pro на iOS 26.6.x).
+# Пока мы узнавали только вид iOS 27, на iOS 26 число телефона пропадало, и наш расчёт
+# расходился с ним на процент: 93 против 94, 81 против 82.
+POWERD_BAT_26 = re.compile(r"(Updated|Previous) Battery Health: (\w+:-?\d+(?: \w+:-?\d+)*)")
+ПОЛЯ_26 = {"MaxCapacity": "процент", "CycleCount": "циклы", "State": "состояние"}
+# iOS 18 и старше такой строки не печатают вовсе (три проверки, сотни строк журнала — ни
+# одной): там число телефона по кабелю взять неоткуда, и батарея считается по ёмкостям.
+
+
+def батарея_из_строки(line):
+    """Что powerd сказал о батарее этой строкой → (свежая, {процент, циклы, состояние}).
+
+    У iOS 26 в строке бывает одно поле из трёх — отдаём, что есть; не про батарею — None."""
+    м = POWERD_BAT.search(line)
+    if м:
+        return м.group(1) == "Updated", {"процент": int(м.group(5)), "циклы": int(м.group(6)),
+                                         "состояние": int(м.group(4))}
+    м = POWERD_BAT_26.search(line)
+    if м:
+        поля = {}
+        for пара in м.group(2).split():
+            имя, _, число = пара.partition(":")
+            if имя in ПОЛЯ_26:
+                поля[ПОЛЯ_26[имя]] = int(число)
+        if поля:
+            return м.group(1) == "Updated", поля
+    return None
 # признаки, что раздел на телефоне открыт (iOS 18): UI Настроек и демон проснулись
 OPENED = ("updateSpecifiersWithCompletionHandler", "corerepair.preflightControl", "Getting local sealing manifest",
           "fetched RCHL", "delta components", "No delta components found", "repairHistoryForUI",
@@ -528,16 +561,19 @@ class Listener:
                     self.found_at = time.monotonic()
                     self.log(f"история Apple: {len(self.items)} записей")
             return
-        м = POWERD_BAT.search(line)
-        if м:
+        сказал = батарея_из_строки(line)
+        if сказал:
             # Телефон назвал своё здоровье сам. Это надёжнее любого нашего деления ёмкостей:
             # ёмкости он отдаёт сырыми, а это — то же число, что видит клиент на экране.
             # «Updated» новее «Previous», поэтому им перезаписываем, а «Previous» берём
-            # только если ничего ещё не слышали.
-            запись = {"процент": int(м.group(5)), "циклы": int(м.group(6)),
-                      "состояние": int(м.group(4)), "свежая": м.group(1) == "Updated"}
-            if запись["свежая"] or not self.meta.get("батарея_телефона"):
-                self.meta["батарея_телефона"] = запись
+            # только если ничего ещё не слышали. iOS 26 шлёт «Updated» по полю в строке —
+            # поля складываются в одну запись поверх уже услышанного.
+            свежая, поля = сказал
+            было = self.meta.get("батарея_телефона") or {}
+            if свежая:
+                self.meta["батарея_телефона"] = {**было, **поля, "свежая": True}
+            elif not было:
+                self.meta["батарея_телефона"] = {**поля, "свежая": False}
         low = line.lower()
         if not any(k.lower() in low for k in RELATED):
             return

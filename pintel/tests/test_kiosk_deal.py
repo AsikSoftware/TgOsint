@@ -188,6 +188,26 @@ def test_clean_phone_fills_the_window(окно):
     assert окно.код_медиа and окно.s_work.код.text() == окно.код_медиа
 
 
+def test_a_long_warning_wraps_instead_of_being_cut(окно):
+    """Длинную строку «Внимание» край карточки обрезал на полуслове (снимок с точки
+    12.11.2026: «Apple: аккумулятор требует обслуживания (износ, деталь р»)."""
+    from PySide6.QtWidgets import QLabel
+
+    rep = _отчёт("эталон_iPhone-12_iOS18.7.8.zip")
+    длинная = "Apple: аккумулятор требует обслуживания (износ, деталь при этом оригинальная)"
+    rep["внимание"] = ["износ батареи: здоровье 79%", длинная]
+    окно.cfg["ocenka_bot"] = "PintelOlxBot"
+    окно.начать_сделку()
+    окно.анкета_готова(АНКЕТА)
+    окно.state = "scanning"
+    окно.on_done({"report": rep, "client_id": "x"})
+    сетка = окно.s_work.итоги
+    подписи = {w.text(): w for w in (сетка.itemAt(i).widget() for i in range(сетка.count()))
+               if isinstance(w, QLabel)}
+    assert подписи[длинная].wordWrap(), "длинная строка переносится"
+    assert not подписи["износ батареи: здоровье 79%"].wordWrap(), "короткие стоят как стояли"
+
+
 def test_repaired_phone_is_reclassified_not_refused(окно):
     """«Б/у в нормальном состоянии», а кабель нашёл замену: сделка не отказ, а «Телефон был
     в ремонте» — уйдёт админу на ручную оценку вместо автоцены. На плашке — на что и почему,

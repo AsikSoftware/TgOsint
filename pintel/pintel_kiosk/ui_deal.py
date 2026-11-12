@@ -73,6 +73,8 @@ QScrollArea > QWidget > QWidget { background: transparent; }
 # Шаги сверху и страница, на которую ведёт нажатие по каждому («Проверка» и «Отправка» — не
 # страницы, по ним не нажимают).
 ШАГИ_СДЕЛКИ = ("Проверка", "Тест на телефоне", "Проверка руками", "Фото и видео", "Отправка")
+# строка итога длиннее этого в одну линию рядом с подписью не помещается — её переносим
+ДЛИННАЯ_СТРОКА_ИТОГА = 40
 СТРАНИЦА_ШАГА = {1: СТР_ТЕСТ, 2: СТР_РУЧНАЯ, 3: СТР_МЕДИА}
 ШАГ_СТРАНИЦЫ = {СТР_APPLE: 0, СТР_ТЕСТ: 1, СТР_РУЧНАЯ: 2, СТР_МЕДИА: 3, СТР_ГОТОВО: 4}
 # как показываем ответ теста: значок, цвет, подпись
@@ -1045,9 +1047,18 @@ class WorkScreen(Screen):
 
     def _строка_итога(self, ключ, значение, цвет=None):
         n = self.итоги.rowCount()
-        self.итоги.addWidget(label(ключ, font_=font(FONT_TEXT, 18), color=C["muted"]), n, 0, Qt.AlignLeft)
-        self.итоги.addWidget(label(значение, font_=font(FONT_TEXT, 18, W.DemiBold), color=цвет), n, 1,
-                             Qt.AlignRight)
+        self.итоги.addWidget(label(ключ, font_=font(FONT_TEXT, 18), color=C["muted"]), n, 0,
+                             Qt.AlignLeft | Qt.AlignTop)
+        текст = label(значение, font_=font(FONT_TEXT, 18, W.DemiBold), color=цвет)
+        if len(str(значение or "")) > ДЛИННАЯ_СТРОКА_ИТОГА:
+            # Длинное («Apple: аккумулятор требует обслуживания (износ, деталь родная)»)
+            # край карточки обрезал на полуслове. Такая строка занимает весь ряд и
+            # переносится; короткие стоят как стояли — справа, в одну строку.
+            текст.setWordWrap(True)
+            текст.setAlignment(Qt.AlignRight | Qt.AlignTop)
+            self.итоги.addWidget(текст, n, 0 if not ключ else 1, 1, 2 if not ключ else 1)
+        else:
+            self.итоги.addWidget(текст, n, 1, Qt.AlignRight)
 
     def показать(self, rep):
         """Проверка закончилась: плашки наверху, подробности слева, QR справа."""

@@ -186,6 +186,28 @@ def test_rashozhdenie_ciklov_ne_zamalchivaem():
     assert any("циклы расходятся" in с for с in b["сомнения"]), b["сомнения"]
     ровно = battery.analyze(узел(CycleCount=1064), {"процент": 79, "циклы": 1064})
     assert not any("циклы" in с for с in ровно["сомнения"])
+    # ноль по узлу — самый опасный случай: «новая» батарея при 980 циклах у телефона
+    ноль = battery.analyze(узел(CycleCount=0), {"процент": 100, "циклы": 980})
+    assert any("циклы расходятся" in с for с in ноль["сомнения"]), ноль["сомнения"]
+
+
+def test_cikly_rashodyatsya_i_na_ispravnyh_telefonah():
+    """iPhone 15 Pro Max, 11.11.2026: узел называет 1241 цикл, сам телефон — 1021.
+
+    Это не сорванное чтение, так бывает на исправных аппаратах, и пугать сотрудника тут
+    нечем. Оба числа лежат в отчёте рядом."""
+    b = battery.analyze(узел(CycleCount=1241), {"процент": 82, "циклы": 1021})
+    assert b["циклы"] == 1241 and b["циклы_по_телефону"] == 1021
+    assert not b["сомнения"], b["сомнения"]
+    assert battery.analyze(узел(CycleCount=1241))["циклы_по_телефону"] is None
+
+
+def test_schetchik_shleifa_ne_otdali_znachit_ne_znaem():
+    """iOS 27 счётчик снятий шлейфа не отдаёт. Раньше в отчёте стоял ноль — «не снимали»."""
+    assert battery.analyze(узел())["снятий_шлейфа"] is None
+    assert battery.analyze(узел(BatteryCellDisconnectCount=0))["снятий_шлейфа"] == 0
+    вскрыт = battery.analyze(узел(BatteryCellDisconnectCount=2))
+    assert вскрыт["снятий_шлейфа"] == 2 and any("шлейф" in с for с in вскрыт["сомнения"])
 
 
 def test_otchet_beret_chislo_telefona_iz_zhurnala():

@@ -63,7 +63,7 @@ def test_a_failed_update_does_not_lock_the_point(окно, monkeypatch):
 
     assert окно.обновление_ставится is False
     окно.начать_сделку()
-    assert окно.state == "intake" and окно.stack.currentWidget() is окно.s_start   # сделка начинается с анкеты
+    assert окно.state == "link" and окно.stack.currentWidget() is окно.s_link   # сделка начинается с привязки
 
 
 def test_nothing_new_means_nothing_happens(окно, monkeypatch):
@@ -72,4 +72,4 @@ def test_nothing_new_means_nothing_happens(окно, monkeypatch):
     окно._обновление_найдено({"есть": False, "почему": "уже последняя"})
     assert окно.обновление_ставится is False
     окно.начать_сделку()
-    assert окно.state == "intake"
+    assert окно.state == "link"

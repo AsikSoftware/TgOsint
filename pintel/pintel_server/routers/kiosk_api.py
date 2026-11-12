@@ -128,6 +128,14 @@ def media_parcel(code: str, body: ПосылкаIn, kiosk: Kiosk = Depends(curre
     return media_service.принять(code, body.посылка)
 
 
+@router.post("/media/{code}/quote")
+def media_quote(code: str, body: ПосылкаIn, kiosk: Kiosk = Depends(current_kiosk)):
+    """Касса просит автоцену до сделки. Считает её бот Оценки — сервер только передаёт
+    запрос в таблицу обмена; ответ касса читает там же, где и медиа (`GET /media/{code}`)."""
+    from ..services import ocenka_media as media_service
+    return media_service.спросить_цену(code, body.посылка)
+
+
 class LogsIn(BaseModel):
     lines: list[str]
 

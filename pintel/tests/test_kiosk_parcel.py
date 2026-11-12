@@ -238,3 +238,230 @@ def test_the_parcel_is_locked_read_and_only_then_cleared(бот_модуль, mo
                         lambda: Сессия(журнал, lambda т, п: None))
     assert asyncio.run(бот_модуль._взять("ABCD12")) is None
     assert len(журнал) == 1
+
+
+# ---------------------------------------------------------------- порядок с 12.11.2026:
+# привязка в начале, цена до сделки, медиа — после «Отправить на оценку»
+
+ПОЛНАЯ = {
+    "версия": 1, "код": "ABCD12", "shop_id": 14, "точка": "16/38 Pintel",
+    "клиент": {"имя": "Арман", "телефон": "+77051234567"}, "imei": ["356789012345678"],
+    "сделка": {"model": "iPhone 13", "ddr": 128, "akb": "75-79", "akb_exact": 75,
+               "akb_cycles": 1810, "sim": "Стандарт", "phone_status": "Не был в ремонте"},
+    "ручная_диагностика": {"keys": True, "vibro": True, "sim": True, "glue": True,
+                           "wifi": True, "charge": True, "apple": True, "body": True},
+    "тест_телефона": {"sensor": "ok", "multitouch": "ok", "screen": "ok", "speaker": "ok",
+                      "mic": "ok", "camera_back": "ok", "camera_front": "ok"},
+}
+
+
+def _полная(м, **замены):
+    """Посылка, которой для сделки не хватает только медиа. Ключи ручной диагностики берём у
+    самого обработчика: список пунктов живёт в kiosk_core и может меняться."""
+    п = __import__("copy").deepcopy(ПОЛНАЯ)
+    п["ручная_диагностика"] = {k: True for k in м.kiosk_core.КЛЮЧИ}
+    п.update(замены)
+    return п
+
+
+def _без_медиа(м, monkeypatch, посылка, **строка_замены):
+    """Строка обмена: сотрудник привязан, посылка лежит, фото и видео ещё не присылали."""
+    import json as _json
+    строка = {"code": "ABCD12", "chat_id": 777, "user_id": 5, "shop_id": 14, "device_id": None,
+              "photos": None, "video": None, "checks": None, "media_asked": None, "quote": None,
+              "parcel": _json.dumps(посылка, ensure_ascii=False)}
+    строка.update(строка_замены)
+    взяли, беды, созданы = [], [], []
+
+    async def _строка(код):
+        return dict(строка)
+
+    async def _взять(код):
+        взяли.append(код)
+        return строка["parcel"]
+
+    async def _беда(код, почему):
+        беды.append(почему)
+
+    async def _создать(bot, код, п, стр, нажал=None):
+        созданы.append(код)
+        return {"id": 7311, "цена": 185000, "оценщик": "Асылбек", "точка": "16/38"}, "карточка в личке"
+
+    async def _магазины():
+        return [{"id": 14, "shop_name": "16/38 Pintel"}]
+
+    monkeypatch.setattr(м, "_строка", _строка)
+    monkeypatch.setattr(м, "_взять", _взять)
+    monkeypatch.setattr(м, "_сказать_о_беде", _беда)
+    monkeypatch.setattr(м, "_создать", _создать)
+    monkeypatch.setattr(м, "_магазины", _магазины)
+    м._уже_просили.clear()
+    м._пробовали.clear()
+    return строка, взяли, беды, созданы
+
+
+def test_a_parcel_sent_before_the_media_asks_the_linked_employee_and_waits(бот_модуль, monkeypatch):
+    """Касса отправляет сделку ДО медиа. Бот сам пишет привязанному сотруднику и ждёт:
+    посылку не трогает, отказа не пишет, второй раз не просит."""
+    строка, взяли, беды, созданы = _без_медиа(бот_модуль, monkeypatch, _полная(бот_модуль))
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._обработать_посылку(бот, "ABCD12"))
+    asyncio.run(бот_модуль._обработать_посылку(бот, "ABCD12"))      # следующий круг опроса
+    assert [ч for ч, _ in бот.письма] == [777], бот.письма
+    текст = бот.письма[0][1]
+    assert "iPhone 13 128 ГБ" in текст and "*#06#" in текст and "видео" in текст
+    assert not взяли and not беды and not созданы
+
+
+def test_the_price_already_named_to_the_point_is_repeated_in_the_media_request(бот_модуль, monkeypatch):
+    """Цену сотрудник уже видел на кассе — в чате она та же, а не «без автоцены»."""
+    _без_медиа(бот_модуль, monkeypatch, _полная(бот_модуль),
+               quote='{"цена": 185000, "почему": "", "запрос": "q1"}')
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._обработать_посылку(бот, "ABCD12"))
+    assert "185 000 ₸" in бот.письма[0][1]
+
+
+def test_the_deal_is_made_at_once_when_the_media_is_already_there(бот_модуль, monkeypatch):
+    """Старый порядок жив: точка со старой сборкой шлёт посылку после медиа — ждать нечего."""
+    строка, взяли, беды, созданы = _без_медиа(бот_модуль, monkeypatch, _полная(бот_модуль),
+                                              photos="f1||f2||f3", video="v1")
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._обработать_посылку(бот, "ABCD12"))
+    assert взяли == ["ABCD12"] and созданы == ["ABCD12"] and not беды
+    assert "Сделка № 7311" in бот.письма[-1][1]
+
+
+def test_a_broken_parcel_is_refused_at_once_not_parked_behind_a_media_request(бот_модуль, monkeypatch):
+    """Нет модели — это не «ждём фото»: сотрудник прислал бы медиа, а сделки всё равно бы
+    не было. Такая посылка идёт обычным путём и получает отказ со словами."""
+    плохая = _полная(бот_модуль)
+    плохая["сделка"].pop("model")
+    строка, взяли, беды, созданы = _без_медиа(бот_модуль, monkeypatch, плохая)
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._обработать_посылку(бот, "ABCD12"))
+    assert взяли == ["ABCD12"]                       # не оставлена ждать
+    assert not any("Пришлите" in т for _, т in бот.письма)
+
+
+def test_an_unreachable_employee_is_named_on_the_point_screen_and_asked_again_later(бот_модуль, monkeypatch):
+    """Бот не смог написать (его заблокировали) — касса обязана это показать, а не молча
+    ждать медиа, которых никто не попросил."""
+    строка, взяли, беды, созданы = _без_медиа(бот_модуль, monkeypatch, _полная(бот_модуль))
+
+    class Глухой(ФейкБот):
+        async def send_message(self, **k):
+            raise RuntimeError("Forbidden: bot was blocked by the user")
+
+    asyncio.run(бот_модуль._обработать_посылку(Глухой(), "ABCD12"))
+    assert беды and "не смог написать" in беды[0]
+    assert "ABCD12" not in бот_модуль._уже_просили   # попробуем ещё раз, когда разблокируют
+
+
+def _прайс(monkeypatch, цена):
+    """Подменный utils.google_price: прайс Оценки сюда не привезти."""
+    увидел = []
+
+    async def get_price_for_device(устройство):
+        увидел.append(устройство)
+        return цена
+
+    utils = types.ModuleType("utils")
+    gp = types.ModuleType("utils.google_price")
+    gp.get_price_for_device = get_price_for_device
+    utils.google_price = gp
+    monkeypatch.setitem(sys.modules, "utils", utils)
+    monkeypatch.setitem(sys.modules, "utils.google_price", gp)
+    return увидел
+
+
+def test_the_price_before_the_deal_is_counted_from_the_same_fields_as_the_deal(бот_модуль, monkeypatch):
+    """Цена на экране кассы и в карточке сделки — одно число: прайсу уходят те же поля."""
+    увидел = _прайс(monkeypatch, 185000)
+
+    async def _магазины():
+        return [{"id": 14}]
+    monkeypatch.setattr(бот_модуль, "_магазины", _магазины)
+    ответ = asyncio.run(бот_модуль._оценить(_полная(бот_модуль), {"shop_id": 3}))
+    assert ответ == {"цена": 185000, "почему": ""}
+    у = увидел[0]
+    assert (у.producer, у.model, у.ddr, у.akb, у.akb_exact, у.shop_id_grade) == \
+        ("Apple", "iPhone 13", 128, "75-79", 75, 14)       # точка — из посылки, а не сотрудника
+
+
+def test_no_tray_is_priced_by_the_esim_row_before_the_deal_too(бот_модуль, monkeypatch):
+    увидел = _прайс(monkeypatch, 170000)
+
+    async def _магазины():
+        return [{"id": 14}]
+    monkeypatch.setattr(бот_модуль, "_магазины", _магазины)
+    п = _полная(бот_модуль)
+    п["сделка"]["sim"] = "E-sim"
+    asyncio.run(бот_модуль._оценить(п, {"shop_id": 14}))
+    assert увидел[0].model == "iPhone 13 (Esim)"
+
+
+def test_no_auto_price_is_explained_in_words_and_the_price_list_is_not_even_asked(бот_модуль, monkeypatch):
+    """Поломка, найденная руками, снимает автоцену — и касса должна знать почему."""
+    увидел = _прайс(monkeypatch, 185000)
+
+    async def _магазины():
+        return [{"id": 14}]
+    monkeypatch.setattr(бот_модуль, "_магазины", _магазины)
+    п = _полная(бот_модуль)
+    первый = бот_модуль.kiosk_core.КЛЮЧИ[0]
+    п["ручная_диагностика"][первый] = False
+    ответ = asyncio.run(бот_модуль._оценить(п, {"shop_id": 14}))
+    assert ответ["цена"] is None and "проверка руками нашла" in ответ["почему"]
+    assert not увидел
+
+    ремонт = _полная(бот_модуль, переклассификация="кабель: экран меняли")
+    ремонт["сделка"]["phone_status"] = "Ранее был в ремонте"
+    ответ = asyncio.run(бот_модуль._оценить(ремонт, {"shop_id": 14}))
+    assert ответ["цена"] is None and "был в ремонте" in ответ["почему"] and "экран меняли" in ответ["почему"]
+
+
+def test_a_price_request_is_answered_where_the_point_reads_it(бот_модуль, monkeypatch):
+    """Запрос цены забирается один раз, ответ ложится в `quote` вместе с меткой запроса."""
+    import json as _json
+    _прайс(monkeypatch, 185000)
+    журнал = []
+    запрос = _json.dumps(dict(_полная(бот_модуль), запрос_цены="q-42"), ensure_ascii=False)
+
+    def ответы(текст, параметры):
+        if текст.startswith("SELECT quote_request"):
+            return запрос
+        return None
+    monkeypatch.setattr(бот_модуль, "async_session_factory", lambda: Сессия(журнал, ответы))
+
+    async def _строка(код):
+        return {"code": код, "shop_id": 14, "checks": None}
+
+    async def _магазины():
+        return [{"id": 14}]
+    monkeypatch.setattr(бот_модуль, "_строка", _строка)
+    monkeypatch.setattr(бот_модуль, "_магазины", _магазины)
+    asyncio.run(бот_модуль._посчитать_цену("ABCD12"))
+    тексты = [т for т, _ in журнал]
+    assert any("FOR UPDATE" in т for т in тексты)
+    assert any(т.startswith("UPDATE kiosk_media SET quote_request = NULL") for т in тексты)
+    записано = [п for т, п in журнал if т.startswith("UPDATE kiosk_media SET quote = ")]
+    assert записано and _json.loads(записано[0]["q"]) == {"цена": 185000, "почему": "", "запрос": "q-42"}
+
+
+def test_cycles_are_left_out_of_the_deal_until_the_column_exists(бот_модуль, monkeypatch):
+    """Колонку devices.akb_cycles добавляют отдельно. Пока её нет, вставка сделки не должна
+    падать на всех точках из-за поля, без которого сделка обходилась."""
+    ядро = бот_модуль.kiosk_core
+    поля = ядро.колонки(_полная(бот_модуль))
+    assert поля["akb_cycles"] == 1810 and "akb_cycles" in ядро.sql_devices(поля)
+    monkeypatch.setattr(бот_модуль, "async_session_factory",
+                        lambda: Сессия([], lambda т, п: None))          # колонки нет
+    бот_модуль._колонки.clear()
+    assert asyncio.run(бот_модуль._есть_колонка("devices", "akb_cycles")) is False
+    monkeypatch.setattr(бот_модуль, "async_session_factory",
+                        lambda: Сессия([], lambda т, п: 1))             # добавили на ходу
+    assert asyncio.run(бот_модуль._есть_колонка("devices", "akb_cycles")) is True
+    мусор = _полная(бот_модуль)
+    мусор["сделка"]["akb_cycles"] = -5
+    assert ядро.колонки(мусор)["akb_cycles"] is None

@@ -41,3 +41,21 @@ ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS parcel_error TEXT;    -- поч
 -- бот спрашивает её часто: «есть ли непринятые посылки»
 CREATE INDEX IF NOT EXISTS kiosk_media_parcel_idx ON kiosk_media (parcel_at)
     WHERE parcel IS NOT NULL;
+
+-- Порядок с 12.11.2026: привязка сотрудника в начале сделки, автоцена ДО сделки, медиа —
+-- после «Отправить на оценку» на кассе.
+--   quote_request — касса просит цену: та же посылка, что потом станет сделкой. Кладёт её наш
+--                   сервер, бот забирает (как и parcel) и считает своим прайсом.
+--   quote         — ответ бота: {"цена": 185000 | null, "почему": "…", "запрос": "<метка>"}.
+--   media_asked   — когда бот сам попросил у привязанного сотрудника фото и видео. По ней он
+--                   не просит дважды и после перезапуска знает, от кого ждёт медиа.
+ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS quote_request TEXT;
+ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS quote_at TIMESTAMPTZ;
+ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS quote TEXT;
+ALTER TABLE kiosk_media ADD COLUMN IF NOT EXISTS media_asked TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS kiosk_media_quote_idx ON kiosk_media (quote_at)
+    WHERE quote_request IS NOT NULL;
+-- «от кого ждём медиа» бот спрашивает по чату сотрудника
+CREATE INDEX IF NOT EXISTS kiosk_media_chat_idx ON kiosk_media (chat_id)
+    WHERE device_id IS NULL;

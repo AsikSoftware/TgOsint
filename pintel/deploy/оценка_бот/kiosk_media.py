@@ -24,13 +24,24 @@
 сделки Оценка открывает через `InputMediaVideo(device.video_phone)`, и без него открытие
 падает.
 
+**Порядок с 12.11.2026 (касса 0.7.0 и новее).** Сотрудник сканирует QR в самом НАЧАЛЕ
+сделки — ссылка `start=k<КОД>`: бот только запоминает, чья это сделка, и ничего не просит.
+Дальше касса проверяет телефон и спрашивает у бота автоцену (`quote_request` → `quote`):
+цену считает бот, тем же кодом, что и для сделки, только без вставки. Нажали на кассе
+«Отправить на оценку» — посылка ложится в `parcel`, и бот САМ пишет привязанному
+сотруднику «пришлите фото и видео»; после последнего шага создаёт сделку. QR для медиа
+больше нет. Прежний порядок (`start=p<КОД>`: медиа сразу, потом посылка) оставлен — им
+живут точки со старой сборкой.
+
 Своего в базе Оценки заводится одна таблица `kiosk_media` (DDL рядом, kiosk_media.sql).
 Код самой Оценки этот файл не трогает, разбор посылки и колонки — в kiosk_core.py рядом.
 """
 import asyncio
 import io
+import json
 import logging
 import re
+import time
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -52,6 +63,8 @@ router_kiosk_media = Router()
 # переходов на бота. Фильтруем по тексту, а не параметрами CommandStart: так обработчик
 # работает в любой версии aiogram 3 и наверняка не перехватит чужой /start.
 СТАРТ = re.compile(r"^/start(?:@\w+)?\s+p([A-Z0-9]{4,12})\b")
+# «k» — привязка в начале сделки: бот запоминает сотрудника и медиа пока не просит
+ПРИВЯЗКА = re.compile(r"^/start(?:@\w+)?\s+k([A-Z0-9]{4,12})\b")
 # пункт ручной диагностики: префикс, код сделки, ключ пункта (ASCII, из kiosk_core.ПУНКТЫ)
 ПУНКТ = re.compile(r"^kmchk_([A-Z0-9]{4,12})_([a-z]+)$")
 ГОТОВО_ДИАГ = re.compile(r"^kmchkok_([A-Z0-9]{4,12})$")
@@ -214,6 +227,10 @@ async def _дальше(отправить, код: str, шапка: str = "") -
     if осталось:
         await отправить(f"{шапка}Сейчас: {осталось[0]}")
         return
+    if строка.get("parcel"):
+        # касса уже отправила сделку и ждала только медиа — нажимать больше нечего
+        await отправить(f"{шапка}Медиа собраны — создаю сделку…")
+        return
     await отправить(f"{шапка}Медиа собраны. Отметьте проверки руками на экране программы "
                     "и отправьте оценку оттуда — сделку создам по этому коду.")
 
@@ -233,6 +250,29 @@ async def _добавить(код: str, file_id: str, видео: bool) -> None
 
 
 # ---------------------------------------------------------------- фото и видео
+
+@router_kiosk_media.message(F.text.regexp(ПРИВЯЗКА.pattern))
+async def привязать(message: Message, state: FSMContext):
+    """QR в начале сделки: касса узнаёт, чья она. Фото и видео попросим сами, когда касса
+    отправит оценку, — сейчас телефон клиента ещё даже не подключён."""
+    совпало = ПРИВЯЗКА.match(message.text or "")
+    if not совпало:
+        return
+    код = совпало.group(1)
+    сотрудник = await _сотрудник(message.chat.id)
+    if сотрудник is None:
+        await message.answer("Этот код — для сотрудников Pintel. Если вы сотрудник, "
+                             "зарегистрируйтесь в боте и откройте ссылку снова.")
+        return
+    строка = await _строка(код)
+    if строка and строка["device_id"]:
+        await message.answer(f"По этому коду сделка № {строка['device_id']} уже создана.")
+        return
+    shop_id = kiosk_core.точка_сотрудника(сотрудник.staff_id, сотрудник.shop_id)
+    await _завести(код, сотрудник.id, message.chat.id, shop_id)
+    await message.answer(kiosk_core.текст_привязки(
+        сотрудник.first_name, (await _имя_точки(shop_id)) if shop_id else ""))
+
 
 @router_kiosk_media.message(F.text.regexp(СТАРТ.pattern))
 async def открыть_приём(message: Message, state: FSMContext):
@@ -271,8 +311,42 @@ async def открыть_приём(message: Message, state: FSMContext):
     await _дальше(message.answer, код)
 
 
+async def _код_ждущий_медиа(chat_id: int):
+    """Код сделки этого сотрудника, по которой бот уже попросил медиа и ещё ждёт. → код/None."""
+    try:
+        async with async_session_factory() as session:
+            return (await session.execute(text(
+                "SELECT code FROM kiosk_media WHERE chat_id = :ch AND device_id IS NULL "
+                "AND parcel IS NOT NULL AND media_asked > now() - interval '12 hours' "
+                "ORDER BY media_asked DESC LIMIT 1"), {"ch": chat_id})).scalar()
+    except Exception:                                            # noqa: BLE001 — колонки ещё нет
+        return None
+
+
+async def _ждём_медиа_без_состояния(message: Message, state: FSMContext):
+    """Фильтр на случай, когда бот забыл, что ждёт медиа: его перезапустили.
+
+    Состояние диалога живёт в памяти бота, а запрос медиа — в базе. Если у сотрудника нет
+    никакого состояния (он не посреди другого дела в боте) и в таблице обмена висит его
+    сделка, по которой медиа уже просили, — присланное фото или видео наше."""
+    if await state.get_state() is not None:
+        return False
+    код = await _код_ждущий_медиа(message.chat.id)
+    return {"kmedia_code": str(код)} if код else False
+
+
+@router_kiosk_media.message(F.video | F.video_note | F.photo | F.document, _ждём_медиа_без_состояния)
+async def принять_после_перезапуска(message: Message, state: FSMContext, kmedia_code: str = "",
+                                    bot: Bot = None):
+    if not kmedia_code:
+        return
+    await state.set_state(KioskMediaState.приём)
+    await state.update_data(kmedia_code=kmedia_code)
+    await принять(message, state, bot)
+
+
 @router_kiosk_media.message(KioskMediaState.приём, F.video | F.video_note | F.photo | F.document)
-async def принять(message: Message, state: FSMContext):
+async def принять(message: Message, state: FSMContext, bot: Bot = None):
     данные = await state.get_data()
     код = данные.get("kmedia_code")
     if not код:
@@ -311,6 +385,13 @@ async def принять(message: Message, state: FSMContext):
     # что дальше — точка, ручная диагностика или отправка из программы — решает _дальше:
     # список точек и диагностику на каждое фото не шлём, только когда до них дошли
     await _дальше(message.answer, код, шапка=f"{текст}\n\n")
+    # Касса уже отправила сделку и ждала только медиа — создаём её сразу, не дожидаясь
+    # очередного круга опроса: сотрудник стоит с телефоном клиента в руках.
+    if строка.get("parcel") and not kiosk_core.чего_не_хватает(строка):
+        bot = bot or getattr(message, "bot", None)
+        if bot is not None:
+            await _обработать_посылку(bot, код)
+            await state.clear()
 
 
 @router_kiosk_media.callback_query(F.data.startswith("kmedia_done_"))
@@ -522,16 +603,96 @@ async def создать_сделку(call: CallbackQuery, bot: Bot):
 
 ОПРОС_ПОСЫЛОК = 2.0          # как часто смотрим, не положил ли сервер новую посылку
 ОТДЫХ_ПОСЛЕ_СБОЯ = 60.0      # базу не спросить (нет колонок, упала связь) — не долбим её
-ЗА_РАЗ = 5                   # больше одной посылки зараз бывает только после простоя
+ЗА_РАЗ = 40                  # посылки теперь лежат, пока сотрудник шлёт медиа, — их больше
+ЖДЁМ_МЕДИА_ЧАСОВ = 24        # дольше посылка медиа не ждёт: сделку начнут заново
+ПОВТОР_ЗАПРОСА = 20.0        # не дошло сообщение сотруднику — пробуем снова не чаще
+
+_диспетчер = None            # нужен, чтобы перевести диалог сотрудника в приём медиа
+_уже_просили = set()         # коды, по которым запрос медиа ушёл (если колонки media_asked нет)
+_пробовали = {}              # код → когда в последний раз не смогли написать сотруднику
 
 
 async def _ожидают() -> list:
-    """Коды, по которым посылка лежит и ждёт. Пусто — и ладно, это обычное состояние."""
+    """Коды, по которым посылка лежит и ждёт. Пусто — и ладно, это обычное состояние.
+
+    Посылка может лежать долго: касса отправляет её ДО медиа, и бот ждёт, пока сотрудник
+    пришлёт фото и видео. Поэтому берём не пять самых старых (застрявшие заслонили бы
+    свежие), а все за последние сутки."""
     async with async_session_factory() as session:
         строки = (await session.execute(text(
             "SELECT code FROM kiosk_media WHERE parcel IS NOT NULL AND device_id IS NULL "
+            f"AND parcel_at > now() - interval '{ЖДЁМ_МЕДИА_ЧАСОВ} hours' "
             "ORDER BY parcel_at LIMIT :n"), {"n": ЗА_РАЗ})).scalars().all()
     return [str(x) for x in строки]
+
+
+async def _прочие_беды(посылка: dict, строка) -> list:
+    """Чего не хватает сделке, КРОМЕ медиа. Пусто — дело только за фото и видео."""
+    свой = kiosk_core.точка_из_посылки(посылка, await _магазины())
+    вид = dict(строка)
+    вид["video"] = вид.get("video") or "ждём"
+    вид["shop_id"] = свой or вид.get("shop_id")
+    return kiosk_core.проверить(посылка, вид)
+
+
+def _цена_из_ответа(сырое):
+    """Автоцена, которую бот уже назвал кассе по этому коду. → число или None."""
+    try:
+        цена = (json.loads(сырое) if сырое else {}).get("цена")
+        return int(цена) if цена else None
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+async def _ждать_медиа_от(bot: Bot, chat_id: int, код: str) -> None:
+    """Перевести диалог сотрудника в приём медиа по коду — сами, без его /start.
+
+    Не вышло (другая версия aiogram, хранилище не то) — не беда: присланное медиа поймает
+    `принять_после_перезапуска`, он смотрит в базу, а не в память бота."""
+    if _диспетчер is None or not chat_id:
+        return
+    try:
+        from aiogram.fsm.storage.base import StorageKey
+        ключ = StorageKey(bot_id=bot.id, chat_id=int(chat_id), user_id=int(chat_id))
+        await _диспетчер.storage.set_state(key=ключ, state=KioskMediaState.приём)
+        await _диспетчер.storage.update_data(key=ключ, data={"kmedia_code": код})
+    except Exception as exc:                                     # noqa: BLE001
+        logging.getLogger(__name__).warning("kiosk: состояние приёма по %s не поставить: %s", код, exc)
+
+
+async def _попросить_медиа(bot: Bot, код: str, посылка: dict, строка) -> None:
+    """Касса отправила сделку, а фото и видео ещё нет — просим их у привязанного сотрудника.
+
+    Один раз: посылка остаётся лежать, и каждый круг опроса сюда заходит снова."""
+    if строка.get("media_asked") or код in _уже_просили:
+        return
+    сейчас = time.monotonic()
+    if сейчас - _пробовали.get(код, -1e9) < ПОВТОР_ЗАПРОСА:
+        return
+    _пробовали[код] = сейчас
+    if not строка.get("chat_id"):
+        await _сказать_о_беде(код, "сделка не привязана к сотруднику — отсканируйте QR на кассе")
+        return
+    try:
+        await bot.send_message(
+            chat_id=строка["chat_id"],
+            text=kiosk_core.текст_запроса_медиа(посылка, _цена_из_ответа(строка.get("quote"))))
+    except Exception as exc:                                     # noqa: BLE001
+        await _сказать_о_беде(код, f"бот не смог написать сотруднику ({type(exc).__name__}) — "
+                                   "откройте бота Оценки и нажмите «Старт»")
+        return
+    _уже_просили.add(код)
+    _пробовали.pop(код, None)
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text(
+                "UPDATE kiosk_media SET media_asked = now(), parcel_error = NULL WHERE code = :c"),
+                {"c": код})
+            await session.commit()
+    except Exception as exc:                                     # noqa: BLE001 — колонки ещё нет
+        logging.getLogger(__name__).warning("kiosk: запрос медиа по %s не отметить: %s", код, exc)
+    await _ждать_медиа_от(bot, строка["chat_id"], код)
+    logging.getLogger(__name__).warning("kiosk: по посылке %s попросили медиа у сотрудника", код)
 
 
 async def _взять(код: str):
@@ -576,12 +737,23 @@ async def _сказать_о_беде(код: str, почему: str) -> None:
 async def _обработать_посылку(bot: Bot, код: str) -> None:
     """Одна посылка: взять, создать сделку, сказать сотруднику."""
     log = logging.getLogger(__name__)
+    строка = await _строка(код)
+    if строка is None or строка.get("device_id"):
+        return
+    # Касса отправляет сделку ДО медиа. Если дело только за фото и видео — посылку не
+    # трогаем, а просим их у привязанного сотрудника и ждём. Всё остальное (нет модели,
+    # точки, отметок) — отказ сразу, как и раньше: ждать тут нечего.
+    if строка.get("parcel") and kiosk_core.чего_не_хватает(строка):
+        try:
+            ранняя = kiosk_core.разобрать(строка["parcel"])
+        except kiosk_core.ОшибкаПосылки:
+            ранняя = None
+        if ранняя is not None and not await _прочие_беды(ранняя, строка):
+            await _попросить_медиа(bot, код, ранняя, строка)
+            return
     сырое = await _взять(код)
     if not сырое:
         return                                   # уже взяли в прошлый круг
-    строка = await _строка(код)
-    if строка is None:
-        return
     try:
         посылка = kiosk_core.разобрать(сырое)
         сделка, куда = await _создать(bot, код, посылка, строка)
@@ -621,7 +793,19 @@ async def _поток_посылок(bot: Bot) -> None:
     # по ним обязан оставаться след.
     log.warning("kiosk: слежу за посылками с точек (каждые %s с)", ОПРОС_ПОСЫЛОК)
     пауза = ОПРОС_ПОСЫЛОК
+    цены_с = 0.0               # когда снова спрашивать цены: нет колонок — не чаще раза в минуту
     while True:
+        # Запросы цены — отдельно от посылок: если колонок `quote_*` ещё нет, сделки всё
+        # равно должны создаваться.
+        if time.monotonic() >= цены_с:
+            try:
+                for код in await _ждут_цену():
+                    await _посчитать_цену(код)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:                             # noqa: BLE001
+                log.warning("kiosk: запросы цены не посмотреть (%s) — жду %s с", exc, ОТДЫХ_ПОСЛЕ_СБОЯ)
+                цены_с = time.monotonic() + ОТДЫХ_ПОСЛЕ_СБОЯ
         try:
             for код in await _ожидают():
                 await _обработать_посылку(bot, код)
@@ -639,9 +823,105 @@ async def _поток_посылок(bot: Bot) -> None:
 
 
 @router_kiosk_media.startup()
-async def _завести_поток(bot: Bot, **_):
+async def _завести_поток(bot: Bot, **прочее):
     """Запускаем слежение вместе с ботом: отдельной службы для этого не нужно."""
+    global _диспетчер
+    _диспетчер = прочее.get("dispatcher")
     asyncio.create_task(_поток_посылок(bot))
+
+
+# ---------------------------------------------------------------- автоцена до сделки
+
+async def _ждут_цену() -> list:
+    """Коды, по которым касса спросила автоцену и ещё не получила ответа."""
+    async with async_session_factory() as session:
+        строки = (await session.execute(text(
+            "SELECT code FROM kiosk_media WHERE quote_request IS NOT NULL "
+            "ORDER BY quote_at LIMIT :n"), {"n": ЗА_РАЗ})).scalars().all()
+    return [str(x) for x in строки]
+
+
+async def _взять_запрос_цены(код: str):
+    """Забрать запрос цены — так же, как посылку: запереть, прочитать, очистить."""
+    async with async_session_factory() as session:
+        async with session.begin():
+            запрос = (await session.execute(text(
+                "SELECT quote_request FROM kiosk_media "
+                "WHERE code = :c AND quote_request IS NOT NULL FOR UPDATE"), {"c": код})).scalar()
+            if запрос:
+                await session.execute(text(
+                    "UPDATE kiosk_media SET quote_request = NULL WHERE code = :c"), {"c": код})
+    return запрос
+
+
+async def _оценить(посылка: dict, строка) -> dict:
+    """Автоцена ДО сделки. → {"цена": число или None, "почему": слова}.
+
+    Тот же путь, что после вставки сделки (`_вставить`): те же колонки, та же поправка на
+    диагностику, то же правило «положена ли автоцена», тот же прайс точки. Разойтись им
+    нельзя — на экране кассы стояла бы одна цена, а в карточке сделки другая. Отличие одно:
+    сделки в базе ещё нет, поэтому прайсу отдаём не строку `devices`, а её поля."""
+    from types import SimpleNamespace
+    поля = kiosk_core.колонки(посылка)
+    отметки = kiosk_core.отметки(посылка, строка)
+    поля = kiosk_core.применить_диагностику(поля, отметки, посылка)
+    почему = kiosk_core.почему_без_автоцены({"phone_status": поля.get("phone_status")},
+                                            отметки, посылка)
+    if почему:
+        return {"цена": None, "почему": почему}
+    shop_id = (kiosk_core.точка_из_посылки(посылка, await _магазины())
+               or (строка or {}).get("shop_id"))
+    устройство = SimpleNamespace(
+        producer="Apple", model=поля.get("model"), ddr=поля.get("ddr"), akb=поля.get("akb"),
+        akb_exact=поля.get("akb_exact"), shop_id_grade=shop_id)
+    from utils.google_price import get_price_for_device
+    цена = await get_price_for_device(устройство)
+    if not цена:
+        return {"цена": None, "почему": "в прайсе нет цены на эту модель"}
+    return {"цена": int(цена), "почему": ""}
+
+
+async def _посчитать_цену(код: str) -> None:
+    """Один запрос цены: взять, посчитать, положить ответ туда, где его увидит касса."""
+    log = logging.getLogger(__name__)
+    сырое = await _взять_запрос_цены(код)
+    if not сырое:
+        return
+    строка = await _строка(код)
+    запрос = ""
+    try:
+        посылка = kiosk_core.разобрать(сырое)
+        запрос = str(посылка.get("запрос_цены") or "")[:40]
+        ответ = await _оценить(посылка, строка)
+    except kiosk_core.ОшибкаПосылки as exc:
+        ответ = {"цена": None, "почему": str(exc)[:300]}
+    except Exception as exc:                                     # noqa: BLE001
+        log.exception("kiosk: цена по коду %s не посчиталась", код)
+        ответ = {"цена": None, "почему": f"цену посчитать не вышло ({type(exc).__name__})"}
+    ответ["запрос"] = запрос            # по нему касса узнаёт ответ на СВОЙ последний вопрос
+    async with async_session_factory() as session:
+        await session.execute(text("UPDATE kiosk_media SET quote = :q WHERE code = :c"),
+                              {"q": json.dumps(ответ, ensure_ascii=False), "c": код})
+        await session.commit()
+    log.warning("kiosk: цена по коду %s: %s", код, ответ.get("цена") or ответ.get("почему"))
+
+
+async def _есть_колонка(таблица: str, колонка: str) -> bool:
+    """Есть ли колонка в базе. «Нет» перепроверяем каждый раз: её могли добавить на ходу."""
+    if _колонки.get((таблица, колонка)):
+        return True
+    try:
+        async with async_session_factory() as session:
+            есть = (await session.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = :t AND column_name = :c"), {"t": таблица, "c": колонка})).scalar()
+    except Exception:                                            # noqa: BLE001
+        есть = None
+    _колонки[(таблица, колонка)] = bool(есть)
+    return bool(есть)
+
+
+_колонки = {}
 
 
 async def _вставить(посылка: dict, медиа, нажал=None) -> dict:
@@ -670,6 +950,10 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     # иначе диагностика осталась бы отчётом ни о чём.
     отметки = kiosk_core.отметки(посылка, медиа)
     поля = kiosk_core.применить_диагностику(поля, отметки, посылка)
+    # Циклы батареи — новая колонка devices. Пока её не добавили, в сделку не кладём:
+    # иначе вставка падала бы на всех точках из-за поля, без которого сделка обходилась.
+    if not await _есть_колонка("devices", "akb_cycles"):
+        поля.pop("akb_cycles", None)
     поля.update({
         # цену и статус ставим после вставки: автоцену считает сама Оценка по своему
         # прайсу (utils/google_price.py), ровно как в её собственном потоке

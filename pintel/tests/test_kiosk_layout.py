@@ -32,7 +32,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget    # no
 from pintel_core import phonetest, reference                        # noqa: E402
 from pintel_core.analysis import report as report_mod               # noqa: E402
 from pintel_core.devicelink import snapshot                         # noqa: E402
-from pintel_kiosk import ui, ui_admin, ui_deal, ui_start            # noqa: E402
+from pintel_kiosk import ui, ui_admin, ui_deal, ui_link, ui_start   # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ЭТАЛОН = os.path.join(HERE, "fixtures_real", "эталоны", "эталон_iPhone-14-Pro_iOS26.5.zip")
@@ -164,7 +164,7 @@ def крупный_шрифт(приложение, monkeypatch):
     monkeypatch.setattr(ui, "font",
                         lambda family=ui.FONT_TEXT, px=16, *a, **k: родной(family, round(px * 1.25),
                                                                           *a, **k))
-    for модуль in (ui_deal, ui_start, ui_admin):      # `font` они забрали себе по имени
+    for модуль in (ui_deal, ui_start, ui_admin, ui_link):      # `font` они забрали себе по имени
         if hasattr(модуль, "font"):
             monkeypatch.setattr(модуль, "font", ui.font)
     крупный = re.sub(r"font-size:\s*(\d+)px",
@@ -181,6 +181,87 @@ def test_the_idle_screen_fits(открыть):
     экран.set_status("Автономно: нет связи с сервером ConnectError", ok=False)
     экран.показать_обновление("Обновить программу — не вышло, повторить")
     assert _замечания(экран) == []
+
+
+def test_the_link_screen_fits(открыть):
+    """Привязка сотрудника — первый экран сделки: QR, три шага и строка состояния.
+
+    Состояний четыре, и подписи у них разной длины: ждём, сервер не видит бота (появляется
+    кнопка «Продолжить без привязки»), привязано (имя) и «бот в кассе не задан»."""
+    экран = открыть(ui_link.LinkScreen, "16/38 Pintel")
+    экран.показать_код("K7M3QA", "https://t.me/pintel_ocenka_bot?start=kK7M3QA")
+    assert _замечания(экран) == [], "ждём сканирование"
+    экран.set_состояние({"известно": False, "почему": "касса не видит базу Оценки"})
+    assert _замечания(экран) == [], "сервер не видит бота"
+    экран.начать()
+    экран.показать_код("K7M3QA", "https://t.me/pintel_ocenka_bot?start=kK7M3QA")
+    экран.set_состояние({"известно": True, "начали": True,
+                         "сотрудник": "Александра-Виктория К."})
+    экран._уход.stop()
+    assert _замечания(экран) == [], "привязано, длинное имя"
+    экран.начать()
+    экран.показать_код("", "")
+    assert _замечания(экран) == [], "бот не задан"
+
+
+def test_the_price_page_and_the_linked_media_page_fit(открыть, отчёт):
+    """Привязанная сделка: страница автооценки во всех её видах и медиа без QR.
+
+    Цена — самая крупная надпись экрана, а «Оценит человек» с длинной причиной — самая
+    длинная: обе обязаны помещаться в ту же карточку, что и QR у соседних шагов."""
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
+    экран.set_клиент("Зама", "+77058837953")
+    экран.set_привязка("Александра-Виктория К.")
+    экран.правая.setCurrentIndex(ui_deal.СТР_ЦЕНА)
+    assert _замечания(экран) == [], "цена: проверки ещё идут"
+    экран.показать(отчёт)
+    экран.set_тест({k: phonetest.ОК for k in phonetest.КЛЮЧИ})
+    from pintel_core.external import ocenka_media
+    экран.ручная = {k: True for k in ocenka_media.КЛЮЧИ}
+    экран._нарисовать_ручную()
+    for цена, имя in (({"считаем": True}, "считаем"),
+                      ({"готово": True, "цена": 1285000}, "семизначная цена"),
+                      ({"готово": True, "цена": None,
+                        "почему": "проверка руками нашла: Кнопки громкости и питания, Вибрация, "
+                                  "Герметик под экраном, Лоток SIM"}, "нет цены, длинная причина")):
+        экран.set_цена(цена)
+        экран.правая.setCurrentIndex(ui_deal.СТР_ЦЕНА)
+        assert _замечания(экран) == [], "цена: " + имя
+
+    экран.правая.setCurrentIndex(ui_deal.СТР_МЕДИА)
+    assert _замечания(экран) == [], "медиа до отправки"
+    экран.ушло("K7M3QA", "", ждём_медиа=True)
+    assert _замечания(экран) == [], "медиа: бот пишет сотруднику"
+    экран.set_медиа({"известно": True, "начали": True, "фото": 2, "видео": False,
+                     "готово": False, "медиа_просили": True})
+    assert _замечания(экран) == [], "медиа: приходят"
+    экран.сделка_создана(7311)
+    assert _замечания(экран) == [], "сделка создана, с ценой"
+
+
+def test_the_new_pages_hold_a_quarter_larger_font(открыть, крупный_шрифт, отчёт):
+    """Экран привязки и страница цены шрифтом на четверть крупнее — тот же запас на чужой
+    шрифт, что и у остальных карточек."""
+    привязка = открыть(ui_link.LinkScreen, "16/38 Pintel")
+    привязка.показать_код("K7M3QA", "https://t.me/pintel_ocenka_bot?start=kK7M3QA")
+    привязка.set_состояние({"известно": False, "почему": "касса не видит базу Оценки"})
+    assert _замечания(привязка) == [], "привязка"
+
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
+    экран.set_клиент("Асылжан", "+77058837953")
+    экран.set_привязка("Асылбек Н.")
+    экран.показать(отчёт)
+    экран.set_тест({k: phonetest.ОК for k in phonetest.КЛЮЧИ})
+    from pintel_core.external import ocenka_media
+    экран.ручная = {k: True for k in ocenka_media.КЛЮЧИ}
+    экран._нарисовать_ручную()
+    экран.set_цена({"готово": True, "цена": 185000})
+    экран.правая.setCurrentIndex(ui_deal.СТР_ЦЕНА)
+    assert _замечания(экран) == [], "цена"
+    экран.set_цена({"готово": True, "цена": None, "почему": "аппарат был в ремонте: экран меняли"})
+    assert _замечания(экран) == [], "цены нет"
+    экран.ушло("K7M3QA", "", ждём_медиа=True)
+    assert _замечания(экран) == [], "медиа у привязанной сделки"
 
 
 def test_the_intake_screen_fits(открыть):
@@ -203,8 +284,9 @@ def test_every_page_of_the_deal_screen_fits(открыть, отчёт):
     экран.показать_код("P7KQ2M", "https://t.me/PintelOlxBot?start=pP7KQ2M")
     экран.показать_тест("https://kiosk.pintelkz.com/t/ABCDEF1234567890")
     for страница, имя in ((ui_deal.СТР_APPLE, "шаг Apple"), (ui_deal.СТР_ТЕСТ, "тест"),
-                          (ui_deal.СТР_РУЧНАЯ, "проверки руками"), (ui_deal.СТР_МЕДИА, "медиа"),
-                          (ui_deal.СТР_ГОТОВО, "отправлено")):
+                          (ui_deal.СТР_РУЧНАЯ, "проверки руками"),
+                          (ui_deal.СТР_ЦЕНА, "цена у сделки без привязки"),
+                          (ui_deal.СТР_МЕДИА, "медиа"), (ui_deal.СТР_ГОТОВО, "отправлено")):
         экран.правая.setCurrentIndex(страница)
         assert _замечания(экран) == [], имя
 

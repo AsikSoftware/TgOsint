@@ -808,9 +808,9 @@ def test_the_deal_from_the_point_goes_to_the_bot_through_us(app, monkeypatch, tm
                              "parcel_error TEXT)"))
     monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: движок)
 
-    # медиа по коду не присылали — сделку боту не из чего собрать, и это сказано словами
+    # QR никто не сканировал — сделка ни к кому не привязана, и это сказано словами
     нет = k.post("/api/kiosk/media/ABCD12/parcel", headers=H, json={"посылка": посылка}).json()
-    assert нет["принято"] is False and "медиа" in нет["почему"]
+    assert нет["принято"] is False and "не привязана" in нет["почему"]
 
     with движок.begin() as conn:
         conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
@@ -848,6 +848,99 @@ def test_the_deal_from_the_point_goes_to_the_bot_through_us(app, monkeypatch, tm
 
     # чужой токен внутрь не пускают: посылка — это имя, телефон и аппарат клиента
     assert k.post("/api/kiosk/media/ABCD12/parcel", headers={"X-Kiosk-Token": "pk_wrong"},
+                  json={"посылка": посылка}).status_code == 401
+
+
+def test_the_point_learns_who_is_linked_and_asks_the_bot_for_a_price(app, monkeypatch, tmp_path):
+    """Порядок с 12.11.2026: QR сканируют в начале сделки, и касса видит, кто привязан;
+    автоцену касса спрашивает до медиа. Считает её бот — сервер только кладёт запрос в
+    таблицу обмена и отдаёт ответ, сам он прайс не читает.
+
+    Новый запрос обязан стирать прежний ответ: иначе на экране осталась бы цена от старых
+    данных (сняли галочку «SIM-лоток» — строка прайса уже другая)."""
+    from sqlalchemy import create_engine, text as sqltext
+    from pintel_server.services import ocenka_import, points as points_service
+
+    monkeypatch.setattr(points_service, "магазины_оценки",
+                        lambda: [{"id": 14, "litera": "U", "shop_name": "16/38 Pintel"}])
+    db = SessionLocal()
+    points_service.синхронизировать(db)
+    токен = db.get(Point, 14).token
+    db.close()
+    k = TestClient(app)
+    H = {"X-Kiosk-Token": токен, "X-Kiosk-Machine": "KASSA-14"}
+    посылка = {"версия": 1, "код": "ABCD12", "запрос_цены": "q1",
+               "сделка": {"model": "iPhone 13", "ddr": 128}}
+
+    движок = create_engine(f"sqlite:///{tmp_path}/ocenka_quote.db", future=True)
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "CREATE TABLE kiosk_media (code TEXT, user_id INTEGER, photos TEXT, video TEXT, "
+            "done INTEGER, device_id INTEGER, parcel TEXT, parcel_at TEXT, parcel_error TEXT, "
+            "quote_request TEXT, quote_at TEXT, quote TEXT, media_asked TEXT)"))
+        conn.execute(sqltext("CREATE TABLE users (id INTEGER, first_name TEXT, last_name TEXT)"))
+        conn.execute(sqltext("INSERT INTO users VALUES (5, 'Асылбек', 'Нурланов')"))
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: движок)
+
+    # QR ещё не сканировали: спросить цену не у кого, и это сказано словами
+    нет = k.post("/api/kiosk/media/ABCD12/quote", headers=H, json={"посылка": посылка}).json()
+    assert нет["принято"] is False and "не привязана" in нет["почему"]
+    assert k.get("/api/kiosk/media/ABCD12", headers=H).json()["сотрудник"] == ""
+
+    # отсканировали — строку завёл бот; касса видит имя, без фамилии целиком
+    with движок.begin() as conn:
+        conn.execute(sqltext("INSERT INTO kiosk_media (code, user_id) VALUES ('ABCD12', 5)"))
+    привязан = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert привязан["начали"] is True and привязан["сотрудник"] == "Асылбек Н."
+    assert привязан["оценка"] is None and привязан["цену_считают"] is False
+
+    да = k.post("/api/kiosk/media/ABCD12/quote", headers=H, json={"посылка": посылка}).json()
+    assert да == {"принято": True}
+    ждём = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert ждём["цену_считают"] is True and ждём["оценка"] is None
+
+    # бот ответил: забрал запрос и положил цену
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "UPDATE kiosk_media SET quote_request = NULL, "
+            "quote = '{\"цена\": 185000, \"почему\": \"\", \"запрос\": \"q1\"}'"))
+    ответ = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert ответ["оценка"] == {"цена": 185000, "почему": "", "запрос": "q1"}
+    assert ответ["цену_считают"] is False
+
+    # данные на кассе поменяли — новый запрос стирает прежнюю цену
+    k.post("/api/kiosk/media/ABCD12/quote", headers=H,
+           json={"посылка": {**посылка, "запрос_цены": "q2"}})
+    assert k.get("/api/kiosk/media/ABCD12", headers=H).json()["оценка"] is None
+
+    # автоцены нет — причина доезжает словами, а не нулём
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "UPDATE kiosk_media SET quote_request = NULL, media_asked = '2026-11-12', "
+            "quote = '{\"цена\": null, \"почему\": \"аппарат был в ремонте\", \"запрос\": \"q2\"}'"))
+    без = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert без["оценка"] == {"цена": None, "почему": "аппарат был в ремонте", "запрос": "q2"}
+    assert без["медиа_просили"] is True
+
+    # чужой код в запросе не принимаем
+    чужой = k.post("/api/kiosk/media/ABCD12/quote", headers=H,
+                   json={"посылка": {**посылка, "код": "ZZZZ99"}}).json()
+    assert чужой["принято"] is False and "код" in чужой["почему"]
+
+    # бот на сервере ещё прежний (колонок нет) — отказ словами, касса обойдётся без цены
+    старая = create_engine(f"sqlite:///{tmp_path}/ocenka_quote_old.db", future=True)
+    with старая.begin() as conn:
+        conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
+                             "done INTEGER, device_id INTEGER)"))
+        conn.execute(sqltext("INSERT INTO kiosk_media (code) VALUES ('ABCD12')"))
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: старая)
+    отказ = k.post("/api/kiosk/media/ABCD12/quote", headers=H, json={"посылка": посылка}).json()
+    assert отказ["принято"] is False and "не умеет" in отказ["почему"]
+    # и состояние по старой базе читается как прежде: новых полей нет, но ничего не падает
+    по_старой = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert по_старой["известно"] is True and по_старой["оценка"] is None
+
+    assert k.post("/api/kiosk/media/ABCD12/quote", headers={"X-Kiosk-Token": "pk_wrong"},
                   json={"посылка": посылка}).status_code == 401
 
 

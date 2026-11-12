@@ -174,6 +174,18 @@ class Client:
         res = self._req("GET", f"/api/kiosk/media/{код}", timeout=15)
         return res if isinstance(res, dict) else {"известно": False, "почему": "сервер не ответил"}
 
+    def спросить_цену(self, код, посылка):
+        """Попросить у бота автоцену до сделки. → {принято: bool, почему: str}.
+
+        Цену считает только бот Оценки, своим прайсом; сервер передаёт ему запрос, а ответ
+        приходит тем же опросом, что и медиа (`медиа(код)` → «оценка»)."""
+        try:
+            res = self._req("POST", f"/api/kiosk/media/{код}/quote",
+                            json={"посылка": посылка}, timeout=20)
+        except Exception as exc:                                 # noqa: BLE001
+            return {"принято": False, "почему": f"сервер не ответил: {exc}"}
+        return res if isinstance(res, dict) else {"принято": False, "почему": "сервер не ответил"}
+
     def отправить_посылку(self, код, посылка):
         """Сделку — боту через наш сервер. → {принято: bool, почему: str, сделка: id|None}.
 

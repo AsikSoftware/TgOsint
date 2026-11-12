@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Киоск без телефона: поток проверки на подменённом ядре. Проверяем порядок шагов,
 `done` без истории, затем `history` когда клиент открыл раздел позже, и уход на сервер."""
-import asyncio, json, os, tempfile
+import asyncio, json, os, tempfile, time
 import pytest
 
 pytest.importorskip("PySide6")
@@ -68,6 +68,8 @@ def fake_core(monkeypatch):
     def mk(ld, log=None, **kw):
         l = FakeListener(ld); listeners.append(l); return l
     monkeypatch.setattr(worker.repair_history, "Listener", mk)
+    # подставной слушатель процент батареи не называет — ждать его в этих тестах нечего
+    monkeypatch.setattr(worker, "ЖДАТЬ_БАТАРЕЮ", 0)
     # реестр РФС — без сети: оба IMEI верифицированы
     monkeypatch.setattr(worker.rfs, "проверить", lambda imeis, cache_dir=None, proxy=None, **kw: [
         {"imei": i, "verdict": "verified", "status_text": "Верифицирован", "deadline": None, "text": "ок", "ok": True}
@@ -106,6 +108,61 @@ def test_pipeline_done_then_late_history(fake_core):
     assert done, events
     assert client.calls[-1][1] == 7 and "repair_history" in client.calls[-1][2]
     assert fake_core[0].stopped and fake_core[0].calls == 2        # второй wait_change без изменений — выход
+
+
+def test_pipeline_waits_for_the_phones_own_battery_percent(fake_core, monkeypatch):
+    """Телефон называет процент батареи раз в 20 секунд. Быстрая проверка заканчивалась
+    раньше первой строки, и в отчёт шёл наш расчёт вместо числа с экрана телефона."""
+    app = QCoreApplication.instance() or QCoreApplication([])
+    monkeypatch.setattr(worker, "ЖДАТЬ_БАТАРЕЮ", 6)
+
+    class Поздний(FakeListener):
+        async def start(self):
+            # строка powerd приходит уже после того, как кончилось ожидание истории Apple
+            asyncio.get_running_loop().call_later(0.8, lambda: self.meta.__setitem__(
+                "батарея_телефона", {"процент": 61, "циклы": 900, "состояние": 1, "свежая": True}))
+            return self
+
+    monkeypatch.setattr(worker.repair_history, "Listener", lambda ld, log=None, **kw: Поздний(ld))
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    итог, шаги = [], []
+    loop = QEventLoop()
+    p.step.connect(lambda k, s, t: шаги.append((k, s, t)))
+    p.done.connect(lambda r: (итог.append(r), loop.quit()))
+    p.failed.connect(lambda t: (итог.append(t), loop.quit()))
+    QTimer.singleShot(15000, loop.quit)
+    p.start()
+    loop.exec()
+    p.cancel.set()
+    p.wait(3000)
+    assert итог and isinstance(итог[0], dict), итог
+    бат = итог[0]["report"]["батарея"]
+    assert бат["здоровье_%"] == 61 and бат["здоровье_основание"] == "сказал сам телефон", бат
+    батарея = [ш for ш in шаги if ш[0] == "battery"]
+    assert ("battery", "run", "ждём число от телефона") in батарея
+    assert батарея[-1] == ("battery", "done", "61 %"), батарея
+
+
+def test_pipeline_does_not_hold_the_client_when_the_phone_stays_silent(fake_core, monkeypatch):
+    """Телефон своё число не назвал — ждём не дольше предела и отдаём наш расчёт."""
+    app = QCoreApplication.instance() or QCoreApplication([])
+    monkeypatch.setattr(worker, "ЖДАТЬ_БАТАРЕЮ", 1)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    итог = []
+    loop = QEventLoop()
+    p.done.connect(lambda r: (итог.append(r), loop.quit()))
+    p.failed.connect(lambda t: (итог.append(t), loop.quit()))
+    QTimer.singleShot(15000, loop.quit)
+    начало = time.monotonic()
+    p.start()
+    loop.exec()
+    прошло = time.monotonic() - начало
+    p.cancel.set()
+    p.wait(3000)
+    assert итог and isinstance(итог[0], dict), итог
+    бат = итог[0]["report"]["батарея"]
+    assert бат["здоровье_%"] is not None and бат["здоровье_основание"] != "сказал сам телефон", бат
+    assert прошло < 6, прошло
 
 
 def test_pipeline_skips_history_wait_on_unsupported_model(fake_core, monkeypatch):

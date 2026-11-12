@@ -135,6 +135,12 @@ def проверить_рфс(cfg, имеи, step):
     return итог, ""
 
 
+# Сколько секунд от старта слушателя ждать, пока телефон сам назовёт процент батареи. На
+# кабеле powerd печатает его раз в 20 секунд (iOS 14 и новее), так что за 25 первая строка
+# приходит наверняка; быстрая проверка без этого заканчивалась раньше неё.
+ЖДАТЬ_БАТАРЕЮ = 25
+
+
 class Pipeline(QThread):
     status = Signal(str, str)                 # состояние связи: state, текст
     step = Signal(str, str, str)              # шаг: ключ, состояние (wait|run|done|warn|fail), подпись
@@ -156,6 +162,7 @@ class Pipeline(QThread):
         self.started = datetime.now()                 # имя эталона за этот прогон — одно на все перезаписи
         self._listener = None                         # чтобы закрыть канал к телефону снаружи
         self._loop = None
+        self._слушаем_с = None                        # когда запущен слушатель журнала
 
     def run(self):
         try:
@@ -226,11 +233,37 @@ class Pipeline(QThread):
         listener = repair_history.Listener(ld, log=log_line)
         self._listener = listener
         await listener.start()
+        self._слушаем_с = time.monotonic()
         self.apple_prompt.emit(True)
         try:
             await self._flow(ld, st, listener)
         finally:
             await listener.stop()
+
+    async def _дождаться_батареи(self, listener):
+        """Дать телефону назвать процент батареи — не дольше ЖДАТЬ_БАТАРЕЮ секунд от старта
+        слушателя. Обычно ждать нечего: к этому месту проверка идёт дольше."""
+        if self._слушаем_с is None:
+            return
+        сказали = False
+        while not self.cancel.is_set():
+            meta = getattr(listener, "meta", None) or {}
+            if meta.get("батарея_телефона") or meta.get("канал_потерян"):
+                return
+            if time.monotonic() - self._слушаем_с >= ЖДАТЬ_БАТАРЕЮ:
+                log_line(f"батарея: за {ЖДАТЬ_БАТАРЕЮ} с телефон свой процент не назвал — считаем сами")
+                return
+            if not сказали:
+                self._step("battery", "run", "ждём число от телефона")
+                сказали = True
+            await asyncio.sleep(0.25)
+
+    @staticmethod
+    def _донести_батарею(snap, listener):
+        """Последнее, что телефон сказал о батарее, — в слепок, из которого строится отчёт."""
+        сказал = (getattr(listener, "meta", None) or {}).get("батарея_телефона")
+        if сказал:
+            snap.setdefault("repair_history_meta", {})["батарея_телефона"] = dict(сказал)
 
     async def _взять_прошлую(self, ld) -> bool:
         """Взять проверку этого телефона, сделанную недавно. → взяли (и `done` уже ушёл)?
@@ -417,7 +450,14 @@ class Pipeline(QThread):
             не_проверено["реестр РФС"] = рфс_нет
         if рфс is not None:
             snap["rfs"] = рфс
+        # Процент батареи телефон называет сам, но раз в 20 секунд: строка могла прийти уже
+        # после того, как метаданные слушателя сняты выше, или не успеть вовсе, если проверка
+        # прошла быстро. Добираем её и кладём в слепок самое свежее, что слышали.
+        await self._дождаться_батареи(listener)
+        self._донести_батарею(snap, listener)
         rep = report_mod.build(snap)
+        h = rep["батарея"].get("здоровье_%")
+        self._step("battery", "done" if h is not None else "warn", f"{h} %" if h is not None else "не прочиталась")
         if self.cancel.is_set():
             return
 

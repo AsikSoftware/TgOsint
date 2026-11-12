@@ -3,8 +3,8 @@
 
 Сотрудник и клиент смотрят на экран телефона: «Аккумулятор → Состояние аккумулятора →
 Максимальная ёмкость». По этому проценту выбирается колонка прайса, то есть это прямо
-деньги и прямой спор у стойки. iOS 26 и 27 называют это число сами, в журнале; iOS 18 и
-старше — нет, и там оно считается от минимума за жизнь (NCCMin) с округлением вверх.
+деньги и прямой спор у стойки. Телефон называет это число сам, в журнале (iOS 14 и новее);
+если строка не пришла, оно считается от минимума за жизнь (NCCMin) с округлением вверх.
 """
 from pintel_core.analysis import battery
 
@@ -124,6 +124,45 @@ def test_slushatel_lovit_chislo_ios26():
     assert b["здоровье_%"] == 94 and b["здоровье_основание"] == "сказал сам телефон"
 
 
+# Сняты 12.11.2026 с живого iPhone 13 на iOS 18.7.8, как есть (имя телефона — общее).
+# Между «Previous» и «Updated» телефон печатает свои служебные строки — они числу не мешают.
+СТРОКИ_IOS18 = [
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: Previous Battery Health: Flags:1048579 "
+    "State:1 MaxCapacity:75 CycleCount:1756",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: calib: svcFlags pre: 0x3",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: calib: device not relevant",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: calib: svcFlags post: 0x3",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: Nominal Capacity percentage(75) is less "
+    "than the threshold(80)",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: Updated Battery Health: Flags:1048579",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: Updated Battery Health: State:1",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: Updated Battery Health: MaxCapacity:75",
+    "Nov 12 02:50:18 iPhone powerd[16873] <Notice>: Updated Battery Health: CycleCount:1756",
+]
+
+
+def test_slushatel_lovit_chislo_ios18():
+    """iOS 18 называет процент той же строкой, что и iOS 26, — раз в 20 секунд на кабеле.
+
+    До 12.11.2026 считалось, что iOS 18 молчит: сборки до 0.5.0 эти строки не сохраняли, а
+    единственная проверка новой сборкой их не дождалась."""
+    from pintel_core.devicelink import repair_history as rh
+
+    lst = rh.Listener(None)
+    for строка in СТРОКИ_IOS18:
+        lst._feed(строка)
+    сказал = lst.meta["батарея_телефона"]
+    assert сказал == {"процент": 75, "циклы": 1756, "состояние": 1, "свежая": True}, сказал
+    # тот же телефон: узел называет 1810 циклов, телефон помнит 1756 — это не расхождение
+    этот = узел(nominal=2410, design=3208, NCCMin=2375, CycleCount=1810)
+    b = battery.analyze(этот, сказал)
+    assert b["здоровье_%"] == 75 and b["здоровье_основание"] == "сказал сам телефон"
+    assert b["циклы"] == 1810 and b["циклы_по_телефону"] == 1756 and not b["сомнения"], b
+    # и без строки наш расчёт даёт то же: ceil(2375 / 3208 × 100) = 75
+    сами = battery.analyze(этот)
+    assert сами["здоровье_%"] == 75 and сами["здоровье_основание"] == "минимум за жизнь"
+
+
 def test_ios26_previous_goditsya_poka_net_svezhego():
     """Одна строка «Previous» — уже число телефона; свежие поля потом ложатся поверх."""
     from pintel_core.devicelink import repair_history as rh
@@ -180,15 +219,22 @@ def test_bez_stroki_schitaem_sami_i_govorim_ob_etom():
 
 
 def test_rashozhdenie_ciklov_ne_zamalchivaem():
-    """Узел и журнал читаются из одного места. Разошлись — значит чтение протухло, а по
-    циклам идёт самая дорогая колонка прайса («100 (0-30)»)."""
+    """Телефон помнит циклы на момент последнего изменения процента. Счётчик батареи меньше
+    этого числа быть не может — значит, его сбрасывали, а по циклам идёт самая дорогая
+    колонка прайса («100 (0-30)»)."""
     b = battery.analyze(узел(CycleCount=12), {"процент": 100, "циклы": 980})
-    assert any("циклы расходятся" in с for с in b["сомнения"]), b["сомнения"]
+    assert any("счётчик батареи сбрасывали" in с for с in b["сомнения"]), b["сомнения"]
     ровно = battery.analyze(узел(CycleCount=1064), {"процент": 79, "циклы": 1064})
-    assert not any("циклы" in с for с in ровно["сомнения"])
+    assert not any("цикл" in с for с in ровно["сомнения"])
     # ноль по узлу — самый опасный случай: «новая» батарея при 980 циклах у телефона
     ноль = battery.analyze(узел(CycleCount=0), {"процент": 100, "циклы": 980})
-    assert any("циклы расходятся" in с for с in ноль["сомнения"]), ноль["сомнения"]
+    assert any("счётчик батареи сбрасывали" in с for с in ноль["сомнения"]), ноль["сомнения"]
+    # сброс не до нуля: обе стороны «не новая», прежнее правило это пропускало
+    сорок = battery.analyze(узел(CycleCount=40), {"процент": 88, "циклы": 500})
+    assert any("счётчик батареи сбрасывали" in с for с in сорок["сомнения"]), сорок["сомнения"]
+    # цикл-два в запас — не сброс
+    рядом = battery.analyze(узел(CycleCount=402), {"процент": 93, "циклы": 403})
+    assert not рядом["сомнения"], рядом["сомнения"]
 
 
 def test_cikly_rashodyatsya_i_na_ispravnyh_telefonah():
@@ -200,6 +246,10 @@ def test_cikly_rashodyatsya_i_na_ispravnyh_telefonah():
     assert b["циклы"] == 1241 and b["циклы_по_телефону"] == 1021
     assert not b["сомнения"], b["сомнения"]
     assert battery.analyze(узел(CycleCount=1241))["циклы_по_телефону"] is None
+    # здоровая батарея держит 100 % с пятого цикла: телефон помнит 5, счётчик ушёл на 300.
+    # Прежнее правило («один источник говорит новая, другой нет») пугало тут сотрудника зря.
+    свежая = battery.analyze(узел(CycleCount=300), {"процент": 100, "циклы": 5})
+    assert not свежая["сомнения"], свежая["сомнения"]
 
 
 def test_schetchik_shleifa_ne_otdali_znachit_ne_znaem():

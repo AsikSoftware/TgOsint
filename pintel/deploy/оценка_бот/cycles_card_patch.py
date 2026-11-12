@@ -114,7 +114,9 @@ if КОЛОНКА:
     if колонка_есть():
         print("колонка devices.akb_cycles уже есть — ничего не делаю")
         sys.exit(0)
-    итог = subprocess.run([sys.executable, root + ПРИМЕНИТЬ], cwd=root,
+    # Модулем, а не файлом: при запуске файлом первым в путях встаёт сама папка database/,
+    # и `import database` находит в ней database.py вместо пакета.
+    итог = subprocess.run([sys.executable, "-m", "database.apply_akb_cycles_field"], cwd=root,
                           capture_output=True, text=True, timeout=120)
     if итог.returncode:
         sys.exit("СТОП: колонку добавить не вышло — "

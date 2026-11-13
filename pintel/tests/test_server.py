@@ -973,3 +973,79 @@ def test_istoriya_telefona_po_imei(app, monkeypatch):
 
     # без токена точки история не отдаётся: это данные о клиентах и ценах
     assert k.get("/api/kiosk/history", params={"imei": "351234560000019"}).status_code in (401, 403)
+
+
+def test_the_kiosk_can_make_the_bot_remind_the_employee(app, monkeypatch, tmp_path):
+    """Кнопка «Напомнить в боте». Сотрудник привязал сделку, бот попросил фото и видео — а он
+    нажал в боте что-то другое, и запрос потерялся в чате. Сервер пишет ему от имени бота ещё
+    раз: токеном бота из настроек этой точки, в чат привязанного сотрудника. Бота при этом
+    не трогают. Токен не попадает ни в ответ, ни в журнал."""
+    import httpx
+    from sqlalchemy import create_engine, text as sqltext
+    from pintel_server.services import kiosk_settings, ocenka_import, ocenka_media, points as points_service
+    monkeypatch.setattr(points_service, "магазины_оценки",
+                        lambda: [{"id": 14, "litera": "U", "shop_name": "16/38 Pintel"}])
+    db = SessionLocal()
+    points_service.синхронизировать(db)
+    токен_точки = db.get(Point, 14).token
+    kiosk_settings.сохранить_общие(db, {"ocenka_bot": "pintel_ocenka_bot", "ocenka_bot_token": "123:СЕКРЕТ"})
+    db.commit()
+    db.close()
+    k = TestClient(app)
+    H = {"X-Kiosk-Token": токен_точки, "X-Kiosk-Machine": "KASSA-14"}
+
+    движок = create_engine(f"sqlite:///{tmp_path}/ocenka_remind.db", future=True)
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "CREATE TABLE kiosk_media (code TEXT, user_id INTEGER, chat_id INTEGER, photos TEXT, "
+            "video TEXT, device_id INTEGER, parcel TEXT, media_asked TEXT)"))
+    monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: движок)
+    monkeypatch.setattr(ocenka_media, "_напоминали", {})
+    ушло = []
+
+    class Ответ:
+        def __init__(self, тело): self.тело = тело
+        def json(self): return self.тело
+
+    def post(url, data=None, timeout=None, **прочее):
+        ушло.append((url, dict(data or {})))
+        return Ответ({"ok": True, "result": {"message_id": 1}})
+    monkeypatch.setattr(httpx, "post", post)
+
+    def напомнить():
+        return k.post("/api/kiosk/media/ABCD12/remind", headers=H).json()
+
+    assert напомнить() == {"отправлено": False, "почему": "сделка не привязана к сотруднику"}
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "INSERT INTO kiosk_media (code, user_id, chat_id, photos, video, parcel, media_asked) VALUES "
+            "('ABCD12', 5, 777001, 'f1', NULL, :p, '2026-11-13')"),
+            {"p": json.dumps({"сделка": {"model": "iPhone 14 Pro"}}, ensure_ascii=False)})
+
+    да = напомнить()
+    assert да == {"отправлено": True, "почему": ""}
+    url, данные = ушло[-1]
+    assert url == "https://api.telegram.org/bot123:СЕКРЕТ/sendMessage" and данные["chat_id"] == 777001
+    assert "iPhone 14 Pro" in данные["text"] and "фото 1 из 3" in данные["text"] and "видео — нет" in данные["text"]
+    assert "главное меню" in данные["text"] and "СЕКРЕТ" not in json.dumps(да, ensure_ascii=False)
+
+    # подряд бот сотрудника не засыпает
+    ещё = напомнить()
+    assert ещё["отправлено"] is False and "только что" in ещё["почему"] and len(ушло) == 1
+
+    # Telegram отказал — словами, по-человечески; упал — без токена в ответе
+    monkeypatch.setattr(ocenka_media, "_напоминали", {})
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: Ответ({"ok": False, "description": "Forbidden: bot was blocked by the user"}))
+    assert "нажмите «Старт»" in напомнить()["почему"]
+
+    def упал(url, **kw):
+        raise httpx.ConnectError(f"не достучаться до {url}")
+    monkeypatch.setattr(httpx, "post", упал)
+    сбой = напомнить()
+    assert сбой["отправлено"] is False and "СЕКРЕТ" not in сбой["почему"] and "Telegram не ответил" in сбой["почему"]
+
+    # сделка уже создана — напоминать не о чем; чужой токен кассы — не пускаем
+    with движок.begin() as conn:
+        conn.execute(sqltext("UPDATE kiosk_media SET device_id = 7311 WHERE code = 'ABCD12'"))
+    assert "уже создана" in напомнить()["почему"]
+    assert k.post("/api/kiosk/media/ABCD12/remind", headers={"X-Kiosk-Token": "pk_wrong"}).status_code == 401

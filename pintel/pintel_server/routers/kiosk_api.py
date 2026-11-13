@@ -136,6 +136,17 @@ def media_quote(code: str, body: ПосылкаIn, kiosk: Kiosk = Depends(curren
     return media_service.спросить_цену(code, body.посылка)
 
 
+@router.post("/media/{code}/remind")
+def media_remind(code: str, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
+    """Кнопка «Напомнить в боте»: сотрудник ушёл в другое место бота, и запрос фото и видео
+    потерялся в чате. Сервер пишет ему от имени бота Оценки — токеном из настроек этой точки."""
+    from ..services import kiosk_settings
+    from ..services import ocenka_media as media_service
+    настройки = kiosk_settings.для_точки(db, kiosk.point)
+    return media_service.напомнить(code, настройки.get("ocenka_bot_token") or "",
+                                   точка=настройки.get("point") or "")
+
+
 class LogsIn(BaseModel):
     lines: list[str]
 

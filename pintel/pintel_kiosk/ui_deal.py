@@ -19,7 +19,7 @@
 import html
 import re
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
                                QLineEdit, QPushButton, QSizePolicy, QStackedWidget, QTextEdit,
@@ -225,6 +225,8 @@ class ВыборЦвета(QDialog):
 
 
 ПОЧИНИТЬ_СВЯЗЬ = "Телефон не виден? Починить связь"
+НАПОМНИТЬ = "Напомнить в боте"
+ПАУЗА_НАПОМНИТЬ_МС = 20_000           # столько же держит паузу сервер
 
 
 def _плашка(текст, фон, цвет):
@@ -482,6 +484,7 @@ class WorkScreen(Screen):
     пропустить_тест = Signal()            # телефона нет в нашей сети — сделка уйдёт человеку
     перепроверить = Signal()              # прочитать телефон заново, не брать прошлую проверку
     починить_связь = Signal()             # телефон не виден — перезапустить службу Apple
+    напомнить = Signal()                  # бот ждёт фото и видео, а сотрудник потерял запрос
     проверки_руками = Signal()            # отметку руками поменяли — пересчитать состояние
 
     def __init__(self, point=""):
@@ -831,6 +834,16 @@ class WorkScreen(Screen):
         self.медиа_бот_текст = label("", wrap=True, font_=font(FONT_TEXT, 20, W.Medium),
                                      color=C["body"])
         бот_сл.addWidget(self.медиа_бот_текст)
+        # Сотрудник нажал в боте что-то другое, и запрос фото и видео уехал вверх по чату.
+        # Сделка цела, но ему это неоткуда узнать: по кнопке бот пишет ему ещё раз.
+        self.b_напомнить = _кнопка(НАПОМНИТЬ, "small")
+        self.b_напомнить.clicked.connect(self.напомнить.emit)
+        self.b_напомнить.hide()
+        бот_сл.addSpacing(6)
+        бот_сл.addWidget(self.b_напомнить, 0, Qt.AlignLeft)
+        self.напомнить_итог = label("", wrap=True, font_=font(FONT_TEXT, 16), color=C["muted"])
+        self.напомнить_итог.hide()
+        бот_сл.addWidget(self.напомнить_итог)
         бот_сл.addStretch(1)
         пара_м.addWidget(self.медиа_бот, 5)
         self.медиа_бот.hide()
@@ -921,6 +934,9 @@ class WorkScreen(Screen):
         self.sim_подпись.hide()
         self.цвет_нужен, self.цвет_выбран = False, None
         self.цвет_блок.hide()
+        self.b_напомнить.hide()
+        self.b_напомнить.setEnabled(True)
+        self.напомнить_итог.hide()
         self.аппарат.setText("Подключите телефон кабелем")
         self.аппарат_подробно.setText("")
         self.ошибка.setText("")
@@ -1242,6 +1258,7 @@ class WorkScreen(Screen):
                     f"Нажмите «{ОТПРАВИТЬ}» внизу. Бот сразу напишет вам и попросит фото и "
                     "видео." + кому)
             elif с.get("медиа_просили") or с.get("фото") or с.get("видео"):
+                self.b_напомнить.setVisible(not с.get("сделка") and not с.get("готово"))
                 self.медиа_бот_заголовок.setText("Откройте бота Оценки")
                 self.медиа_бот_текст.setText(
                     "Бот ждёт от вас по одному: фото экрана с *#06#, лицевую сторону, заднюю и "
@@ -1503,6 +1520,22 @@ class WorkScreen(Screen):
         окно = ВыборЦвета(self, self.цвет_выбран)
         if окно.exec() and окно.выбран:
             self._цвет_нажат(окно.выбран)
+
+    def напоминание(self, итог):
+        """Что вышло с напоминанием в боте. `None` — запрос ушёл, ждём ответа сервера."""
+        if итог is None:
+            self.b_напомнить.setEnabled(False)
+            self.напомнить_итог.setText("Пишем вам в бот…")
+            self.напомнить_итог.setStyleSheet(f"color: {C['muted']}")
+            self.напомнить_итог.show()
+            return
+        ок = bool((итог or {}).get("отправлено"))
+        self.напомнить_итог.setText("Бот написал вам ещё раз — откройте его." if ок else
+                                    "Не вышло: " + str((итог or {}).get("почему") or "сервер не ответил"))
+        self.напомнить_итог.setStyleSheet(f"color: {C['ok'] if ок else C['warntext']}")
+        self.напомнить_итог.show()
+        # подряд не жмём: бот не должен засыпать сотрудника одинаковыми сообщениями
+        QTimer.singleShot(ПАУЗА_НАПОМНИТЬ_МС if ок else 3000, lambda: self.b_напомнить.setEnabled(True))
 
     def показать_починку(self, видно, занято=False, текст=""):
         """Кнопка «Починить связь» в карточке телефона: видна, пока телефон не прочитан."""

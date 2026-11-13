@@ -1743,3 +1743,39 @@ def test_on_windows_the_repair_button_is_always_at_hand(окно, monkeypatch):
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
     assert not окно.s_work.b_связь.isVisible()
+
+
+def test_the_employee_can_ask_the_bot_to_write_again(окно, monkeypatch):
+    """Сотрудник нажал в боте что-то другое, и запрос фото и видео уехал вверх по чату. На
+    кассе, пока она ждёт медиа, есть кнопка «Напомнить в боте»: бот пишет ему ещё раз.
+    До отправки сделки и после её создания кнопки нет — напоминать не о чем."""
+    запросы = _привязанный(окно, monkeypatch)
+    _бот_ответил(окно, запросы[0]["запрос_цены"], цена=185000)
+    _через_сервер(окно, monkeypatch)
+    окно.cfg.update(ocenka_bot_token="t", ocenka_chat_id="1")
+    э = окно.s_work
+    assert э.b_напомнить.isHidden()
+    э._отправить()
+    окно._медиа_спросили({"известно": True, "начали": True, "фото": 1, "видео": False, "готово": False,
+                          "сделка": None, "ошибка": "", "медиа_просили": True, "посылка_ждёт": True})
+    assert not э.b_напомнить.isHidden() and э.b_напомнить.text() == ui_deal.НАПОМНИТЬ
+
+    просили = []
+    monkeypatch.setattr(окно.client, "напомнить_о_медиа",
+                        lambda код: просили.append(код) or {"отправлено": True, "почему": ""})
+    э.b_напомнить.click()
+    assert просили == [окно.код_медиа]
+    assert not э.b_напомнить.isEnabled() and "написал вам ещё раз" in э.напомнить_итог.text()
+
+    # не вышло — причина словами, кнопка скоро снова доступна
+    monkeypatch.setattr(окно.client, "напомнить_о_медиа",
+                        lambda код: {"отправлено": False, "почему": "откройте бота Оценки и нажмите «Старт»"})
+    э.b_напомнить.setEnabled(True)
+    э.b_напомнить.click()
+    assert "Не вышло" in э.напомнить_итог.text() and "«Старт»" in э.напомнить_итог.text()
+
+    окно._медиа_спросили({"известно": True, "начали": True, "фото": 3, "видео": True,
+                          "готово": True, "сделка": 7311, "ошибка": ""})
+    assert not э.b_напомнить.isVisible()
+    окно.начать_сделку()
+    assert э.b_напомнить.isHidden() and э.напомнить_итог.isHidden()

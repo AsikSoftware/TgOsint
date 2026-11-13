@@ -186,6 +186,15 @@ class Client:
             return {"принято": False, "почему": f"сервер не ответил: {exc}"}
         return res if isinstance(res, dict) else {"принято": False, "почему": "сервер не ответил"}
 
+    def напомнить_о_медиа(self, код):
+        """Попросить сервер напомнить сотруднику в боте про фото и видео.
+        → {отправлено: bool, почему: str}."""
+        try:
+            res = self._req("POST", f"/api/kiosk/media/{код}/remind", timeout=30)
+        except Exception as exc:                                 # noqa: BLE001
+            return {"отправлено": False, "почему": f"сервер не ответил: {exc}"}
+        return res if isinstance(res, dict) else {"отправлено": False, "почему": "сервер не ответил"}
+
     def отправить_посылку(self, код, посылка):
         """Сделку — боту через наш сервер. → {принято: bool, почему: str, сделка: id|None}.
 

@@ -1579,7 +1579,8 @@ def test_missing_colour_is_chosen_with_a_button_before_sending(окно):
     э.цвет_кнопки["DEEP PURPLE"].click()
     assert э.цвет_выбран == "DEEP PURPLE"
     assert э.цвет_кнопки["DEEP PURPLE"].isChecked() and not э.цвет_кнопки["BLACK"].isChecked()
-    assert э.цвет_подпись.isHidden() and э.b_отправить.isEnabled() and э.почему_нельзя() == ""
+    assert "DEEP PURPLE" in э.цвет_подпись.text()      # что уйдёт в сделку, сказано словами
+    assert э.b_отправить.isEnabled() and э.почему_нельзя() == ""
 
     э.цвет_кнопки["GOLD"].click()                     # передумал — выбран один, последний
     assert э.цвет_выбран == "GOLD" and not э.цвет_кнопки["DEEP PURPLE"].isChecked()
@@ -1608,7 +1609,8 @@ def test_any_colour_of_the_dictionary_can_be_taken_from_the_full_list(окно):
     э = _без_цвета(окно)
     assert э.цвет_другой.text() == "Другой цвет…"
     список = ui_deal.ВыборЦвета(э, None)
-    assert {b.text() for b in список.findChildren(QPushButton) if b.objectName() == "chip"} == set(colours.КАНОН)
+    assert {b.property("слово") for b in список.findChildren(QPushButton)
+            if b.objectName() == "chip"} == set(colours.КАНОН)
     список.deleteLater()
 
     э._цвет_нажат("BURGUNDY")                         # то, что вернёт окно со списком
@@ -1663,3 +1665,23 @@ def test_cable_colour_code_does_not_answer_for_the_employee(окно):
     э = окно.s_work
     assert э.цвет_нужен and not э.цвет_блок.isHidden() and э.цвет_выбран is None
     assert not any(b.isChecked() for b in э.цвет_кнопки.values())
+
+
+def test_buttons_speak_apple_and_the_deal_gets_the_dictionary_word(окно, monkeypatch):
+    """На кнопке — название Apple для этой модели: сотрудник узнаёт телефон по «Natural
+    Titanium», а не по NATURAL. В сделку и в название товара уходит короткое слово словаря,
+    и экран говорит его сразу после выбора."""
+    import httpx
+    окно.cfg.update({"ocenka_bot_token": "123:ABC", "ocenka_chat_id": "-1001"})
+    э = _без_цвета(окно, модель="iPhone 15 Pro")
+    assert [b.text() for b in э.цвет_кнопки.values()] == [
+        "Black Titanium", "White Titanium", "Blue Titanium", "Natural Titanium"]
+    assert tuple(э.цвет_кнопки) == ("BLACK", "WHITE", "BLUE", "NATURAL")
+    э.цвет_кнопки["NATURAL"].click()
+    assert э.цвет_выбран == "NATURAL" and э.цвет_подпись.text() == "В сделку уйдёт: NATURAL"
+    поймано = _через_сервер(окно, monkeypatch)
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("в чат слать было незачем"))
+    э._отправить()
+    окно.tasks[-1].wait(5000)
+    QApplication.processEvents()
+    assert поймано["посылка"]["сделка"]["color"] == "NATURAL"

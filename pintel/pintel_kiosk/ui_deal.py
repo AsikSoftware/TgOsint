@@ -173,8 +173,11 @@ def _образец(имя, размер=18):
     return QIcon(pm)
 
 
-def _кнопка_цвета(имя, размер=15):
-    b = QPushButton(имя)
+def _кнопка_цвета(имя, размер=15, модель=None):
+    """На кнопке — название Apple для этой модели («Natural Titanium»): по нему сотрудник
+    узнаёт телефон. В сделку уходит слово словаря (`слово` — NATURAL)."""
+    b = QPushButton(colours.название(имя, модель))
+    b.setProperty("слово", имя)
     b.setObjectName("chip")
     b.setCheckable(True)
     b.setCursor(Qt.PointingHandCursor)
@@ -661,7 +664,7 @@ class WorkScreen(Screen):
 
         # Цвет касса берёт из базы IMEI. Блок появляется, только когда база цвета не дала:
         # тогда его выбирает сотрудник — кнопкой из словаря (pintel_core.colours), без ввода.
-        self.цвет_нужен, self.цвет_выбран, self.цвет_кнопки = False, None, {}
+        self.цвет_нужен, self.цвет_выбран, self.цвет_кнопки, self.цвет_модель = False, None, {}, None
         self.цвет_блок = QWidget()
         self.цвет_блок.setStyleSheet(QSS_ЦВЕТА)
         цл = QVBoxLayout(self.цвет_блок)
@@ -1437,6 +1440,7 @@ class WorkScreen(Screen):
         Отчёт на экране перерисовывается не раз (поздний вердикт Apple, ответ базы IMEI),
         поэтому уже сделанный выбор здесь не сбрасывается: его снимает только новая сделка."""
         self.цвет_нужен = not colours.цвет(пас.get("цвет"))
+        self.цвет_модель = пас.get("модель")
         self.цвет_блок.setVisible(self.цвет_нужен)
         if not self.цвет_нужен:
             self.цвет_выбран = None                    # база ответила — берём её слово
@@ -1457,7 +1461,7 @@ class WorkScreen(Screen):
                 w.deleteLater()                       # и прежние кнопки рисовались бы под новыми
         self.цвет_кнопки = {}
         for n, имя in enumerate(имена):
-            b = _кнопка_цвета(имя)
+            b = _кнопка_цвета(имя, модель=self.цвет_модель)
             b.clicked.connect(lambda _=False, имя=имя: self._цвет_нажат(имя))
             self.цвет_сетка.addWidget(b, n // 2, n % 2)
             self.цвет_кнопки[имя] = b
@@ -1471,8 +1475,11 @@ class WorkScreen(Screen):
     def _показать_выбор(self):
         for k, b in self.цвет_кнопки.items():
             b.setChecked(k == self.цвет_выбран)
-        self.цвет_подпись.setText("" if self.цвет_выбран else "По базе цвет не определился — выберите.")
-        self.цвет_подпись.setVisible(not self.цвет_выбран)
+        # На кнопке название Apple, а в товаре будет короткое слово — говорим его сразу,
+        # чтобы «Natural Titanium» на экране и NATURAL в карточке не выглядели ошибкой.
+        self.цвет_подпись.setText(f"В сделку уйдёт: {self.цвет_выбран}" if self.цвет_выбран
+                                  else "По базе цвет не определился — выберите.")
+        self.цвет_подпись.show()
 
     def _цвет_нажат(self, имя):
         """Сотрудник выбрал цвет — кнопкой модели или в полном списке."""

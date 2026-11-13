@@ -145,3 +145,27 @@ def test_model_lists_and_swatches_speak_the_dictionary():
         assert set(цвета) <= colours.КАНОН, модель
         assert colours.цвета_модели(модель.upper()) == цвета      # регистр и пробелы не важны
     assert colours.цвета_модели("iPhone 99") == () and colours.цвета_модели(None) == ()
+
+
+@pytest.mark.parametrize("слово,модель,ждём", [
+    ("NATURAL", "iPhone 15 Pro", "Natural Titanium"), ("BLUE", "iPhone 15 Pro Max", "Blue Titanium"),
+    ("DESERT", "iPhone 16 Pro", "Desert Titanium"), ("BLACK", "iPhone 14 Pro", "Space Black"),
+    ("BLACK", "iPhone 15", "Black"), ("RED", "iPhone 13", "(PRODUCT)RED"),
+    ("GRAY", "iPhone 11 Pro", "Space Gray"), ("ORANGE", "iPhone 17 Pro", "Cosmic Orange"),
+    ("GOLD", "iPhone Air", "Light Gold"), ("DEEP PURPLE", "iPhone 14 Pro", "Deep Purple"),
+    ("BURGUNDY", "iPhone 18 Pro Max", "Burgundy"), ("SKY BLUE", None, "Sky Blue"),
+])
+def test_button_caption_is_the_apple_name_for_the_model(слово, модель, ждём):
+    assert colours.название(слово, модель) == ждём
+
+
+def test_every_apple_name_reads_back_as_its_dictionary_word():
+    """Подпись на кнопке и слово в сделке — одно и то же, сказанное двумя способами: полное
+    название Apple обязано словарём возвращаться в то самое короткое слово."""
+    for модель, названия in colours.НАЗВАНИЯ_APPLE.items():
+        assert set(названия) <= set(colours.цвета_модели(модель)), модель
+        for слово, имя in названия.items():
+            assert colours.цвет(имя) == слово, (модель, имя)
+    for модель, цвета in colours.ЦВЕТА_МОДЕЛЕЙ.items():
+        for слово in цвета:
+            assert colours.цвет(colours.название(слово, модель)) == слово, (модель, слово)

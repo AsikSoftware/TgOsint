@@ -400,3 +400,18 @@ def test_the_colour_choice_holds_a_quarter_larger_font(открыть, круп�
     экран.показать({**отчёт, "паспорт": {**отчёт["паспорт"], "модель": "iPhone 13", "цвет": None}})
     экран.правая.setCurrentIndex(ui_deal.СТР_ЦЕНА)
     assert _замечания(экран) == [], "шесть цветов крупным шрифтом"
+
+
+@pytest.mark.parametrize("модель", ["iPhone 15 Pro", "iPhone 16 Pro Max", "iPhone 13 Pro", "iPhone 11 Pro"])
+def test_long_apple_names_fit_on_the_colour_buttons(открыть, крупный_шрифт, отчёт, модель):
+    """«Natural Titanium», «Desert Titanium», «Midnight Green» — самые длинные подписи. Они
+    обязаны помещаться на кнопке и крупным шрифтом тоже: обрезанное название цвета хуже
+    короткого."""
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
+    экран.set_клиент("Зама", "+77058837953")
+    экран.показать({**отчёт, "паспорт": {**отчёт["паспорт"], "модель": модель, "цвет": None}})
+    экран.правая.setCurrentIndex(ui_deal.СТР_ЦЕНА)
+    assert _замечания(экран) == [], модель
+    экран._цвет_нажат(next(iter(экран.цвет_кнопки)))
+    QApplication.processEvents()
+    assert _замечания(экран) == [], модель + ", цвет выбран"

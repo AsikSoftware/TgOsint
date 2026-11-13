@@ -195,7 +195,37 @@ _17_PRO = ("SILVER", "ORANGE", "DEEP BLUE")
 ВСЕ_ЦВЕТА = tuple(ОБРАЗЦЫ)
 
 
+# Как цвет называет сама Apple — для подписи на кнопке. Сотрудник узнаёт телефон по
+# «Natural Titanium» и «Space Black», а в сделку и в название товара уходит короткое слово
+# словаря (NATURAL, BLACK). Здесь только то, что отличается от слова с заглавной буквы.
+_ТИТАН_15 = {"BLACK": "Black Titanium", "WHITE": "White Titanium", "BLUE": "Blue Titanium",
+             "NATURAL": "Natural Titanium"}
+_ТИТАН_16 = {"BLACK": "Black Titanium", "WHITE": "White Titanium", "NATURAL": "Natural Titanium",
+             "DESERT": "Desert Titanium"}
+_КРАСНЫЙ = {"RED": "(PRODUCT)RED"}
+_СЕРЫЙ = {"GRAY": "Space Gray"}
+НАЗВАНИЯ_APPLE = {
+    "iPhone XR": _КРАСНЫЙ, "iPhone XS": _СЕРЫЙ, "iPhone XS Max": _СЕРЫЙ,
+    "iPhone 11": _КРАСНЫЙ, "iPhone 11 Pro": _СЕРЫЙ, "iPhone 11 Pro Max": _СЕРЫЙ,
+    "iPhone 12": _КРАСНЫЙ, "iPhone 12 mini": _КРАСНЫЙ,
+    "iPhone 13": _КРАСНЫЙ, "iPhone 13 mini": _КРАСНЫЙ,
+    "iPhone 14": _КРАСНЫЙ, "iPhone 14 Plus": _КРАСНЫЙ,
+    "iPhone 14 Pro": {"BLACK": "Space Black"}, "iPhone 14 Pro Max": {"BLACK": "Space Black"},
+    "iPhone 15 Pro": _ТИТАН_15, "iPhone 15 Pro Max": _ТИТАН_15,
+    "iPhone 16 Pro": _ТИТАН_16, "iPhone 16 Pro Max": _ТИТАН_16,
+    "iPhone 17 Pro": {"ORANGE": "Cosmic Orange"}, "iPhone 17 Pro Max": {"ORANGE": "Cosmic Orange"},
+    "iPhone Air": {"BLACK": "Space Black", "GOLD": "Light Gold"},
+}
+
 _ПО_ИМЕНИ = {re.sub(r"\s+", "", имя).lower(): цвета for имя, цвета in ЦВЕТА_МОДЕЛЕЙ.items()}
+_НАЗВАНИЯ = {re.sub(r"\s+", "", имя).lower(): d for имя, d in НАЗВАНИЯ_APPLE.items()}
+
+
+def название(слово, модель=None) -> str:
+    """Подпись на кнопке: как цвет называет Apple у этой модели. Не знаем особого названия —
+    слово словаря с заглавных букв («DEEP PURPLE» → «Deep Purple»)."""
+    свои = _НАЗВАНИЯ.get(re.sub(r"\s+", "", str(модель or "")).lower(), {})
+    return свои.get(слово) or str(слово or "").title()
 
 
 def цвета_модели(модель) -> tuple:

@@ -20,6 +20,8 @@ Luhn до запроса, кэш по IMEI+служба (на сервере —
 """
 import html, json, os, re, time, urllib.parse, urllib.request
 
+from .. import colours
+
 API = "https://sickw.com/api.php"
 SERVICE_FULL = 61          # iPHONE CARRIER & FMI & BLACKLIST — аппарат на кабеле
 SERVICE_SEALED = 147       # запечатанный: по IMEI с коробки — модель, объём, цвет, активация
@@ -160,34 +162,8 @@ FMI_EXACT = ("iCloud Lock", "Find My iPhone", "FMI", "FMI Status", "iCloud Statu
 FMI_SUBS = ("find my", "fmi", "icloud", "activation lock")
 
 
-# Код/слово цвета из GSX → по-русски. Коды вида ORN видны в Model Description
-# («IPHONE 17 PRO,NAJP,256GB,ORN»), слова — в поле Model («iPhone 12 64GB Black»).
-COLOURS = {
-    "BLACK": "чёрный", "BLK": "чёрный", "WHITE": "белый", "WHT": "белый",
-    "SILVER": "серебристый", "SLV": "серебристый", "GOLD": "золотой", "GLD": "золотой",
-    "BLUE": "синий", "BLU": "синий", "GREEN": "зелёный", "GRN": "зелёный", "RED": "красный",
-    "YELLOW": "жёлтый", "YLW": "жёлтый", "PINK": "розовый", "PNK": "розовый",
-    "PURPLE": "фиолетовый", "PRP": "фиолетовый", "ORANGE": "оранжевый", "ORN": "оранжевый",
-    "GRAY": "серый космос", "GREY": "серый космос", "GRY": "серый космос", "SPACE GRAY": "серый космос",
-    "SPG": "серый космос", "MIDNIGHT": "тёмная ночь", "MDN": "тёмная ночь",
-    "STARLIGHT": "сияющая звезда", "STR": "сияющая звезда", "GRAPHITE": "графитовый", "GRA": "графитовый",
-    "SIERRA BLUE": "сьерра-блю", "PACIFIC BLUE": "тихоокеанский синий", "NATURAL": "натуральный титан",
-    "NAT": "натуральный титан", "NATURAL TITANIUM": "натуральный титан", "DESERT": "пустынный титан",
-    "DST": "пустынный титан", "DESERT TITANIUM": "пустынный титан", "TEAL": "бирюзовый", "TEL": "бирюзовый",
-    "ULTRAMARINE": "ультрамарин", "ULT": "ультрамарин", "LAVENDER": "лавандовый", "LAV": "лавандовый",
-    "SAGE": "шалфейный", "SGE": "шалфейный", "MIST BLUE": "туманно-голубой", "MST": "туманно-голубой",
-    "SKY BLUE": "небесно-голубой", "SKY": "небесно-голубой", "CLOUD WHITE": "облачно-белый",
-    "CLD": "облачно-белый", "DEEP BLUE": "тёмно-синий", "DBL": "тёмно-синий", "DEEP PURPLE": "тёмно-фиолетовый",
-    "DPR": "тёмно-фиолетовый", "SPACE BLACK": "чёрный космос", "SPB": "чёрный космос",
-    "CORAL": "коралловый", "CRL": "коралловый", "ROSE GOLD": "розовое золото", "RSG": "розовое золото",
-    "JET BLACK": "чёрный оникс", "ALPINE GREEN": "альпийский зелёный", "COSMIC ORANGE": "оранжевый",
-    "BLACK TITANIUM": "чёрный титан", "WHITE TITANIUM": "белый титан", "BLUE TITANIUM": "синий титан",
-}
-
-
-def colour_ru(word):
-    w = str(word or "").strip()
-    return COLOURS.get(w.upper(), w.title() if w else None)
+# Цвет из GSX приходит кодом (ORN в Model Description «IPHONE 17 PRO,NAJP,256GB,ORN») или
+# словом (поле Model «iPhone 12 64GB Black»). Одним словом его называет pintel_core.colours.
 
 
 def parse_gsx_description(desc):
@@ -265,7 +241,11 @@ def normalize(raw_fields):
     model = _pick(f, "Model", "Description") or gsx.get("модель", "")
     cap = re.search(r"\b(\d+)\s?(GB|TB)\b", model, re.I)
     colour_raw = цвет_из_описания(_pick(f, "Model")) or gsx.get("цвет_код", "")
-    colour = colour_ru(colour_raw)
+    # Сначала — цвет из закрытого списка; не нашли — ищем его в сплошном описании («IPHONE 14
+    # PRO GOLD 256GB-RUS», запятых нет, отдельного поля цвета тоже); и только потом пропускаем
+    # незнакомое слово как есть.
+    colour = (colours.известный(colour_raw) or colours.цвет_в_тексте(_pick(f, "Model Description"))
+              or colours.цвет(colour_raw))
     blk, blk_flag = _strictest(_all(f, BLK_EXACT, BLK_SUBS), blacklist_flag)
     fmi, fmi_on = _strictest(_all(f, FMI_EXACT, FMI_SUBS), fmi_flag)
     carrier = _pick(f, "Locked Carrier", "Carrier")

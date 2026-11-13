@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, null, or_, select
 
+from pintel_core import colours
+
 from .. import audit
 from ..config import settings
 from ..db import now
@@ -92,7 +94,10 @@ def create_from_kiosk(db, kiosk, payload: dict) -> tuple[Evaluation, bool]:
         client_id=cid or secrets.token_hex(8), number=None, day=day,
         kiosk_id=kiosk.id, point_id=kiosk.point_id, device_id=device.id if device else None,
         serial=serial, imei=(pas.get("imei") or None), model_name=pas.get("модель"),
-        model_code=pas.get("код_модели"), capacity_gb=sto.get("объём_гб"), colour=pas.get("цвет"),
+        model_code=pas.get("код_модели"), capacity_gb=sto.get("объём_гб"),
+        # отчёт собирает касса, а кассы прежних сборок называют цвет по-русски или как пришло
+        # из базы IMEI («Naturl Ttnm») — в базу кладём одним словарём
+        colour=colours.цвет(pas.get("цвет")),
         ios=pas.get("ios"), battery_health=bat.get("здоровье_%"), battery_cycles=bat.get("циклы"),
         verdict=(rep.get("итог") or {}).get("вердикт"), price_offer=price.get("цена"),
         price_column=price.get("основание"), apple_summary=apple_summary(rep)[:120],

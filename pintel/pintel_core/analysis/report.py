@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Слепок → отчёт. Главный принцип: отсутствие данных НЕ превращается в вердикт."""
 from . import battery, legal, pairing, parts as parts_mod, passport, serials, storage
+from .. import colours
 from ..devicelink import jailbreak, nand
 from ..devicelink import panic as panic_mod
 from ..devicelink.nodes import ENCLOSURE_COLOURS, num
@@ -71,10 +72,12 @@ def build(snap):
     code = num(raw_code) if raw_code is not None else None
     pas["код_цвета_корпуса"] = int(code) if code is not None else None
     pas["цвет_по_коду"] = ENCLOSURE_COLOURS.get(pas["код_цвета_корпуса"]) if code is not None else None
+    # Цвет — одним словарём (pintel_core.colours): английское слово заглавными. Ответ базы
+    # IMEI проводим через словарь ещё раз: в слепках и кэше до 13.11.2026 он лежит по-русски.
     if sk and sk.get("цвет") and not pas["цвет"]:
-        pas["цвет"] = sk["цвет"]
+        pas["цвет"] = colours.цвет(sk["цвет"]) or colours.цвет(sk.get("цвет_исходный"))
     if not pas["цвет"] and pas["цвет_по_коду"]:
-        pas["цвет"] = pas["цвет_по_коду"]
+        pas["цвет"] = colours.цвет(pas["цвет_по_коду"])       # из пары — первое слово
     jb = snap.get("jailbreak")
     pan = snap.get("panic") or {}
     # Единый вердикт по деталям: кабель (привязка + печать Apple) — основа, журнал — обогащение.

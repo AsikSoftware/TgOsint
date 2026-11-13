@@ -7,6 +7,7 @@
 чек и посылка в Оценку читали его одинаково; детали и батарея честно «не проверялись» —
 отсутствие данных не превращается в вердикт.
 """
+from .. import colours
 from ..external import rfs as rfs_mod
 
 ИТОГ_ДЕТАЛЕЙ = "запечатан"
@@ -18,7 +19,8 @@ def build(sk, imeis, рфс=None, не_проверено=None):
     пас = {"модель": sk.get("модель") or "iPhone", "код_модели": None, "ios": None,
            "серийник": None, "imei": имеи[0] if имеи else None,
            "imei2": имеи[1] if len(имеи) > 1 else None,
-           "цвет": sk.get("цвет"), "цвет_по_коду": None, "esim": None, "esim_only": None,
+           "цвет": colours.цвет(sk.get("цвет")) or colours.цвет(sk.get("цвет_исходный")),
+           "цвет_по_коду": None, "esim": None, "esim_only": None,
            "sim": None, "sim_в_лотке": None}
     бат = {"здоровье_%": None, "циклы": None, "подделка": [], "есть_данные": False, "сомнения": []}
     fmi = sk.get("fmi_включён")

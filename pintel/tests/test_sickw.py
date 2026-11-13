@@ -48,7 +48,7 @@ def test_service61_fixture_stays_honest():
     raw = json.load(open(os.path.join(HERE, "fixtures_real", "sickw_357140400643287_61.json"), encoding="utf-8"))
     n = sickw.normalize(raw["все_поля"])
     assert n["в_чёрном_списке"] is None and n["fmi_включён"] is None
-    assert n["sim_lock"] == "разблокирован" and n["цвет"] == "чёрный"
+    assert n["sim_lock"] == "разблокирован" and n["цвет"] == "BLACK"
 
 
 def test_lookup_many_merges_caches_and_survives_one_bad_service(monkeypatch, tmp_path):
@@ -124,11 +124,11 @@ def test_report_fmi_from_sickw_only_is_todo_not_stop():
 
 @pytest.mark.parametrize("model,цвет", [
     ("iPhone 14 Pro A2891", None),                      # в сделке 7093 сюда уехало «Pro A2891»
-    ("iPhone 14 Pro Space Black 256GB", "чёрный космос"),
-    ("iPhone 15 Pro Max Natural Titanium", "натуральный титан"),
-    ("iPhone SE Red", "красный"),
-    ("iPhone 13 mini Midnight", "тёмная ночь"),
-    ("iPhone 11 Purple", "фиолетовый"),
+    ("iPhone 14 Pro Space Black 256GB", "BLACK"),
+    ("iPhone 15 Pro Max Natural Titanium", "NATURAL"),
+    ("iPhone SE Red", "RED"),
+    ("iPhone 13 mini Midnight", "MIDNIGHT"),
+    ("iPhone 11 Purple", "PURPLE"),
 ])
 def test_colour_does_not_keep_model_variant(model, цвет):
     """Цвет вырезался регуляркой «от начала строки», и она срезала только «iPhone 14 » —
@@ -158,7 +158,7 @@ def test_sealed_service_fields_are_read():
     n = sickw.normalize({"Model Description": "IPHONE 15 PRO,NAJP,256GB,NAT",
                          "Activation Status": "Not Activated", "Sold By": "Apple Retail"})
     assert n["модель"] == "iPhone 15 Pro" and n["объём_гб"] == 256
-    assert n["цвет"] == "натуральный титан"
+    assert n["цвет"] == "NATURAL"
     assert n["активация"] == "Not Activated" and n["активирован"] is False
     assert n["продано"] == "Apple Retail"
     assert sickw.normalize({"Model": "iPhone 12 64GB Black", "Activation Status": "Activated"})["активирован"] is True

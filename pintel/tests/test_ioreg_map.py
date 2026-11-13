@@ -59,7 +59,7 @@ def test_report_jailbreak_and_colour_code():
     snap["mobilegestalt"] = {"DeviceEnclosureColor": 9, "DeviceColor": 1}
     rep = report_mod.build(snap)
     assert any("джейлбрейк" in x for x in rep["внимание"])
-    assert rep["паспорт"]["код_цвета_корпуса"] == 9 and rep["паспорт"]["цвет"] == "синий"
+    assert rep["паспорт"]["код_цвета_корпуса"] == 9 and rep["паспорт"]["цвет"] == "BLUE"
     assert rep["джейлбрейк"].startswith("НАЙДЕНЫ") and rep["mobilegestalt"] == "есть"
 
     snap["mobilegestalt"] = {"недоступен": "DeprecationError: iOS 17.4+"}

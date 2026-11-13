@@ -124,9 +124,12 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
 
     # оценка с киоска, идемпотентно
     rep, snap = real_report()
+    # касса прежней сборки называет цвет как пришло из базы IMEI — сервер кладёт одним словарём
+    rep["паспорт"] = {**rep["паспорт"], "цвет": "Naturl Ttnm"}
     body = {"client_id": "c-1", "report": rep, "snapshot": snap}
     r1 = k.post("/api/kiosk/evaluations", json=body, headers=H).json()
     assert r1["номер"] is None and r1["создана"] is True and r1["ссылка_отчёта"].startswith("http://testserver/r/")
+    db = SessionLocal(); assert db.get(Evaluation, r1["id"]).colour == "NATURAL"; db.close()
     assert "ссылка_данных" not in r1                                 # клиент сам ничего не вводит
     # номер заявки выдаётся, когда сотрудник в кассе записал имя и телефон клиента
     assert admin.post(f"/deal/{r1['id']}/client", data={"client_name": "Айгерим", "client_phone": "+77001112233"}).status_code == 303
@@ -191,7 +194,7 @@ def test_sickw_via_server_uses_db_cache(app, monkeypatch):
     H = точка("Точка-2")
     k = TestClient(app)
     r = k.post("/api/kiosk/sickw", json={"imei": "490154203237518"}, headers=H).json()
-    assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True and r["цвет"] == "чёрный"
+    assert r["в_чёрном_списке"] is False and r["fmi_включён"] is True and r["цвет"] == "BLACK"
     r = k.post("/api/kiosk/sickw", json={"imei": "490154203237518"}, headers=H).json()
     assert r["из_кэша"] is True and len(calls) == 1
     assert k.post("/api/kiosk/sickw", json={"imei": "123"}, headers=H).status_code == 502

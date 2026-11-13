@@ -18,6 +18,7 @@ import logging
 import os
 
 import httpx
+from pintel_core import colours
 from sqlalchemy import create_engine, text
 
 from ..config import settings
@@ -216,7 +217,7 @@ def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> d
             "ddr": int(ev.capacity_gb),
             "akb": (f"{ev.battery_health}%" if ev.battery_health is not None else None),
             "akb_exact": ev.battery_health,
-            "color": (ev.colour or None),
+            "color": colours.цвет(ev.colour),            # прежние оценки хранят цвет по-русски
             "sim": None,
             "box": ev.has_box,
             "cord": ev.has_cord,

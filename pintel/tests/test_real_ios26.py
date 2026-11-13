@@ -3,6 +3,7 @@
 Главные вопросы: читается ли IORegistry на iOS 26, что делать без AIDBus/Rosaline на
 USB-C-аппарате, разбор GSX-описания Sickw."""
 import json, os
+from pintel_core import colours
 from pintel_core.devicelink import snapshot
 from pintel_core.external import sickw
 from pintel_core.analysis import report as report_mod
@@ -25,7 +26,7 @@ def test_iphone12_ios26_reads_like_ios18():
     p, b, m = rep["паспорт"], rep["батарея"], rep["память"]
     assert p["модель"] == "iPhone 12" and p["ios"] == "26.6.1" and p["регион"] == "Россия/СНГ (RM)"
     assert p["sim"] == "SIM не вставлена" and p["esim"] is False
-    assert p["цвет"] == "фиолетовый"
+    assert p["цвет"] == "PURPLE"
     # 77 — то, что показывает сам телефон (минимум за жизнь); 78 дала бы текущая ёмкость
     assert b["здоровье_%"] == 77 and b["здоровье_текущее_%"] == 78
     assert b["циклы"] == 2096 and b["заводская_мАч"] == 2798
@@ -56,7 +57,7 @@ def test_iphone17pro_usb_c():
     p, b, m, leg = rep["паспорт"], rep["батарея"], rep["память"], rep["правовой"]
     assert p["модель"] == "iPhone 17 Pro" and p["регион"] == "Бахрейн/Кувейт (AH)"
     assert p["sim"] == "лотка нет (eSIM-only)" and p["esim_only"] and p["esim"] is True
-    assert p["цвет"] == "оранжевый" and p["выпуск"] is None
+    assert p["цвет"] == "ORANGE" and p["выпуск"] is None
     assert b["здоровье_%"] == 100 and b["циклы"] == 162 and not b["подделка"]
     assert m["объём_гб"] == 256 and "Sandisk" in str(m.get("nand_производитель"))
     assert rep["nand"]["прошивка"] == "2973.120.4" and rep["nand"]["прошивка_совпала_с_nvme"] is True
@@ -97,10 +98,11 @@ def test_sickw_gsx_description_and_flags():
     assert sickw.parse_gsx_description("") == {}
     n = sickw.normalize({"Model Description": "IPHONE 17 PRO,NAJP,1TB,DST", "Loaner Device": "Yes",
                          "Demo Unit": "No", "Sim-Lock Status": "Locked", "Locked Carrier": "AT&T"})
-    assert n["цвет"] == "пустынный титан" and n["объём_гб"] == 1024 and n["модель_строка"] == "iPhone 17 Pro"
+    assert n["цвет"] == "DESERT" and n["объём_гб"] == 1024 and n["модель_строка"] == "iPhone 17 Pro"
     assert n["подменный"] is True and n["демо"] is False and n["восстановленный"] is None
     assert n["sim_lock"].startswith("заблокирован под оператора: AT&T")
-    assert sickw.colour_ru("Black") == "чёрный" and sickw.colour_ru("Mauve") == "Mauve"
+    # цвет — одним словарём: английское слово заглавными; незнакомое проходит как есть
+    assert colours.цвет("Black") == "BLACK" and colours.цвет("Mauve") == "MAUVE"
 
 
 def test_report_loaner_is_stop_and_used_part_is_stop():

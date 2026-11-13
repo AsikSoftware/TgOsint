@@ -34,7 +34,7 @@ def test_report_matches_3utools():
     assert p["серийник"] == "FFXH33T20F0N" and p["серийник_платы"] == "FG120270379PRVVAJ"
     assert p["bluetooth_mac"] == "34:fe:77:8b:e9:36" and p["cellular_mac"] == "34:fe:77:9b:f9:1c"
     assert p["wifi_mac"] == "34:fe:77:8d:0e:8e" and p["sim"] == "SIM не вставлена" and p["esim"]
-    assert p["выпуск"] == "2022, неделя 3" and p["цвет"] == "чёрный"
+    assert p["выпуск"] == "2022, неделя 3" and p["цвет"] == "BLACK"
     # 3uTools показывает 80: он делит ТЕКУЩУЮ ёмкость на заводскую. В Настройках самого
     # телефона стоит 79 (снимок экрана 12.11.2026), и у стойки спорят по экрану телефона, а
     # не по 3uTools. iOS 18 своего числа в журнал не пишет, поэтому считаем от минимума за
@@ -61,6 +61,6 @@ def test_report_matches_3utools():
 def test_sickw_service61_honest():
     raw = json.load(open(os.path.join(HERE, "fixtures_real", "sickw_357140400643287_61.json"), encoding="utf-8"))
     n = sickw.normalize(raw["все_поля"])
-    assert n["цвет"] == "чёрный" and n["цвет_исходный"] == "Black" and n["объём_гб"] == 64 and n["sim_lock"] == "разблокирован"
+    assert n["цвет"] == "BLACK" and n["цвет_исходный"] == "Black" and n["объём_гб"] == 64 and n["sim_lock"] == "разблокирован"
     assert n["дата_покупки"] == "2022-07-05" and "2023-07-04" in n["гарантия"]
     assert n["чёрный_список"] is None and n["icloud"] is None   # услуга 61 этого не отдаёт

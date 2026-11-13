@@ -22,6 +22,8 @@ import html as _html
 import os
 from datetime import datetime
 
+from . import colours
+
 ЛОГОТИП_ФАЙЛ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
 _логотип_кеш = None
 
@@ -219,7 +221,7 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
     телефон_блок = "".join([
         _строка("Память", f"{d['память']} ГБ" if d["память"] else None),
         _строка("Свободно", f"{d['свободно']:.0f} ГБ" if d.get("свободно") else None),
-        _строка("Цвет", d["цвет"]),
+        _строка("Цвет", d["цвет"] or colours.цвет(сделка.get("цвет"))),
         _строка("iOS", d["ios"]),
         _строка("Серийный номер", d["серийник"]),
         _строка("IMEI", d["imei"]),

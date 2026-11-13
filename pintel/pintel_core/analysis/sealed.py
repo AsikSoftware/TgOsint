@@ -19,7 +19,8 @@ def build(sk, imeis, рфс=None, не_проверено=None):
     пас = {"модель": sk.get("модель") or "iPhone", "код_модели": None, "ios": None,
            "серийник": None, "imei": имеи[0] if имеи else None,
            "imei2": имеи[1] if len(имеи) > 1 else None,
-           "цвет": colours.цвет(sk.get("цвет")) or colours.цвет(sk.get("цвет_исходный")),
+           "цвет": colours.уточнить(colours.цвет(sk.get("цвет")) or colours.цвет(sk.get("цвет_исходный")),
+                                    sk.get("модель")),
            "цвет_по_коду": None, "esim": None, "esim_only": None,
            "sim": None, "sim_в_лотке": None}
     бат = {"здоровье_%": None, "циклы": None, "подделка": [], "есть_данные": False, "сомнения": []}

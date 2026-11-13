@@ -19,12 +19,13 @@
 import html
 import re
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLineEdit,
-                               QPushButton, QSizePolicy, QStackedWidget, QTextEdit, QVBoxLayout,
-                               QWidget)
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QLineEdit, QPushButton, QSizePolicy, QStackedWidget, QTextEdit,
+                               QVBoxLayout, QWidget)
 
+from pintel_core import colours
 from pintel_core import history as история_мод
 from pintel_core import phonetest
 from pintel_core.external import ocenka_media
@@ -143,6 +144,81 @@ def _кнопка(текст, вид="primary"):
     b.setCursor(Qt.PointingHandCursor)
     b.setFont(font(FONT_TEXT, РАЗМЕР_КНОПКИ.get(вид, 21), W.Bold))
     return b
+
+
+# Кнопки выбора цвета: слово из словаря и кружок-образец. Выбранная — рамкой и фоном, как
+# активный ряд на остальных экранах.
+QSS_ЦВЕТА = f"""
+QPushButton#chip {{ background: {C['field']}; border: 1px solid {C['line']}; border-radius: 12px;
+                    padding: 9px 12px; text-align: left; color: {C['ink']}; }}
+QPushButton#chip:hover {{ border: 1px solid {C['pale']}; }}
+QPushButton#chip:checked {{ background: {C['tint']}; border: 2px solid {C['action']};
+                            padding: 8px 11px; color: {C['brand']}; }}
+QPushButton#chip_more {{ background: transparent; border: 1px dashed {C['ring']}; border-radius: 12px;
+                         padding: 9px 12px; text-align: left; color: {C['muted']}; }}
+"""
+
+
+def _образец(имя, размер=18):
+    """Кружок цвета на кнопке. Слово главное, кружок — подсказка глазу."""
+    pm = QPixmap(размер * 2, размер * 2)
+    pm.setDevicePixelRatio(2)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QPen(QColor(C["ring"]), 1))
+    p.setBrush(QColor(colours.ОБРАЗЦЫ.get(имя, C["ground"])))
+    p.drawEllipse(QRectF(1, 1, размер - 2, размер - 2))
+    p.end()
+    return QIcon(pm)
+
+
+def _кнопка_цвета(имя, размер=15):
+    b = QPushButton(имя)
+    b.setObjectName("chip")
+    b.setCheckable(True)
+    b.setCursor(Qt.PointingHandCursor)
+    b.setFont(font(FONT_TEXT, размер, W.DemiBold))
+    b.setIcon(_образец(имя))
+    b.setIconSize(QSize(18, 18))
+    return b
+
+
+class ВыборЦвета(QDialog):
+    """Весь словарь цветов — когда модели нет в нашем списке или нужного цвета нет среди её
+    кнопок. Тоже кнопками: клавиатуры в выборе цвета нет нигде."""
+
+    def __init__(self, parent=None, выбран=None):
+        super().__init__(parent)
+        self.setWindowTitle("Цвет телефона")
+        self.setModal(True)
+        self.выбран = None
+        self.setStyleSheet(f"QDialog {{ background: {C['ground']}; }}" + QSS_ЦВЕТА)
+        л = QVBoxLayout(self)
+        л.setContentsMargins(32, 28, 32, 28)
+        л.setSpacing(14)
+        л.addWidget(label("Цвет телефона", font_=font(FONT_HEAD, 26, W.Bold)))
+        л.addWidget(label("Выберите цвет корпуса. Так он будет записан в сделке и в названии товара.",
+                          wrap=True, font_=font(FONT_TEXT, 16), color=C["muted"]))
+        сетка = QGridLayout()
+        сетка.setSpacing(10)
+        for n, имя in enumerate(colours.ВСЕ_ЦВЕТА):
+            b = _кнопка_цвета(имя, 16)
+            b.setMinimumWidth(214)
+            b.setChecked(имя == выбран)
+            b.clicked.connect(lambda _=False, имя=имя: self._взять(имя))
+            сетка.addWidget(b, n // 4, n % 4)
+        л.addLayout(сетка)
+        низ = QHBoxLayout()
+        низ.addStretch(1)
+        отмена = _кнопка("Отмена", "small")
+        отмена.clicked.connect(self.reject)
+        низ.addWidget(отмена)
+        л.addLayout(низ)
+
+    def _взять(self, имя):
+        self.выбран = имя
+        self.accept()
 
 
 def _плашка(текст, фон, цвет):
@@ -583,6 +659,23 @@ class WorkScreen(Screen):
         self.sim_подпись.hide()
         внутри.addWidget(self.sim_подпись)
 
+        # Цвет касса берёт из базы IMEI. Блок появляется, только когда база цвета не дала:
+        # тогда его выбирает сотрудник — кнопкой из словаря (pintel_core.colours), без ввода.
+        self.цвет_нужен, self.цвет_выбран, self.цвет_кнопки = False, None, {}
+        self.цвет_блок = QWidget()
+        self.цвет_блок.setStyleSheet(QSS_ЦВЕТА)
+        цл = QVBoxLayout(self.цвет_блок)
+        цл.setContentsMargins(0, 8, 0, 0)
+        цл.setSpacing(8)
+        цл.addWidget(kicker("ЦВЕТ", 14, 2.4, C["brand"]))
+        self.цвет_подпись = label("", wrap=True, font_=font(FONT_TEXT, 15), color=C["muted"])
+        цл.addWidget(self.цвет_подпись)
+        self.цвет_сетка = QGridLayout()
+        self.цвет_сетка.setSpacing(8)
+        цл.addLayout(self.цвет_сетка)
+        self.цвет_блок.hide()
+        внутри.addWidget(self.цвет_блок)
+
         внутри.addSpacing(8)
         внутри.addWidget(kicker("ЗАМЕТКА", 14, 2.4, C["brand"]))
         self.комментарий = QTextEdit()
@@ -812,6 +905,8 @@ class WorkScreen(Screen):
         self.лоток.setChecked(True)
         self.sim_подпись.setText("")
         self.sim_подпись.hide()
+        self.цвет_нужен, self.цвет_выбран = False, None
+        self.цвет_блок.hide()
         self.аппарат.setText("Подключите телефон кабелем")
         self.аппарат_подробно.setText("")
         self.ошибка.setText("")
@@ -1279,6 +1374,7 @@ class WorkScreen(Screen):
         from pintel_core.external import ocenka
         self.лоток.setChecked(ocenka.sim_для_оценки(пас) == ocenka.SIM_ЛОТОК)
         self._сказать_про_sim(пас)
+        self._спросить_цвет(пас)
         if not self.отправлено:
             # проверка кабелем кончилась — теперь тест на телефоне, он идёт перед медиа
             self.правая.setCurrentIndex(self._стр_после_проверок() if self._тест_закрыт()
@@ -1332,6 +1428,66 @@ class WorkScreen(Screen):
             подпись = "SIM-лоток по телефону не определился — отметьте сами."
         self.sim_подпись.setText(подпись)
         self.sim_подпись.setVisible(bool(подпись))
+
+    # ---------- цвет ----------
+    def _спросить_цвет(self, пас):
+        """Кнопки цвета — только когда цвет не определился сам. Определился — блока нет, и
+        спрашивать сотрудника не о чем.
+
+        Отчёт на экране перерисовывается не раз (поздний вердикт Apple, ответ базы IMEI),
+        поэтому уже сделанный выбор здесь не сбрасывается: его снимает только новая сделка."""
+        self.цвет_нужен = not colours.цвет(пас.get("цвет"))
+        self.цвет_блок.setVisible(self.цвет_нужен)
+        if not self.цвет_нужен:
+            self.цвет_выбран = None                    # база ответила — берём её слово
+            return
+        имена = colours.цвета_модели(пас.get("модель"))
+        if self.цвет_выбран and self.цвет_выбран not in имена:
+            имена = имена + (self.цвет_выбран,)        # взят из полного списка — остаётся кнопкой
+        self._кнопки_цвета(имена)
+        self._показать_выбор()
+
+    def _кнопки_цвета(self, имена):
+        """Кнопки цветов модели в два столбца и «Другой цвет» последней. Модели нет в списке —
+        остаётся одна кнопка, она открывает весь словарь."""
+        while self.цвет_сетка.count():
+            w = self.цвет_сетка.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)                     # сразу с экрана: deleteLater уберёт позже,
+                w.deleteLater()                       # и прежние кнопки рисовались бы под новыми
+        self.цвет_кнопки = {}
+        for n, имя in enumerate(имена):
+            b = _кнопка_цвета(имя)
+            b.clicked.connect(lambda _=False, имя=имя: self._цвет_нажат(имя))
+            self.цвет_сетка.addWidget(b, n // 2, n % 2)
+            self.цвет_кнопки[имя] = b
+        self.цвет_другой = QPushButton("Другой цвет…" if имена else "Выбрать цвет…")
+        self.цвет_другой.setObjectName("chip_more")
+        self.цвет_другой.setCursor(Qt.PointingHandCursor)
+        self.цвет_другой.setFont(font(FONT_TEXT, 15, W.DemiBold))
+        self.цвет_другой.clicked.connect(self._другой_цвет)
+        self.цвет_сетка.addWidget(self.цвет_другой, len(имена) // 2, len(имена) % 2)
+
+    def _показать_выбор(self):
+        for k, b in self.цвет_кнопки.items():
+            b.setChecked(k == self.цвет_выбран)
+        self.цвет_подпись.setText("" if self.цвет_выбран else "По базе цвет не определился — выберите.")
+        self.цвет_подпись.setVisible(not self.цвет_выбран)
+
+    def _цвет_нажат(self, имя):
+        """Сотрудник выбрал цвет — кнопкой модели или в полном списке."""
+        if имя not in colours.КАНОН:
+            return                                    # в сделку идёт только слово словаря
+        self.цвет_выбран = имя
+        if имя not in self.цвет_кнопки:               # взят из полного списка — ставим кнопкой
+            self._кнопки_цвета(tuple(self.цвет_кнопки) + (имя,))
+        self._показать_выбор()
+        self._проверить()
+
+    def _другой_цвет(self):
+        окно = ВыборЦвета(self, self.цвет_выбран)
+        if окно.exec() and окно.выбран:
+            self._цвет_нажат(окно.выбран)
 
     def сказать(self, текст, беда=True):
         """Одна строка под колонками. Беда — красным, ожидание — цветом внимания: «ждём
@@ -1397,6 +1553,7 @@ class WorkScreen(Screen):
         return {"имя": self.имя.text().strip(), "телефон": нормальный_телефон(self.телефон.text()),
                 "коробка": self.коробка.isChecked(), "шнур": self.шнур.isChecked(),
                 "sim": "Стандарт" if self.лоток.isChecked() else "E-sim",   # есть лоток / нет
+                "цвет": self.цвет_выбран,                # только когда выбирал сотрудник
                 "комментарий": self.комментарий.toPlainText().strip(),
                 "тест": dict(self.тест), "тест_пропущен": self.тест_пропущен,
                 "ручная": ocenka_media.разобрать(self.ручная)}
@@ -1421,7 +1578,9 @@ class WorkScreen(Screen):
         d = self.данные()
         # Привязанной сделке медиа перед отправкой не нужны: бот попросит их сам, после неё.
         медиа = True if self.привязка is not None else self._медиа_готовы()
-        return bool(self.готово and not self.отправлено and d["имя"] and d["телефон"]
+        # Цвет, которого не дала база, сотрудник выбирает здесь: в боте его больше не спросят.
+        цвет = bool(self.цвет_выбран) or not self.цвет_нужен
+        return bool(self.готово and not self.отправлено and d["имя"] and d["телефон"] and цвет
                     and self._тест_закрыт() and ocenka_media.готова(self.ручная) and медиа)
 
     def почему_нельзя(self) -> str:
@@ -1432,6 +1591,8 @@ class WorkScreen(Screen):
         d = self.данные()
         if not (d["имя"] and d["телефон"]):
             return "Впишите имя и телефон клиента."
+        if self.цвет_нужен and not self.цвет_выбран:
+            return "Выберите цвет телефона."
         if not self._тест_закрыт():
             осталось = [имя for _, имя in phonetest.пропущенные(self.тест)]
             return ("Нужен тест на телефоне клиента: " + ", ".join(осталось[:4])
@@ -1475,7 +1636,8 @@ class WorkScreen(Screen):
             # отметить 8 из 8», «Что уже дошло»). Третий раз, строкой внизу, это был шум.
             # Внизу говорим только то, чего на экране больше нет: не вписан клиент.
             d = self.данные()
-            мешает = "" if (d["имя"] and d["телефон"]) else self.почему_нельзя()
+            цвет_есть = bool(self.цвет_выбран) or not self.цвет_нужен
+            мешает = "" if (d["имя"] and d["телефон"] and цвет_есть) else self.почему_нельзя()
             # Затираем только свою же подсказку: на этой строке живут и сообщения о беде
             # («тест не прошёл», «телефон с заменой»), и потерять их нельзя.
             if мешает or self.ошибка.text() == getattr(self, "_подсказка", ""):
@@ -1488,6 +1650,7 @@ class WorkScreen(Screen):
         d = self.данные()
         нет = [имя for имя, есть in (("имя клиента", d["имя"]), ("телефон клиента", d["телефон"]),
                                      ("результат проверки", self.готово),
+                                     ("цвет телефона", bool(self.цвет_выбран) or not self.цвет_нужен),
                                      ("тест на телефоне", self._тест_закрыт()),
                                      ("проверки руками", ocenka_media.готова(self.ручная)),
                                      ("фото и видео в боте",

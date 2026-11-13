@@ -78,6 +78,7 @@ def build(snap):
         pas["цвет"] = colours.цвет(sk["цвет"]) or colours.цвет(sk.get("цвет_исходный"))
     if not pas["цвет"] and pas["цвет_по_коду"]:
         pas["цвет"] = colours.цвет(pas["цвет_по_коду"])       # из пары — первое слово
+    pas["цвет"] = colours.уточнить(pas["цвет"], pas.get("модель"))
     jb = snap.get("jailbreak")
     pan = snap.get("panic") or {}
     # Единый вердикт по деталям: кабель (привязка + печать Apple) — основа, журнал — обогащение.

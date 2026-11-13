@@ -107,3 +107,41 @@ def test_old_report_falls_back_to_the_raw_word():
     rep = sealed.build({"модель": "iPhone 15 Pro Max", "объём_гб": 256, "цвет": "Naturl Ttnm",
                         "цвет_исходный": "NATURL TTNM"}, ["356789012345678"])
     assert rep["паспорт"]["цвет"] == "NATURAL"
+
+
+# ---------------------------------------------------------------- цвета по моделям
+
+@pytest.mark.parametrize("слово,модель,ждём", [
+    ("BLUE", "iPhone 17 Pro", "DEEP BLUE"),          # база пишет «BLU», цвет называется DEEP BLUE
+    ("BLUE", "iPhone 13 Pro", "SIERRA BLUE"),
+    ("GREEN", "iPhone 13 Pro Max", "ALPINE GREEN"),
+    ("PURPLE", "iPhone 14 Pro", "DEEP PURPLE"),
+    ("WHITE", "iPhone Air", "CLOUD WHITE"),
+    ("BLUE", "iPhone 17", "MIST BLUE"),
+    ("BLUE", "iPhone 15 Pro", "BLUE"),               # своё слово — не трогаем
+    ("BLUE", "iPhone 12", "BLUE"),
+    ("BLACK", "iPhone 16 Promax", "BLACK"),          # так модель пишет база IMEI
+    ("BURGUNDY", "iPhone 18 Pro Max", "BURGUNDY"),   # модели нет в списке — не трогаем
+    ("MAUVE", "iPhone 14 Pro", "MAUVE"),             # нового цвета список может не знать
+    ("BLUE", None, "BLUE"), (None, "iPhone 14 Pro", None),
+])
+def test_database_word_becomes_the_models_own_colour(слово, модель, ждём):
+    """Сотрудник кнопкой выбирает полное слово, база сокращает. Без сверки один и тот же
+    цвет лёг бы в товары под двумя названиями — «BLUE» и «DEEP BLUE» у iPhone 17 Pro."""
+    assert colours.уточнить(слово, модель) == ждём
+
+
+def test_imei_database_short_word_is_matched_to_the_model():
+    assert sickw.normalize({"Model Description": "IPHONE 17 PRO,NAJP,256GB,BLU"})["цвет"] == "DEEP BLUE"
+    assert sickw.normalize({"Model Description": "IPHONE 12,ROW,128GB,BLUE"})["цвет"] == "BLUE"
+
+
+def test_model_lists_and_swatches_speak_the_dictionary():
+    """Кнопки выбора цвета строятся из этих таблиц: слово не из словаря на кнопке — это
+    слово не из словаря в сделке и в названии товара."""
+    assert set(colours.ОБРАЗЦЫ) == set(colours.КАНОН)
+    for модель, цвета in colours.ЦВЕТА_МОДЕЛЕЙ.items():
+        assert цвета and len(set(цвета)) == len(цвета), модель
+        assert set(цвета) <= colours.КАНОН, модель
+        assert colours.цвета_модели(модель.upper()) == цвета      # регистр и пробелы не важны
+    assert colours.цвета_модели("iPhone 99") == () and colours.цвета_модели(None) == ()

@@ -18,9 +18,9 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
 
-from PySide6.QtWidgets import QApplication            # noqa: E402
+from PySide6.QtWidgets import QApplication, QPushButton   # noqa: E402
 
-from pintel_core import reference                      # noqa: E402
+from pintel_core import colours, reference             # noqa: E402
 from pintel_core.analysis import report as report_mod  # noqa: E402
 from pintel_core.devicelink import snapshot            # noqa: E402
 from pintel_kiosk import app as kapp                   # noqa: E402
@@ -47,10 +47,16 @@ def окно(monkeypatch):
     w.deleteLater()
 
 
-def _отчёт(архив):
+def _отчёт(архив, цвет="BLACK"):
+    """Отчёт по эталону. В эталонах ответа базы IMEI нет, а с ним и цвета; у живого телефона
+    цвет есть почти всегда (32 из 34 в боевых проверках), поэтому по умолчанию он тут стоит.
+    `цвет=None` — тот редкий телефон, по которому база цвета не дала: его выбирает сотрудник."""
     snap, _ = reference.load_bundle(os.path.join(HERE, "fixtures_real", "эталоны", архив),
                                     loads=snapshot.loads)
-    return report_mod.build(snap)
+    rep = report_mod.build(snap)
+    if цвет and not rep["паспорт"].get("цвет"):
+        rep["паспорт"]["цвет"] = цвет
+    return rep
 
 
 АНКЕТА = {"состояние": "норма", "имя": "", "телефон": "", "imei": []}
@@ -1525,3 +1531,119 @@ def test_a_new_deal_forgets_the_previous_employee_and_price(окно, monkeypatc
     assert окно.код_медиа and окно.код_медиа != прежний
     assert окно.привязан is False and окно.s_work.привязка is None
     assert окно.s_work.цена == {} and окно.s_link.привязан is False
+
+
+# ---------------------------------------------------------------- цвет: выбирает сотрудник
+
+def _без_цвета(окно, модель=None):
+    """Телефон, по которому база IMEI цвета не дала; всё остальное для отправки закрыто."""
+    окно.cfg.setdefault("ocenka_bot", "")
+    окно.cfg["ocenka_bot"] = окно.cfg["ocenka_bot"] or "PintelOlxBot"
+    окно.начать_сделку()
+    окно.анкета_готова(АНКЕТА)
+    окно.state = "scanning"
+    rep = _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip", цвет=None)
+    if модель:
+        rep["паспорт"]["модель"] = модель
+    окно.on_done({"report": rep, "client_id": "x"})
+    _тест_прошёл(окно)
+    _руками_отмечено(окно)
+    _медиа_собраны(окно)
+    окно.s_work.имя.setText("Зама")
+    окно.s_work.телефон.setText("+77058837953")
+    return окно.s_work
+
+
+def test_colour_from_the_database_is_not_asked(окно):
+    """База IMEI цвет дала — блока на экране нет, сотрудника не спрашиваем, отправке ничто
+    не мешает."""
+    _чистый(окно)
+    э = окно.s_work
+    э.имя.setText("Зама")
+    э.телефон.setText("+77058837953")
+    assert э.цвет_блок.isHidden() and not э.цвет_нужен
+    assert э.данные()["цвет"] is None and э.b_отправить.isEnabled()
+
+
+def test_missing_colour_is_chosen_with_a_button_before_sending(окно):
+    """База цвета не дала (так у 2 телефонов из 34). В боте его больше не спросят, значит
+    сделка без цвета уйти не должна: отправка закрыта, пока сотрудник не выбрал кнопкой."""
+    э = _без_цвета(окно)
+    assert not э.цвет_блок.isHidden() and э.цвет_нужен
+    assert tuple(э.цвет_кнопки) == ("BLACK", "SILVER", "GOLD", "DEEP PURPLE")    # цвета iPhone 14 Pro
+    assert not э.b_отправить.isEnabled()
+    assert э.почему_нельзя() == "Выберите цвет телефона." and "цвет" in э.ошибка.text()
+    э._отправить()                                    # и мимо кнопки тоже не уйдёт
+    assert "цвет телефона" in э.ошибка.text() and not э.отправлено
+
+    э.цвет_кнопки["DEEP PURPLE"].click()
+    assert э.цвет_выбран == "DEEP PURPLE"
+    assert э.цвет_кнопки["DEEP PURPLE"].isChecked() and not э.цвет_кнопки["BLACK"].isChecked()
+    assert э.цвет_подпись.isHidden() and э.b_отправить.isEnabled() and э.почему_нельзя() == ""
+
+    э.цвет_кнопки["GOLD"].click()                     # передумал — выбран один, последний
+    assert э.цвет_выбран == "GOLD" and not э.цвет_кнопки["DEEP PURPLE"].isChecked()
+
+
+def test_chosen_colour_goes_into_the_deal_and_the_receipt(окно, monkeypatch):
+    """Выбранное слово едет в сделку тем же полем, что и цвет из базы, — и в чек клиенту."""
+    import httpx
+    from pintel_core import receipt
+    окно.cfg.update({"ocenka_bot_token": "123:ABC", "ocenka_chat_id": "-1001"})
+    э = _без_цвета(окно)
+    э.цвет_кнопки["GOLD"].click()
+    assert "GOLD" in receipt.html(окно._чек_данные(), окно.last["report"])
+    поймано = _через_сервер(окно, monkeypatch)
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("в чат слать было незачем"))
+    э._отправить()
+    окно.tasks[-1].wait(5000)
+    QApplication.processEvents()
+    assert поймано.get("код") == окно.код_медиа, "посылка не ушла: " + э.ошибка.text()
+    assert поймано["посылка"]["сделка"]["color"] == "GOLD"
+
+
+def test_any_colour_of_the_dictionary_can_be_taken_from_the_full_list(окно):
+    """Нужного цвета среди кнопок модели нет — «Другой цвет» открывает весь словарь. Взятый
+    оттуда цвет встаёт кнопкой рядом с остальными, чтобы было видно, что выбрано."""
+    э = _без_цвета(окно)
+    assert э.цвет_другой.text() == "Другой цвет…"
+    список = ui_deal.ВыборЦвета(э, None)
+    assert {b.text() for b in список.findChildren(QPushButton) if b.objectName() == "chip"} == set(colours.КАНОН)
+    список.deleteLater()
+
+    э._цвет_нажат("BURGUNDY")                         # то, что вернёт окно со списком
+    assert э.цвет_выбран == "BURGUNDY" and э.цвет_кнопки["BURGUNDY"].isChecked()
+    assert tuple(э.цвет_кнопки)[:4] == ("BLACK", "SILVER", "GOLD", "DEEP PURPLE")
+    э._цвет_нажат("ЧЁРНЫЙ")                           # не слово словаря — в сделку не попадёт
+    assert э.цвет_выбран == "BURGUNDY"
+
+
+def test_unknown_model_gets_the_full_list_only(окно):
+    """Модели нет в нашем списке (новая) — кнопок модели нет, одна кнопка открывает словарь.
+    Отправка всё равно ждёт выбора."""
+    э = _без_цвета(окно, модель="iPhone 18 Pro Max")
+    assert э.цвет_кнопки == {} and э.цвет_другой.text() == "Выбрать цвет…"
+    assert not э.b_отправить.isEnabled()
+    э._цвет_нажат("BURGUNDY")
+    assert э.b_отправить.isEnabled()
+
+
+def test_the_choice_survives_a_redraw_and_dies_with_the_deal(окно):
+    """Отчёт на экране перерисовывается (поздний вердикт Apple) — выбор сотрудника при этом
+    остаётся. Новая сделка начинается без него. А если база цвет всё-таки назвала — берём
+    её слово, и блок уходит."""
+    э = _без_цвета(окно)
+    э.цвет_кнопки["SILVER"].click()
+    пас = dict(окно.last["report"]["паспорт"])
+    э._спросить_цвет(пас)
+    assert э.цвет_выбран == "SILVER" and э.цвет_кнопки["SILVER"].isChecked()
+
+    э._цвет_нажат("BURGUNDY")
+    э._спросить_цвет(пас)                              # взятый из списка тоже остаётся кнопкой
+    assert э.цвет_выбран == "BURGUNDY" and э.цвет_кнопки["BURGUNDY"].isChecked()
+
+    э._спросить_цвет({**пас, "цвет": "GOLD"})          # база ответила
+    assert э.цвет_блок.isHidden() and э.цвет_выбран is None and not э.цвет_нужен
+
+    окно.начать_сделку()
+    assert э.цвет_выбран is None and not э.цвет_нужен and э.цвет_блок.isHidden()

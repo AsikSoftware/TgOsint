@@ -52,7 +52,7 @@ import re
 }
 
 # Названия Apple из нескольких слов, которые в словаре называются иначе.
-ФРАЗЫ = {"JET BLACK": "BLACK", "COSMIC ORANGE": "ORANGE", "ROSE GOLD": "PINK"}
+ФРАЗЫ = {"JET BLACK": "BLACK", "COSMIC ORANGE": "ORANGE", "ROSE GOLD": "PINK", "LIGHT GOLD": "GOLD"}
 # Что база отдаёт вместо цвета, когда его не знает.
 ПУСТЫШКИ = frozenset(("UNKNOWN", "NONE", "NULL", "N", "NA"))
 
@@ -141,3 +141,79 @@ def цвет_в_тексте(описание) -> str | None:
             if имя:
                 return имя
     return None
+
+
+# ---------------------------------------------------------------- выбор цвета сотрудником
+
+# База IMEI цвет знает не всегда: на 13.11.2026 — у 32 телефонов из 34 (раз не ответила вовсе,
+# раз у Apple в записи модель без цвета). Тогда цвет выбирает сотрудник — кнопкой, из этого
+# же словаря, а не вводом с клавиатуры: ввод уже дал в базе Оценки «ПИРПУЛ», «БЛУ» и «Б».
+#
+# Здесь цвета, в которых Apple выпускала модель, словами словаря. Модели нет в списке —
+# касса показывает весь словарь.
+_11_PRO = ("GRAY", "SILVER", "GOLD", "MIDNIGHT GREEN")
+_12 = ("BLACK", "WHITE", "BLUE", "GREEN", "PURPLE", "RED")
+_12_PRO = ("GRAPHITE", "SILVER", "GOLD", "PACIFIC BLUE")
+_13 = ("MIDNIGHT", "STARLIGHT", "BLUE", "PINK", "GREEN", "RED")
+_13_PRO = ("GRAPHITE", "SILVER", "GOLD", "SIERRA BLUE", "ALPINE GREEN")
+_14 = ("MIDNIGHT", "STARLIGHT", "BLUE", "PURPLE", "YELLOW", "RED")
+_14_PRO = ("BLACK", "SILVER", "GOLD", "DEEP PURPLE")
+_15 = ("BLACK", "BLUE", "GREEN", "YELLOW", "PINK")
+_15_PRO = ("BLACK", "WHITE", "BLUE", "NATURAL")
+_16 = ("BLACK", "WHITE", "PINK", "TEAL", "ULTRAMARINE")
+_16_PRO = ("BLACK", "WHITE", "NATURAL", "DESERT")
+_17_PRO = ("SILVER", "ORANGE", "DEEP BLUE")
+ЦВЕТА_МОДЕЛЕЙ = {
+    "iPhone XR": ("BLACK", "WHITE", "BLUE", "YELLOW", "CORAL", "RED"),
+    "iPhone XS": ("GRAY", "SILVER", "GOLD"), "iPhone XS Max": ("GRAY", "SILVER", "GOLD"),
+    "iPhone 11": ("BLACK", "WHITE", "GREEN", "YELLOW", "PURPLE", "RED"),
+    "iPhone 11 Pro": _11_PRO, "iPhone 11 Pro Max": _11_PRO,
+    "iPhone 12": _12, "iPhone 12 mini": _12, "iPhone 12 Pro": _12_PRO, "iPhone 12 Pro Max": _12_PRO,
+    "iPhone 13": _13, "iPhone 13 mini": _13, "iPhone 13 Pro": _13_PRO, "iPhone 13 Pro Max": _13_PRO,
+    "iPhone 14": _14, "iPhone 14 Plus": _14, "iPhone 14 Pro": _14_PRO, "iPhone 14 Pro Max": _14_PRO,
+    "iPhone 15": _15, "iPhone 15 Plus": _15, "iPhone 15 Pro": _15_PRO, "iPhone 15 Pro Max": _15_PRO,
+    "iPhone 16": _16, "iPhone 16 Plus": _16, "iPhone 16 Pro": _16_PRO, "iPhone 16 Pro Max": _16_PRO,
+    "iPhone 16e": ("BLACK", "WHITE"),
+    "iPhone 17": ("BLACK", "WHITE", "MIST BLUE", "SAGE", "LAVENDER"),
+    "iPhone 17 Pro": _17_PRO, "iPhone 17 Pro Max": _17_PRO,
+    "iPhone Air": ("BLACK", "CLOUD WHITE", "GOLD", "SKY BLUE"),
+}
+
+# Образец цвета для кружка на кнопке и порядок кнопок в полном списке: от тёмных к светлым,
+# дальше по кругу. Слово на кнопке главное, кружок — подсказка глазу.
+ОБРАЗЦЫ = {
+    "BLACK": "#1F2125", "GRAPHITE": "#54524F", "GRAY": "#6E6F73", "MIDNIGHT": "#232A31",
+    "SILVER": "#DCDDDE", "WHITE": "#F7F7F5", "CLOUD WHITE": "#F1F1EC", "STARLIGHT": "#F0E8DC",
+    "NATURAL": "#BEB8AE", "DESERT": "#C9AE96", "GOLD": "#E7CFA8",
+    "BLUE": "#3F6FA8", "DEEP BLUE": "#2B3A55", "PACIFIC BLUE": "#2D4E5C", "SIERRA BLUE": "#9BB5CE",
+    "SKY BLUE": "#BFD9EE", "MIST BLUE": "#A9BCD6", "ULTRAMARINE": "#8E9EEB", "TEAL": "#7DB3B1",
+    "GREEN": "#5F8A66", "ALPINE GREEN": "#50604A", "MIDNIGHT GREEN": "#4E5851", "SAGE": "#A9B49A",
+    "PURPLE": "#B9A7D6", "DEEP PURPLE": "#594F63", "LAVENDER": "#D8CDEA", "PINK": "#F4C7CD",
+    "RED": "#C8102E", "BURGUNDY": "#6B1F2E", "CORAL": "#FF6E5A", "ORANGE": "#F0803C",
+    "YELLOW": "#F6E27A",
+}
+ВСЕ_ЦВЕТА = tuple(ОБРАЗЦЫ)
+
+
+_ПО_ИМЕНИ = {re.sub(r"\s+", "", имя).lower(): цвета for имя, цвета in ЦВЕТА_МОДЕЛЕЙ.items()}
+
+
+def цвета_модели(модель) -> tuple:
+    """Цвета, в которых выпускалась модель, — для кнопок выбора. Не знаем модель — пусто.
+    Регистр и пробелы не важны: база IMEI пишет и «iPhone 16 Promax», и «IPHONE 16E»."""
+    return _ПО_ИМЕНИ.get(re.sub(r"\s+", "", str(модель or "")).lower(), ())
+
+
+def уточнить(имя, модель):
+    """Слово базы IMEI → цвет именно этой модели.
+
+    База сокращает: у iPhone 17 Pro она пишет «BLU», а цвет называется DEEP BLUE; у 13 Pro
+    «GREEN» — это ALPINE GREEN. Сотрудник же кнопкой выбирает полное слово, и один и тот же
+    цвет лёг бы в товары под двумя названиями. Поэтому, если слова нет среди цветов модели,
+    а ровно один её цвет это слово содержит, берём его. Иначе не трогаем: список моделей
+    составлен нами и может не знать нового цвета."""
+    свои = цвета_модели(модель)
+    if not имя or not свои or имя in свои:
+        return имя
+    похожие = [c for c in свои if имя in c.split()]
+    return похожие[0] if len(похожие) == 1 else имя

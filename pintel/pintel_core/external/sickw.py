@@ -246,6 +246,8 @@ def normalize(raw_fields):
     # незнакомое слово как есть.
     colour = (colours.известный(colour_raw) or colours.цвет_в_тексте(_pick(f, "Model Description"))
               or colours.цвет(colour_raw))
+    # «BLU» у iPhone 17 Pro — это DEEP BLUE: слово базы сверяем с цветами самой модели
+    colour = colours.уточнить(colour, gsx.get("модель") or модель_без_цвета(model))
     blk, blk_flag = _strictest(_all(f, BLK_EXACT, BLK_SUBS), blacklist_flag)
     fmi, fmi_on = _strictest(_all(f, FMI_EXACT, FMI_SUBS), fmi_flag)
     carrier = _pick(f, "Locked Carrier", "Carrier")

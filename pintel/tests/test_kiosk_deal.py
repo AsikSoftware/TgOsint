@@ -1237,6 +1237,11 @@ def test_a_silent_apple_service_is_fixed_by_the_program_itself(окно, monkeyp
 
     попытки, по_кнопке = [], []
     monkeypatch.setattr(окно, "_run", lambda fn, ok=None, err=None: попытки.append((fn, ok)))
+    # Здесь — порядок, в котором кнопка появляется сама, от сбоя. На Windows она теперь видна
+    # всегда (свой тест ниже), поэтому этот режим включаем явно: тест не должен зависеть от
+    # того, на какой машине его гоняют, — сборка doctor-86 упала именно на этом.
+    окно._связь_всегда = False
+    окно._кнопки_связи()
     кнопка = окно.s_main.b_связь
     assert кнопка.isHidden()
 
@@ -1279,6 +1284,7 @@ def test_the_repair_button_is_not_offered_outside_windows(окно, monkeypatch)
     попытки[0][1](apple_service.НЕ_WINDOWS)
     окно.on_tick(NO_DRIVER, "", 0)
     assert окно.s_main.b_связь.isHidden() and len(попытки) == 1
+    assert окно.s_work.b_связь.isHidden()
 
 
 # ---------------------------------------------------------------- порядок с 12.11.2026:

@@ -129,7 +129,7 @@ class Склад:
 
     def значения(self, поле):
         cid = (поле.get("customEntityMeta") or {}).get("href", "").rstrip("/").rsplit("/", 1)[-1]
-        return self.значения_справочника(cid)
+        return cid, self.значения_справочника(cid)
 
     def значения_справочника(self, cid):
         все, сдвиг = [], 0
@@ -137,7 +137,7 @@ class Склад:
             кусок = self.запрос("GET", f"/entity/customentity/{cid}?limit=100&offset={сдвиг}").get("rows") or []
             все += кусок
             if len(кусок) < 100:
-                return cid, все
+                return все
             сдвиг += 100
 
 
@@ -347,7 +347,8 @@ def цвет(с):
             уже += 1
             continue
         слово = colours.цвет(было)
-        if not слово or слово not in (по_слову if по_слову else colours.КАНОН):
+        # всухую справочник ещё прежний — считаем, что слова словаря в нём уже есть
+        if not слово or слово not in (colours.КАНОН if с.всухую else по_слову):
             без_слова.append(было)
             continue
         if с.всухую:
@@ -373,4 +374,5 @@ def main():
     print("записей в МойСклад:", len(с.сделано), "(всухую — ничего не менялось)" if с.всухую else "")
 
 
-main()
+if __name__ == "__main__":
+    main()

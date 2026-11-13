@@ -607,7 +607,9 @@ def test_the_receipt_carries_a_link_to_itself(окно, monkeypatch):
         QApplication.processEvents()
     assert окно.сделка["ссылка"] == "https://kiosk.pintelkz.com/check/abc"
     бумага = receipt.html(окно.сделка, окно.last["report"])
-    assert "<svg" in бумага and "check/abc" in бумага
+    # на бумаге — только сам QR: адрес и пояснение рядом с ним владелец с листа убрал
+    assert "<svg" in бумага and "check/abc" not in бумага
+    assert receipt.html({**окно.сделка, "ссылка": ""}, окно.last["report"]).count("<svg") == 0
     for поток in окно.tasks:
         поток.wait(5000)
     assert дослано.get("id") == 77 and дослано["report"]["чек"]["клиент"] == "Зама"
@@ -1579,7 +1581,7 @@ def test_missing_colour_is_chosen_with_a_button_before_sending(окно):
     э.цвет_кнопки["DEEP PURPLE"].click()
     assert э.цвет_выбран == "DEEP PURPLE"
     assert э.цвет_кнопки["DEEP PURPLE"].isChecked() and not э.цвет_кнопки["BLACK"].isChecked()
-    assert "DEEP PURPLE" in э.цвет_подпись.text()      # что уйдёт в сделку, сказано словами
+    assert э.цвет_подпись.isHidden()                   # подсказка нужна, только пока не выбрано
     assert э.b_отправить.isEnabled() and э.почему_нельзя() == ""
 
     э.цвет_кнопки["GOLD"].click()                     # передумал — выбран один, последний
@@ -1669,8 +1671,7 @@ def test_cable_colour_code_does_not_answer_for_the_employee(окно):
 
 def test_buttons_speak_apple_and_the_deal_gets_the_dictionary_word(окно, monkeypatch):
     """На кнопке — название Apple для этой модели: сотрудник узнаёт телефон по «Natural
-    Titanium», а не по NATURAL. В сделку и в название товара уходит короткое слово словаря,
-    и экран говорит его сразу после выбора."""
+    Titanium», а не по NATURAL. В сделку и в название товара уходит короткое слово словаря."""
     import httpx
     окно.cfg.update({"ocenka_bot_token": "123:ABC", "ocenka_chat_id": "-1001"})
     э = _без_цвета(окно, модель="iPhone 15 Pro")
@@ -1678,10 +1679,25 @@ def test_buttons_speak_apple_and_the_deal_gets_the_dictionary_word(окно, mon
         "Black Titanium", "White Titanium", "Blue Titanium", "Natural Titanium"]
     assert tuple(э.цвет_кнопки) == ("BLACK", "WHITE", "BLUE", "NATURAL")
     э.цвет_кнопки["NATURAL"].click()
-    assert э.цвет_выбран == "NATURAL" and э.цвет_подпись.text() == "В сделку уйдёт: NATURAL"
+    assert э.цвет_выбран == "NATURAL" and э.цвет_подпись.isHidden()
     поймано = _через_сервер(окно, monkeypatch)
     monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("в чат слать было незачем"))
     э._отправить()
     окно.tasks[-1].wait(5000)
     QApplication.processEvents()
     assert поймано["посылка"]["сделка"]["color"] == "NATURAL"
+
+
+def test_the_price_page_says_only_what_cannot_be_seen(окно, monkeypatch):
+    """На странице автооценки нет пояснений: ни «Цену считает бот…», ни подписи под готовой
+    ценой, ни «Что будет дальше» с рассказом о боте — владелец их убрал. Остаются сама цена
+    и к кому привязана сделка. Причина, по которой цены нет, по-прежнему говорится словами."""
+    from PySide6.QtWidgets import QLabel
+    запросы = _привязанный(окно, monkeypatch)
+    _бот_ответил(окно, запросы[-1]["запрос_цены"], цена=385000)
+    э = окно.s_work
+    assert "385" in э.цена_число.text() and э.цена_подпись.text() == ""
+    assert э.цена_дальше.text() == "Сделка привязана к: Асылбек Н.."
+    слова = " ".join(l.text() for l in э.правая.widget(ui_deal.СТР_ЦЕНА).findChildren(QLabel))
+    for лишнее in ("Цену считает бот", "Её же увидит клиент", "ЧТО БУДЕТ ДАЛЬШЕ", "напишет вам"):
+        assert лишнее not in слова, лишнее

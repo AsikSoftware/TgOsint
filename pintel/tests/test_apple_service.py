@@ -74,8 +74,9 @@ class Окружение:
         было, self.права = self.права, True
         try:
             assert аргументы[0] == "--apple-setup"
-            return служба.под_админом(аргументы[1] if len(аргументы) > 1 else None, окр=self,
-                                      пауза=lambda с: None)
+            пакеты = [x for x in аргументы[1:] if not x.startswith("--")]
+            return служба.под_админом(пакеты[0] if пакеты else None, окр=self, пауза=lambda с: None,
+                                      перезапуск="--restart" in аргументы)
         finally:
             self.права = было
 
@@ -87,9 +88,10 @@ def чинить(окр):
     return служба.починить(окр, пауза=lambda с: None)
 
 
-def обеспечить(окр):
+def обеспечить(окр, принудительно=False):
     сказано = []
-    итог, текст = служба.обеспечить(окр, сказать=сказано.append, пауза=lambda с: None)
+    итог, текст = служба.обеспечить(окр, сказать=сказано.append, пауза=lambda с: None,
+                                    принудительно=принудительно)
     return итог, текст, сказано
 
 
@@ -209,11 +211,32 @@ def test_a_hung_or_disabled_service_is_restarted_with_one_prompt():
 
 def test_the_elevated_entry_point(monkeypatch):
     вызовы = []
-    monkeypatch.setattr(служба, "под_админом", lambda пакет=None: вызовы.append(пакет) or 0)
+    monkeypatch.setattr(служба, "под_админом",
+                        lambda пакет=None, перезапуск=False: вызовы.append((пакет, перезапуск)) or 0)
     assert служба.точка_входа(["pintel-kiosk.exe"]) is None, "обычный запуск — не наш"
     assert служба.точка_входа(["pintel-kiosk.exe", "--apple-setup"]) == 0
     assert служба.точка_входа(["pintel-kiosk.exe", "--apple-setup", "C:/a b/x.msi"]) == 0
-    assert вызовы == [None, "C:/a b/x.msi"]
+    assert служба.точка_входа(["pintel-kiosk.exe", "--apple-setup", "--restart"]) == 0
+    assert вызовы == [(None, False), ("C:/a b/x.msi", False), (None, True)]
+
+
+def test_the_button_restarts_a_service_that_answers_but_does_not_see_the_phone():
+    """Кнопку «Починить связь» жмут и тогда, когда служба жива, а телефон не виден. Ответ
+    «связь работает» в этот момент — отказ в помощи: по кнопке служба перезапускается всегда,
+    одним окном прав, без скачивания. Сама, без кнопки, живую службу программа не трогает."""
+    окр = Окружение(состояние="RUNNING", порт=True)
+    итог, текст, _ = обеспечить(окр)
+    assert итог == служба.ГОТОВО and not окр.повышений and not окр.делали("stop")
+
+    итог, текст, сказано = обеспечить(окр, принудительно=True)
+    assert итог == служба.ГОТОВО and "перезапущена" in текст and "кабель" in текст
+    assert окр.повышений == [["--apple-setup", "--restart"]] and not окр.скачано
+    assert окр.делали("stop") and окр.делали("start") and окр.запуск == "AUTO_START"
+    assert any("нажмите «Да»" in с for с in сказано)
+
+    отказ = Окружение(состояние="RUNNING", порт=True, согласие=False)
+    итог, текст, _ = обеспечить(отказ, принудительно=True)
+    assert итог == служба.НУЖНЫ_ПРАВА and "«Да»" in текст
 
 
 def test_the_program_relaunches_itself(monkeypatch):

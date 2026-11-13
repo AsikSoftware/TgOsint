@@ -1253,12 +1253,14 @@ def test_a_silent_apple_service_is_fixed_by_the_program_itself(окно, monkeyp
 
     # по кнопке — полный путь: установка или перезапуск с окном Windows
     monkeypatch.setattr(apple_service, "обеспечить",
-                        lambda сказать=None: по_кнопке.append(1) or (apple_service.ГОТОВО, "готово"))
+                        lambda сказать=None, принудительно=False:
+                        по_кнопке.append(принудительно) or (apple_service.ГОТОВО, "готово"))
     окно.починить_связь()
     assert not кнопка.isEnabled() and "Чиним" in кнопка.text()
     fn, ok = попытки[-1]
     ok(fn())
-    assert по_кнопке == [1] and кнопка.isHidden()
+    assert по_кнопке == [True], "по кнопке служба перезапускается, даже если отвечает"
+    assert кнопка.isHidden()                           # не Windows: без сбоя кнопки нет
 
     # связь вернулась — следующий сбой снова начнётся с тихой попытки
     окно.on_tick(NO_DEVICE, "", 0)
@@ -1701,3 +1703,43 @@ def test_the_price_page_says_only_what_cannot_be_seen(окно, monkeypatch):
     слова = " ".join(l.text() for l in э.правая.widget(ui_deal.СТР_ЦЕНА).findChildren(QLabel))
     for лишнее in ("Цену считает бот", "Её же увидит клиент", "ЧТО БУДЕТ ДАЛЬШЕ", "напишет вам"):
         assert лишнее not in слова, лишнее
+
+
+def test_on_windows_the_repair_button_is_always_at_hand(окно, monkeypatch):
+    """«В случае чего сотрудник нажал — и всё починилось»: на Windows кнопка «Починить связь»
+    есть всегда — на экране ожидания и на экране сделки, пока телефон не прочитан, — а не
+    только когда служба Apple молчит. Телефон не виден и при живой службе; тогда кнопка её
+    перезапускает. Телефон прочитан — кнопка на экране сделки уходит вместе со страницей шагов."""
+    from pintel_core.devicelink import apple_service
+    from pintel_kiosk import ui_deal as ud
+    попытки, вызовы = [], []
+    monkeypatch.setattr(окно, "_run", lambda fn, ok=None, err=None: попытки.append((fn, ok)))
+    monkeypatch.setattr(apple_service, "обеспечить",
+                        lambda сказать=None, принудительно=False: (
+                            вызовы.append(принудительно), сказать and сказать("Перезапускаем службу Apple"),
+                            (apple_service.ГОТОВО, "Служба Apple перезапущена."))[-1])
+    окно._связь_всегда = True
+    окно._кнопки_связи()
+    assert not окно.s_main.b_связь.isHidden() and окно.s_main.b_связь.text() == "Починить связь с iPhone"
+    assert not окно.s_work.b_связь.isHidden() and окно.s_work.b_связь.text() == ud.ПОЧИНИТЬ_СВЯЗЬ
+
+    # сделка идёт, телефон не читается — жмут на экране сделки
+    окно.cfg["ocenka_bot"] = "PintelOlxBot"
+    окно.начать_сделку()
+    окно.анкета_готова(АНКЕТА)
+    окно.s_work.b_связь.click()
+    assert not окно.s_work.b_связь.isEnabled() and not окно.s_main.b_связь.isEnabled()
+    fn, ok = попытки[-1]
+    итог = fn()
+    QApplication.processEvents()
+    assert "Перезапускаем" in окно.s_work.ошибка.text()          # ход починки виден там, где нажали
+    ok(итог)
+    assert вызовы == [True]
+    assert окно.s_work.b_связь.isEnabled() and окно.s_work.b_связь.text() == ud.ПОЧИНИТЬ_СВЯЗЬ
+    assert "перезапущена" in окно.s_work.ошибка.text()
+    assert not окно.s_main.b_связь.isHidden() and окно.s_main.b_связь.isEnabled()
+
+    # телефон прочитан — страница шагов сменилась, кнопки на экране сделки больше нет
+    окно.state = "scanning"
+    окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
+    assert not окно.s_work.b_связь.isVisible()

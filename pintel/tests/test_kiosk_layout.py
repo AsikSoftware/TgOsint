@@ -415,3 +415,16 @@ def test_long_apple_names_fit_on_the_colour_buttons(открыть, крупны
     экран._цвет_нажат(next(iter(экран.цвет_кнопки)))
     QApplication.processEvents()
     assert _замечания(экран) == [], модель + ", цвет выбран"
+
+
+def test_the_repair_button_fits_under_the_check_steps(открыть, крупный_шрифт):
+    """Кнопка «Починить связь» стоит под шагами проверки, пока телефон не прочитан."""
+    экран = открыть(ui_deal.WorkScreen, "16/38 Pintel")
+    экран.показать_починку(True)
+    QApplication.processEvents()
+    assert экран.b_связь.isVisible()
+    assert _замечания(экран) == [], "кнопка починки под шагами"
+    экран.показать_починку(True, занято=True, текст="Чиним связь…")
+    экран.сказать("Перезапускаем службу Apple — Windows спросит разрешение, нажмите «Да»", беда=False)
+    QApplication.processEvents()
+    assert _замечания(экран) == [], "идёт починка: короткое слово в кнопке, ход — строкой внизу"

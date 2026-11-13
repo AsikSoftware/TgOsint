@@ -14,9 +14,12 @@
   переделать любой тест — в конце весь список на одном экране, тап по строке повторяет
   именно её. Часть ответов ставится сама: сетка закрашена целиком — сенсор жив; пять
   касаний поймались — мультитач жив; снимок не чёрный — камера снимает. Остальное может
-  оценить только человек, который смотрит и слушает, поэтому у каждого теста есть и ответ
-  «не получилось»: честный пропуск лучше выдуманного «в порядке» — в сделке он снимает
-  автоцену, но не приписывает аппарату дефект. Ключи ответов — pintel_core/phonetest.py.
+  оценить только человек, который смотрит и слушает.
+  Пропустить тест на странице нельзя (решение владельца, 13.11.2026): кнопкой «Пропустить»
+  обходили проверку. Каждый тест кончается ответом — «в порядке» или «проблема»; где
+  страница не может проверить сама (звук не запустился, микрофон не дали, камера не
+  открылась), человек проверяет по-другому или записывает, что не работает.
+  Ключи ответов — pintel_core/phonetest.py.
 
   Звук: и мелодию динамика, и запись микрофона проигрываем через <audio> с явным типом.
   WebAudio на iPhone заводится не всегда, а Blob без типа Safari не играет вовсе — именно
@@ -63,9 +66,6 @@ button:active{transform:scale(.96)}
 #bar{position:fixed;left:0;right:0;top:0;height:4px;z-index:30;display:flex;gap:2px;padding:0 2px}
 #bar i{flex:1;background:rgba(11,27,51,.10);border-radius:0 0 3px 3px}
 #bar i.done{background:#16A870}#bar i.now{background:#1677FF;animation:p 1.2s infinite}
-#skip{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:13;display:none;
-  opacity:.8}
-#skip:active{transform:translateX(-50%) scale(.96)}
 #grid{position:fixed;inset:0;display:grid;z-index:10;background:#FFFFFF}
 #grid div{border:1px solid rgba(11,27,51,.07)}
 #grid div.hit{background:rgba(22,168,112,.50);border-color:transparent}
@@ -94,12 +94,6 @@ input[type=file]{display:none}
 </style></head><body>
 
 <div id="bar"></div>
-<!--
-  Выход есть с любого теста. Клиент может не захотеть нажимать, камера может не открыться,
-  телефон может не дать звук — и тогда человек обязан иметь возможность идти дальше, а не
-  упереться в экран посреди сделки. Пропуск не «в порядке»: в сделке он снимает автоцену.
--->
-<button class="ghost small" id="skip" onclick="ответить('skip')">Пропустить тест</button>
 
 <!-- 0. старт -->
 <div class="screen on" id="s0">
@@ -174,6 +168,7 @@ input[type=file]{display:none}
   <p class="auto" id="camAuto"></p>
   <input type="file" id="camFile" accept="image/*">
   <button onclick="камСнять()" id="camBtn">📷 Снять</button>
+  <button class="ghost small" onclick="камНеСнимает()">Камера не снимает</button>
 </div>
 
 <!-- вопрос после теста: один экран на все тесты, порядок везде одинаковый -->
@@ -186,7 +181,6 @@ input[type=file]{display:none}
   <div class="pair" id="qAns"></div>
   <div class="pair">
     <button class="ghost small" onclick="заново()">↺ Пройти заново</button>
-    <button class="ghost small" id="qSkip" onclick="ответить('skip')">Пропустить</button>
   </div>
 </div>
 
@@ -219,12 +213,6 @@ function экран(id){
   for(var i=0;i<все.length;i++) все[i].classList.remove("on");
   var s=document.getElementById(id);
   if(s) s.classList.add("on");
-  // «Пропустить» висит на тех тестах, где без него можно упереться в экран: динамик не
-  // зазвучал, камера не открылась, микрофон не дали. На сенсоре и мультитаче его нет —
-  // там палец работает по всему экрану, и кнопка внизу ловила бы касания вместо сетки;
-  // у обоих есть свой ответ «не получается».
-  document.getElementById("skip").style.display=
-    (id==="s3"||id==="s4"||id==="s5"||id==="s6") ? "inline-block" : "none";
 }
 function полоска(){
   var b=document.getElementById("bar"), h="";
@@ -272,7 +260,6 @@ function вопрос(о){
       ряд.appendChild(b);
     })(ответы[i]);
   }
-  document.getElementById("qSkip").style.display=(о.без_пропуска?"none":"");
   экран("sq");
 }
 /* Кнопки вопроса ведут сюда все до одной. «__again» и «__play» — не ответы, а действия:
@@ -364,8 +351,6 @@ function экранЭкран(){
 function экранПуск(){
   var b=document.getElementById("colorbox");
   document.getElementById("s3").classList.remove("on");
-  // во время заливки тап по экрану листает цвет — кнопке здесь не место
-  document.getElementById("skip").style.display="none";
   b.style.display="flex"; ci=0; document.body.style.background=COLORS[0];
   b.onclick=function(){
     ci++;
@@ -576,6 +561,13 @@ function камПуск(){
   b.style.display=""; b.textContent="📷 Снять";
 }
 function камСнять(){ document.getElementById("camFile").click(); }
+/* Камера не открылась или снимок не делается — это ответ «проблема», а не пропуск:
+   записываем его только после подтверждения, как на сенсоре и мультитаче. */
+function камНеСнимает(){
+  вопрос({вывод:"снимок не сделан",класс:"fail",
+          вопрос:"Камера не открывается или не снимает. Так и записать?",
+          ответы:[{т:"Да, не снимает",о:"fail",вид:"bad"},{т:"Попробовать ещё раз",о:"__again"}]});
+}
 document.getElementById("camFile").onchange=function(e){
   var f=e.target.files&&e.target.files[0];
   if(!f) return;

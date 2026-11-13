@@ -12,7 +12,8 @@ hidden = ['pymobiledevice3.remote.userspace_tunnel', 'pymobiledevice3.remote.cor
           'pintel_core.external.ocenka_tg', 'pintel_core.external.ocenka_media', 'pintel_kiosk.ui_deal',
           'pintel_core.external.rfs', 'pintel_core.analysis.sealed', 'pintel_kiosk.ui_start',
           # тест на телефоне клиента: мини-сервер и словарь ответов (страница — в assets)
-          'pintel_kiosk.phoneweb', 'pintel_core.phonetest',
+          'pintel_kiosk.phoneweb', 'pintel_core.phonetest', 'pintel_core.selfcheck', 'pintel_core.colours',
+          'pymobiledevice3.services.crash_reports',
           'pymobiledevice3.usbmux', 'pymobiledevice3.lockdown', 'httpx', 'qrcode', 'pintel_kiosk.app']
 _pmd_datas, _pmd_bins, _pmd_hidden = collect_all('pmd_pytcp')
 _cd_datas, _cd_bins, _cd_hidden = collect_all('pymobiledevice3.remote')
@@ -36,6 +37,22 @@ datas = collect_data_files('pymobiledevice3') + _pmd_datas + _cd_datas + _tun_da
     ('pintel_core/assets', 'pintel_core/assets'),        # логотип для чека клиенту
     ('pintel_kiosk/assets', 'pintel_kiosk/assets'),
 ]
+# Метаданные пакетов. Часть библиотек при загрузке спрашивает собственную версию у метаданных
+# пакета (pyimg4: importlib.metadata.version). В собранном exe их нет, пока не положишь, — и
+# модуль не грузится. Так сборка doctor-85 осталась без чтения отчётов о сбоях (panic full):
+# pymobiledevice3 11.54 стал тянуть pyimg4. Кладём метаданные самой библиотеки и всего, от
+# чего она зависит; что не найдётся — не беда, такой пакет в этой версии просто не нужен.
+from PyInstaller.utils.hooks import copy_metadata
+try:
+    datas += copy_metadata('pymobiledevice3', recursive=True)
+except Exception as _e:                                          # noqa: BLE001
+    print('метаданные целиком не собрались (%s) — кладу по списку' % _e)
+    for _пакет in ('pymobiledevice3', 'pyimg4', 'pyimg3', 'ipsw_parser', 'developer_disk_image',
+                   'pygnuutils', 'opack2', 'plumbum', 'construct', 'qh3', 'pmd_pytcp', 'pytun_pmd3'):
+        try:
+            datas += copy_metadata(_пакет)
+        except Exception:                                        # noqa: BLE001
+            pass
 excludes = ['tkinter', 'matplotlib', 'av', 'jedi', 'IPython', 'parso', 'numpy', 'PIL', 'pillow', 'pandas', 'scipy',
             # сделку создаёт бот Оценки, в её базу с точки хода нет — драйвер базы не нужен
             'sqlalchemy', 'psycopg', 'psycopg2',

@@ -28,6 +28,20 @@ _tun_datas += [(_wintun[0], os.path.relpath(os.path.dirname(_wintun[0]), os.path
 
 datas = collect_data_files('pymobiledevice3') + _pmd_datas + _cd_datas + _tun_datas + [('pintel_core/analysis/models.json', 'pintel_core/analysis')]
 
+# Метаданные пакетов — см. пояснение в pintel-kiosk.spec: без них модуль, который при
+# загрузке спрашивает свою версию (pyimg4), в собранном exe не грузится.
+from PyInstaller.utils.hooks import copy_metadata
+try:
+    datas += copy_metadata('pymobiledevice3', recursive=True)
+except Exception as _e:                                          # noqa: BLE001
+    print('метаданные целиком не собрались (%s) — кладу по списку' % _e)
+    for _пакет in ('pymobiledevice3', 'pyimg4', 'pyimg3', 'ipsw_parser', 'developer_disk_image',
+                   'pygnuutils', 'opack2', 'plumbum', 'construct', 'qh3', 'pmd_pytcp', 'pytun_pmd3'):
+        try:
+            datas += copy_metadata(_пакет)
+        except Exception:                                        # noqa: BLE001
+            pass
+
 a = Analysis(['doctor_main.py'], pathex=['.'], binaries=_pmd_bins + _cd_bins + _tun_bins, datas=datas,
              hiddenimports=hidden + _pmd_hidden + _cd_hidden + _tun_hidden, hookspath=[], runtime_hooks=[],
              # Тяжёлые опциональные части pymobiledevice3 (видео, IPython, numpy) нам не нужны

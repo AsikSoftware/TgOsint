@@ -45,7 +45,8 @@ async def probe(ld, timeout=25) -> dict:
         from pymobiledevice3.services.crash_reports import CrashReportsManager
     except Exception as e:                                   # noqa: BLE001
         return {"проверено": False, "panic_full": None,
-                "ошибка": f"нет crash_reports в pymobiledevice3: {e}"}
+                # по-русски первым: эту строку видит сотрудник как причину, почему нет автоцены
+                "ошибка": f"модуль чтения отчётов о сбоях не загрузился — обновите программу ({e})"}
 
     async def run():
         async with CrashReportsManager(ld) as crash:

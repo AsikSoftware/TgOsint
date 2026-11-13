@@ -676,7 +676,8 @@ async def _попросить_медиа(bot: Bot, код: str, посылка: 
     try:
         await bot.send_message(
             chat_id=строка["chat_id"],
-            text=kiosk_core.текст_запроса_медиа(посылка, _цена_из_ответа(строка.get("quote"))))
+            text=kiosk_core.текст_запроса_медиа(посылка, _цена_из_ответа(строка.get("quote")),
+                                                kiosk_core.ответ_о_цене(строка.get("quote"))))
     except Exception as exc:                                     # noqa: BLE001
         await _сказать_о_беде(код, f"бот не смог написать сотруднику ({type(exc).__name__}) — "
                                    "откройте бота Оценки и нажмите «Старт»")
@@ -800,7 +801,7 @@ async def _поток_посылок(bot: Bot) -> None:
         if time.monotonic() >= цены_с:
             try:
                 for код in await _ждут_цену():
-                    await _посчитать_цену(код)
+                    await _посчитать_цену(bot, код)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:                             # noqa: BLE001
@@ -881,14 +882,18 @@ async def _оценить(посылка: dict, строка) -> dict:
     return {"цена": int(цена), "почему": ""}
 
 
-async def _посчитать_цену(код: str) -> None:
-    """Один запрос цены: взять, посчитать, положить ответ туда, где его увидит касса."""
+async def _посчитать_цену(bot: Bot, код: str) -> None:
+    """Один запрос цены: взять, посчитать, положить ответ туда, где его увидит касса.
+
+    Касса новой сборки (ключ `сумму_назовёт_сотрудник`) цену из прайса клиенту не
+    показывает: её получает привязанный сотрудник — подсказкой в чат, вместе с вопросом,
+    какую сумму показать клиенту. Касса до его ответа ждёт (`ждём_сумму`)."""
     log = logging.getLogger(__name__)
     сырое = await _взять_запрос_цены(код)
     if not сырое:
         return
     строка = await _строка(код)
-    запрос = ""
+    запрос, посылка = "", {}
     try:
         посылка = kiosk_core.разобрать(сырое)
         запрос = str(посылка.get("запрос_цены") or "")[:40]
@@ -899,6 +904,19 @@ async def _посчитать_цену(код: str) -> None:
         log.exception("kiosk: цена по коду %s не посчиталась", код)
         ответ = {"цена": None, "почему": f"цену посчитать не вышло ({type(exc).__name__})"}
     ответ["запрос"] = запрос            # по нему касса узнаёт ответ на СВОЙ последний вопрос
+    chat_id = (строка or {}).get("chat_id")
+    if ответ.get("цена") and посылка.get("сумму_назовёт_сотрудник") and chat_id:
+        ответ["ждём_сумму"] = True
+        try:
+            вопрос = await bot.send_message(
+                chat_id=chat_id, text=kiosk_core.текст_вопроса_суммы(посылка, ответ["цена"]))
+            # номер сообщения: ответ именно на него — точно сумма, чем бы сотрудник ни был занят
+            ответ["вопрос"] = getattr(вопрос, "message_id", None)
+        except Exception as exc:                                 # noqa: BLE001
+            # Касса покажет это под «Пожалуйста, подождите»; там же кнопка «Напомнить в боте»
+            ответ["беда"] = (f"бот не смог написать сотруднику ({type(exc).__name__}) — "
+                             "откройте бота Оценки и нажмите «Старт»")
+            log.warning("kiosk: вопрос о сумме по коду %s не ушёл: %s", код, type(exc).__name__)
     async with async_session_factory() as session:
         await session.execute(text("UPDATE kiosk_media SET quote = :q WHERE code = :c"),
                               {"q": json.dumps(ответ, ensure_ascii=False), "c": код})
@@ -922,6 +940,90 @@ async def _есть_колонка(таблица: str, колонка: str) -> 
 
 
 _колонки = {}
+
+
+# ---------------------------------------------------------------- сумма клиенту
+
+ЖДЁМ_СУММУ_ЧАСОВ = 2          # дольше вопрос о сумме не живёт: сделку бросили
+
+
+async def _ждущая_сумму(chat_id: int):
+    """Сделка этого сотрудника, по которой бот спросил сумму клиенту (или уже получил её,
+    но касса сделку ещё не отправила — тогда сумму можно назвать другую). → (код, ответ)."""
+    try:
+        async with async_session_factory() as session:
+            строка = (await session.execute(text(
+                "SELECT code, quote FROM kiosk_media WHERE chat_id = :ch AND device_id IS NULL "
+                "AND parcel IS NULL AND quote IS NOT NULL "
+                f"AND quote_at > now() - interval '{ЖДЁМ_СУММУ_ЧАСОВ} hours' "
+                "ORDER BY quote_at DESC LIMIT 1"), {"ch": chat_id})).mappings().first()
+    except Exception:                                            # noqa: BLE001 — колонок ещё нет
+        return None
+    if not строка:
+        return None
+    ответ = kiosk_core.ответ_о_цене(строка["quote"])
+    if ответ.get("цена") and (ответ.get("ждём_сумму") or ответ.get("сумма")):
+        return str(строка["code"]), ответ
+    return None
+
+
+async def _сумма_без_состояния(message: Message, state: FSMContext):
+    """Фильтр: сообщение из одних цифр от сотрудника, у которого касса ждёт сумму клиенту.
+
+    Как и с медиа, смотрим в базу, а не в память бота. Если сотрудник посреди другого дела
+    в боте (там тоже спрашивают цифры — цену выкупа, например), число не наше; исключение —
+    он ответил именно на сообщение с вопросом о сумме."""
+    if kiosk_core.разобрать_сумму(message.text) is None:
+        return False
+    ждёт = await _ждущая_сумму(message.chat.id)
+    if not ждёт:
+        return False
+    код, ответ = ждёт
+    на_вопрос = bool(message.reply_to_message and ответ.get("вопрос")
+                     and message.reply_to_message.message_id == ответ.get("вопрос"))
+    состояние = await state.get_state()
+    своё = getattr(KioskMediaState.приём, "state", None)        # приём медиа — тоже наше дело
+    if состояние not in (None, своё) and not на_вопрос:
+        return False
+    return {"ksum_code": код, "ksum_quote": ответ}
+
+
+async def _записать_сумму(код: str, сумма: int) -> bool:
+    """Положить сумму в ответ кассе. → False, если сделка уже ушла или цену пересчитывают."""
+    async with async_session_factory() as session:
+        async with session.begin():
+            сырое = (await session.execute(text(
+                "SELECT quote FROM kiosk_media WHERE code = :c AND device_id IS NULL "
+                "AND parcel IS NULL AND quote IS NOT NULL FOR UPDATE"), {"c": код})).scalar()
+            ответ = kiosk_core.ответ_о_цене(сырое)
+            if not ответ.get("цена"):
+                return False
+            ответ["сумма"] = int(сумма)
+            ответ.pop("ждём_сумму", None)
+            ответ.pop("беда", None)
+            await session.execute(text("UPDATE kiosk_media SET quote = :q WHERE code = :c"),
+                                  {"q": json.dumps(ответ, ensure_ascii=False), "c": код})
+    return True
+
+
+@router_kiosk_media.message(F.text, _сумма_без_состояния)
+async def принять_сумму(message: Message, ksum_code: str = "", ksum_quote: dict = None):
+    """Сотрудник назвал сумму клиенту — касса покажет её вместо «Пожалуйста, подождите»."""
+    цена = int((ksum_quote or {}).get("цена") or 0)
+    if not (ksum_code and цена):
+        return
+    сумма = kiosk_core.разобрать_сумму(message.text)
+    беда = kiosk_core.сумма_не_годится(сумма, цена)
+    if беда:
+        await message.answer(беда)
+        return
+    if not await _записать_сумму(ksum_code, сумма):
+        await message.answer("Касса уже отправила сделку или пересчитывает цену — "
+                             "эту сумму записать некуда. Если цена изменилась, я спрошу ещё раз.")
+        return
+    await message.answer(kiosk_core.текст_суммы_принята(сумма, цена))
+    logging.getLogger(__name__).warning("kiosk: по коду %s сотрудник назвал сумму клиенту: %s "
+                                        "(автоцена %s)", ksum_code, сумма, цена)
 
 
 async def _вставить(посылка: dict, медиа, нажал=None) -> dict:
@@ -950,10 +1052,18 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     # иначе диагностика осталась бы отчётом ни о чём.
     отметки = kiosk_core.отметки(посылка, медиа)
     поля = kiosk_core.применить_диагностику(поля, отметки, посылка)
+    # Сумма, которую сотрудник назвал клиенту, — в комментарий оценщика. Автоцену считаем
+    # ниже, как и раньше: она остаётся в price_grade_auto.
+    поля = kiosk_core.вписать_цену_клиенту(поля, посылка,
+                                           kiosk_core.ответ_о_цене((медиа or {}).get("quote")))
     # Циклы батареи — новая колонка devices. Пока её не добавили, в сделку не кладём:
     # иначе вставка падала бы на всех точках из-за поля, без которого сделка обходилась.
     if not await _есть_колонка("devices", "akb_cycles"):
         поля.pop("akb_cycles", None)
+    # Ссылка на чек — тоже новая колонка (check_url_patch.py --column), и правило то же.
+    чек = kiosk_core.ссылка_чека(посылка)
+    if чек and await _есть_колонка("devices", "check_url"):
+        поля["check_url"] = чек
     поля.update({
         # цену и статус ставим после вставки: автоцену считает сама Оценка по своему
         # прайсу (utils/google_price.py), ровно как в её собственном потоке

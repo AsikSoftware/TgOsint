@@ -45,8 +45,9 @@ log = logging.getLogger(__name__)
 ПОЛЕ_ОТЧЁТА = "Отчёт диагностики"
 # Поля, которых в МойСкладе могло не быть: нет поля — молча пропускаем, админу в «пропущены
 # доп. поля» о них не пишем.
-НЕОБЯЗАТЕЛЬНЫЕ = {ПОЛЕ_ЛОТКА, ПОЛЕ_ОТЧЁТА, "Цвет", "Panic full", "Сим без ограничений",
-                  "Номер сделки", "Цикл"}
+ПОЛЕ_ЗАКЛЮЧЕНИЯ = "Заключение"     # ссылка на чек диагностики на домене кассы (13.11.2026)
+НЕОБЯЗАТЕЛЬНЫЕ = {ПОЛЕ_ЛОТКА, ПОЛЕ_ОТЧЁТА, ПОЛЕ_ЗАКЛЮЧЕНИЯ, "Цвет", "Panic full",
+                  "Сим без ограничений", "Номер сделки", "Цикл"}
 ДЛИНА_СТРОКИ = 255                # предел поля типа «строка» в МойСкладе
 ДЛИНА_ТЕКСТА = 4000
 
@@ -156,6 +157,23 @@ def _лоток(sim):
     return None
 
 
+def _цвета(сырое) -> list:
+    """Цвет сделки → как он может называться в справочнике «Цвет». Первым — слово словаря.
+
+    Словарь общий с кассой: `utils/kiosk_colours.py` — это `pintel_core/colours.py` как есть.
+    Файла нет или слово ему незнакомо — пробуем то, что записано в сделке: значение
+    справочника ищется без учёта регистра, и «Black» найдёт «BLACK» само."""
+    сырое = " ".join(str(сырое or "").split())
+    if not сырое:
+        return []
+    try:
+        from utils import kiosk_colours
+        слово = kiosk_colours.цвет(сырое)
+    except Exception:                                            # noqa: BLE001
+        слово = None
+    return list(dict.fromkeys(x for x in (слово, сырое) if x))
+
+
 def _комплектация(device):
     box, cord = getattr(device, "box", None), getattr(device, "cord", None)
     if box is None and cord is None:
@@ -228,6 +246,13 @@ def поля_товара(session, device, *, запрос, кэш, pick_imeis, 
                 out.append({"meta": row["meta"], "value": int(значение)})
             elif вид == "double":
                 out.append({"meta": row["meta"], "value": float(значение)})
+            elif вид == "link":
+                # ссылку не «обрезаем с многоточием»: обрезанная не откроется вовсе
+                значение = str(значение).strip()
+                if значение and len(значение) <= ДЛИНА_СТРОКИ:
+                    out.append({"meta": row["meta"], "value": значение})
+                else:
+                    skipped.append(имя)
             elif вид in ("string", "text"):
                 if isinstance(значение, bool):
                     значение = "Да" if значение else "Нет"
@@ -285,7 +310,11 @@ def поля_товара(session, device, *, запрос, кэш, pick_imeis, 
     trade_type = str(getattr(device, "trade_type", "") or "").strip()
     положить("Способ приобретения", "Выкуп" if trade_type == "Выкуп" else "Trade-In")
 
-    положить("Цвет", str(getattr(device, "color", "") or "").strip() or None)
+    # Цвет: поле с 13.11.2026 — справочник (BLACK, NATURAL, DEEP PURPLE…), значение ищем по
+    # слову общего словаря кассы; «чёрный космос» и «Blk Ttnm» из старых сделок он переводит.
+    # Пока поле строкой — кладём то же слово строкой.
+    цвета = _цвета(getattr(device, "color", None))
+    положить("Цвет", цвета[0] if цвета else None, цвета)
     panic = getattr(device, "panic_full", None)
     положить("Panic full", None if panic is None else ("Да" if panic else "Нет"))
     положить("Номер сделки", getattr(device, "id", None))
@@ -303,6 +332,9 @@ def поля_товара(session, device, *, запрос, кэш, pick_imeis, 
     # что не прошло проверку — только когда аппарат не «б/у в нормальном состоянии»
     if статус and статус != ЧИСТЫЙ:
         положить(ПОЛЕ_ОТЧЁТА, краткий_отчёт(device) or None)
+
+    # чек диагностики на домене кассы; у сделок, заведённых в боте руками, его нет
+    положить(ПОЛЕ_ЗАКЛЮЧЕНИЯ, str(getattr(device, "check_url", "") or "").strip() or None)
 
     if skipped:
         log.warning("Автоприёмка: пропущены доп. поля: %s", ", ".join(skipped))

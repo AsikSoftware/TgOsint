@@ -441,12 +441,150 @@ def test_a_price_request_is_answered_where_the_point_reads_it(бот_модул�
         return [{"id": 14}]
     monkeypatch.setattr(бот_модуль, "_строка", _строка)
     monkeypatch.setattr(бот_модуль, "_магазины", _магазины)
-    asyncio.run(бот_модуль._посчитать_цену("ABCD12"))
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._посчитать_цену(бот, "ABCD12"))
     тексты = [т for т, _ in журнал]
     assert any("FOR UPDATE" in т for т in тексты)
     assert any(т.startswith("UPDATE kiosk_media SET quote_request = NULL") for т in тексты)
     записано = [п for т, п in журнал if т.startswith("UPDATE kiosk_media SET quote = ")]
     assert записано and _json.loads(записано[0]["q"]) == {"цена": 185000, "почему": "", "запрос": "q-42"}
+    assert бот.письма == [], "касса прежней сборки сумму не ждёт — сотрудника не спрашиваем"
+
+
+def _запрос_цены(бот_модуль, monkeypatch, журнал, *, строка, цена=185000, **в_посылке):
+    """Касса спросила цену: запрос лежит в таблице обмена, прайс отвечает `цена`."""
+    import json as _json
+    _прайс(monkeypatch, цена)
+    запрос = _json.dumps(dict(_полная(бот_модуль), запрос_цены="q-42", **в_посылке),
+                         ensure_ascii=False)
+    monkeypatch.setattr(бот_модуль, "async_session_factory", lambda: Сессия(
+        журнал, lambda текст, п: запрос if текст.startswith("SELECT quote_request") else None))
+
+    async def _строка(код):
+        return dict(строка, code=код)
+
+    async def _магазины():
+        return [{"id": 14}]
+    monkeypatch.setattr(бот_модуль, "_строка", _строка)
+    monkeypatch.setattr(бот_модуль, "_магазины", _магазины)
+
+    def записано():
+        return [_json.loads(п["q"]) for т, п in журнал if т.startswith("UPDATE kiosk_media SET quote = ")]
+    return записано
+
+
+def test_the_price_goes_to_the_employee_as_a_hint_and_the_point_waits_for_his_sum(бот_модуль, monkeypatch):
+    """Новая касса цену из прайса клиенту не показывает. Бот шлёт её подсказкой привязанному
+    сотруднику и спрашивает сумму; кассе отвечает «жду сумму» — и та просит подождать."""
+    class Бот(ФейкБот):
+        async def send_message(self, chat_id=None, text=None, **k):
+            await super().send_message(chat_id=chat_id, text=text)
+            return types.SimpleNamespace(message_id=5512)
+
+    журнал, бот = [], Бот()
+    записано = _запрос_цены(бот_модуль, monkeypatch, журнал, сумму_назовёт_сотрудник=True,
+                            строка={"shop_id": 14, "checks": None, "chat_id": 777})
+    asyncio.run(бот_модуль._посчитать_цену(бот, "ABCD12"))
+    assert len(бот.письма) == 1 and бот.письма[0][0] == 777
+    assert "185 000 ₸" in бот.письма[0][1] and "Какую сумму показать клиенту" in бот.письма[0][1]
+    assert записано() == [{"цена": 185000, "почему": "", "запрос": "q-42", "ждём_сумму": True,
+                           "вопрос": 5512}]
+
+    # автоцены нет — спрашивать не о чем: сделку оценит человек
+    журнал, бот = [], Бот()
+    записано = _запрос_цены(бот_модуль, monkeypatch, журнал, цена=None, сумму_назовёт_сотрудник=True,
+                            строка={"shop_id": 14, "checks": None, "chat_id": 777})
+    asyncio.run(бот_модуль._посчитать_цену(бот, "ABCD12"))
+    assert бот.письма == [] and записано()[0]["цена"] is None and "ждём_сумму" not in записано()[0]
+
+    # бот не смог написать сотруднику — касса узнаёт причину, а не ждёт молча
+    class Глухой(ФейкБот):
+        async def send_message(self, **k):
+            raise RuntimeError("Forbidden: bot was blocked by the user")
+
+    журнал = []
+    записано = _запрос_цены(бот_модуль, monkeypatch, журнал, сумму_назовёт_сотрудник=True,
+                            строка={"shop_id": 14, "checks": None, "chat_id": 777})
+    asyncio.run(бот_модуль._посчитать_цену(Глухой(), "ABCD12"))
+    ответ = записано()[0]
+    assert ответ["ждём_сумму"] is True and "не смог написать" in ответ["беда"]
+    assert "blocked" not in ответ["беда"], "в ответ кассе — причина по-человечески, не текст Telegram"
+
+
+class Письмо:
+    """Сообщение сотрудника боту: текст, чат и то, на что он ответил."""
+
+    def __init__(self, текст, chat_id=777, на=None):
+        self.text, self.ответы = текст, []
+        self.chat = types.SimpleNamespace(id=chat_id)
+        self.reply_to_message = types.SimpleNamespace(message_id=на) if на else None
+
+    async def answer(self, текст, **k):
+        self.ответы.append(текст)
+
+
+class Состояние:
+    def __init__(self, имя=None):
+        self.имя = имя
+
+    async def get_state(self):
+        return self.имя
+
+
+def test_the_employee_answers_with_a_number_and_it_becomes_the_sum_for_the_client(бот_модуль, monkeypatch):
+    """Ответ сотрудника — сообщение из одних цифр. Его ловим по базе, а не по памяти бота:
+    есть сделка с вопросом о сумме — число наше. Посреди другого дела в боте (там тоже
+    спрашивают цифры) — не наше, кроме ответа именно на сообщение с вопросом."""
+    import json as _json
+    ждёт = {"цена": 185000, "почему": "", "запрос": "q-42", "ждём_сумму": True, "вопрос": 5512}
+    журнал, хранится = [], {"quote": _json.dumps(ждёт, ensure_ascii=False)}
+
+    def ответы(текст, п):
+        if текст.startswith("SELECT code, quote FROM kiosk_media WHERE chat_id"):
+            return {"code": "ABCD12", "quote": хранится["quote"]} if п["ch"] == 777 else None
+        if текст.startswith("SELECT quote FROM kiosk_media WHERE code"):
+            return хранится["quote"]
+        if текст.startswith("UPDATE kiosk_media SET quote = "):
+            хранится["quote"] = п["q"]
+        return None
+    monkeypatch.setattr(бот_модуль, "async_session_factory", lambda: Сессия(журнал, ответы))
+    фильтр, принять = бот_модуль._сумма_без_состояния, бот_модуль.принять_сумму
+
+    def спросить(письмо, состояние=None):
+        return asyncio.run(фильтр(письмо, Состояние(состояние)))
+
+    # не цифры, чужой чат, другое дело в боте — мимо; запрос к базе на слова не тратим
+    assert спросить(Письмо("привет")) is False and журнал == []
+    assert спросить(Письмо("170000", chat_id=999)) is False
+    assert спросить(Письмо("170000"), "VikupState:price_buy") is False
+    # ответ на сам вопрос — наш, чем бы сотрудник ни был занят
+    assert спросить(Письмо("170000", на=5512), "VikupState:price_buy")["ksum_code"] == "ABCD12"
+    наше = спросить(Письмо("170 000"))
+    assert наше == {"ksum_code": "ABCD12", "ksum_quote": ждёт}
+
+    # опечатку не принимаем и снова называем подсказку
+    мало = Письмо("170")
+    asyncio.run(принять(мало, **наше))
+    assert "слишком мало" in мало.ответы[0] and "185 000 ₸" in мало.ответы[0]
+    assert _json.loads(хранится["quote"]) == ждёт, "в ответ кассе ничего не записано"
+
+    да = Письмо("170 000 тг")
+    asyncio.run(принять(да, **наше))
+    assert "170 000 ₸" in да.ответы[0] and "ниже автоцены на 15 000 ₸" in да.ответы[0]
+    стало = _json.loads(хранится["quote"])
+    assert стало == {"цена": 185000, "почему": "", "запрос": "q-42", "вопрос": 5512, "сумма": 170000}
+
+    # передумал до отправки — сумму можно назвать другую
+    ещё = спросить(Письмо("165000"))
+    assert ещё and ещё["ksum_quote"]["сумма"] == 170000
+    asyncio.run(принять(Письмо("165000"), **ещё))
+    assert _json.loads(хранится["quote"])["сумма"] == 165000
+
+    # касса уже пересчитывает цену (ответ стёрт) — записать некуда, так и говорим
+    хранится["quote"] = None
+    поздно = Письмо("160000")
+    asyncio.run(принять(поздно, **ещё))
+    assert "записать некуда" in поздно.ответы[0]
 
 
 def test_cycles_are_left_out_of_the_deal_until_the_column_exists(бот_модуль, monkeypatch):

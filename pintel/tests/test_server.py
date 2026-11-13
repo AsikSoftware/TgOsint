@@ -908,8 +908,26 @@ def test_the_point_learns_who_is_linked_and_asks_the_bot_for_a_price(app, monkey
             "UPDATE kiosk_media SET quote_request = NULL, "
             "quote = '{\"цена\": 185000, \"почему\": \"\", \"запрос\": \"q1\"}'"))
     ответ = k.get("/api/kiosk/media/ABCD12", headers=H).json()
-    assert ответ["оценка"] == {"цена": 185000, "почему": "", "запрос": "q1"}
+    assert ответ["оценка"] == {"цена": 185000, "почему": "", "запрос": "q1", "сумма": None,
+                               "ждём_сумму": False, "беда": ""}
     assert ответ["цену_считают"] is False
+
+    # бот спросил сотрудника, какую сумму показать клиенту, — касса обязана это видеть,
+    # иначе она покажет цену из прайса сама; потом доезжает и сама сумма
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "UPDATE kiosk_media SET quote = '{\"цена\": 185000, \"почему\": \"\", "
+            "\"запрос\": \"q1\", \"ждём_сумму\": true, \"вопрос\": 55, "
+            "\"беда\": \"бот не смог написать сотруднику\"}'"))
+    ждёт = k.get("/api/kiosk/media/ABCD12", headers=H).json()["оценка"]
+    assert ждёт["ждём_сумму"] is True and ждёт["сумма"] is None and "не смог" in ждёт["беда"]
+    assert "вопрос" not in ждёт, "номер сообщения в чате сотрудника кассе не нужен"
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "UPDATE kiosk_media SET quote = '{\"цена\": 185000, \"почему\": \"\", "
+            "\"запрос\": \"q1\", \"сумма\": 170000}'"))
+    есть = k.get("/api/kiosk/media/ABCD12", headers=H).json()["оценка"]
+    assert есть["сумма"] == 170000 and есть["ждём_сумму"] is False and есть["цена"] == 185000
 
     # данные на кассе поменяли — новый запрос стирает прежнюю цену
     k.post("/api/kiosk/media/ABCD12/quote", headers=H,
@@ -922,7 +940,8 @@ def test_the_point_learns_who_is_linked_and_asks_the_bot_for_a_price(app, monkey
             "UPDATE kiosk_media SET quote_request = NULL, media_asked = '2026-11-12', "
             "quote = '{\"цена\": null, \"почему\": \"аппарат был в ремонте\", \"запрос\": \"q2\"}'"))
     без = k.get("/api/kiosk/media/ABCD12", headers=H).json()
-    assert без["оценка"] == {"цена": None, "почему": "аппарат был в ремонте", "запрос": "q2"}
+    assert без["оценка"] == {"цена": None, "почему": "аппарат был в ремонте", "запрос": "q2",
+                             "сумма": None, "ждём_сумму": False, "беда": ""}
     assert без["медиа_просили"] is True
 
     # чужой код в запросе не принимаем
@@ -998,7 +1017,7 @@ def test_the_kiosk_can_make_the_bot_remind_the_employee(app, monkeypatch, tmp_pa
     with движок.begin() as conn:
         conn.execute(sqltext(
             "CREATE TABLE kiosk_media (code TEXT, user_id INTEGER, chat_id INTEGER, photos TEXT, "
-            "video TEXT, device_id INTEGER, parcel TEXT, media_asked TEXT)"))
+            "video TEXT, device_id INTEGER, parcel TEXT, media_asked TEXT, quote TEXT)"))
     monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: движок)
     monkeypatch.setattr(ocenka_media, "_напоминали", {})
     ушло = []
@@ -1028,6 +1047,24 @@ def test_the_kiosk_can_make_the_bot_remind_the_employee(app, monkeypatch, tmp_pa
     assert url == "https://api.telegram.org/bot123:СЕКРЕТ/sendMessage" and данные["chat_id"] == 777001
     assert "iPhone 14 Pro" in данные["text"] and "фото 1 из 3" in данные["text"] and "видео — нет" in данные["text"]
     assert "главное меню" in данные["text"] and "СЕКРЕТ" not in json.dumps(да, ensure_ascii=False)
+
+    # До отправки сделка ждёт другого — суммы клиенту: бот спросил её у сотрудника, а тот
+    # не заметил. Напоминание тогда про сумму, с автоценой-подсказкой, а не про фото.
+    monkeypatch.setattr(ocenka_media, "_напоминали", {})
+    with движок.begin() as conn:
+        conn.execute(sqltext(
+            "UPDATE kiosk_media SET parcel = NULL, media_asked = NULL, quote = :q"),
+            {"q": json.dumps({"цена": 185000, "запрос": "q1", "ждём_сумму": True}, ensure_ascii=False)})
+    assert напомнить() == {"отправлено": True, "почему": ""}
+    про_сумму = ушло[-1][1]["text"]
+    assert "185 000 ₸" in про_сумму and "какую сумму показать клиенту" in про_сумму
+    assert "фото" not in про_сумму
+    with движок.begin() as conn:
+        conn.execute(sqltext("UPDATE kiosk_media SET parcel = :p, media_asked = '2026-11-13', quote = NULL"),
+                     {"p": json.dumps({"сделка": {"model": "iPhone 14 Pro"}}, ensure_ascii=False)})
+    monkeypatch.setattr(ocenka_media, "_напоминали", {})
+    ушло.clear()
+    assert напомнить() == {"отправлено": True, "почему": ""}
 
     # подряд бот сотрудника не засыпает
     ещё = напомнить()

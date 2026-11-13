@@ -59,7 +59,10 @@ def test_report_jailbreak_and_colour_code():
     snap["mobilegestalt"] = {"DeviceEnclosureColor": 9, "DeviceColor": 1}
     rep = report_mod.build(snap)
     assert any("джейлбрейк" in x for x in rep["внимание"])
-    assert rep["паспорт"]["код_цвета_корпуса"] == 9 and rep["паспорт"]["цвет"] == "BLUE"
+    # код корпуса читается и остаётся в отчёте, но цветом аппарата не становится: источник
+    # цвета — база IMEI, а без неё его выбирает сотрудник
+    assert rep["паспорт"]["код_цвета_корпуса"] == 9 and rep["паспорт"]["цвет_по_коду"] == "BLUE"
+    assert rep["паспорт"]["цвет"] is None
     assert rep["джейлбрейк"].startswith("НАЙДЕНЫ") and rep["mobilegestalt"] == "есть"
 
     snap["mobilegestalt"] = {"недоступен": "DeprecationError: iOS 17.4+"}

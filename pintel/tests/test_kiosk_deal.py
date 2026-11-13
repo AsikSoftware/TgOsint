@@ -1647,3 +1647,19 @@ def test_the_choice_survives_a_redraw_and_dies_with_the_deal(окно):
 
     окно.начать_сделку()
     assert э.цвет_выбран is None and not э.цвет_нужен and э.цвет_блок.isHidden()
+
+
+def test_cable_colour_code_does_not_answer_for_the_employee(окно):
+    """Источник цвета один — база IMEI. Код корпуса с кабеля грубый (у чёрного и графитового
+    он общий), поэтому цветом не становится: даже когда он прочитан, касса спрашивает
+    сотрудника и ничего за него не отмечает."""
+    окно.cfg["ocenka_bot"] = "PintelOlxBot"
+    окно.начать_сделку()
+    окно.анкета_готова(АНКЕТА)
+    окно.state = "scanning"
+    rep = _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip", цвет=None)
+    rep["паспорт"].update({"код_цвета_корпуса": 1, "цвет_по_коду": "BLACK / GRAPHITE"})
+    окно.on_done({"report": rep, "client_id": "x"})
+    э = окно.s_work
+    assert э.цвет_нужен and not э.цвет_блок.isHidden() and э.цвет_выбран is None
+    assert not any(b.isChecked() for b in э.цвет_кнопки.values())

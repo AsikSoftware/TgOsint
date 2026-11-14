@@ -498,29 +498,90 @@ def test_a_failed_phone_test_is_seen_and_goes_into_the_deal(окно, monkeypatc
     assert "НЕ ПРОШЛИ: Динамик" in посылка["сделка"]["comment_ocenka"]
 
 
-def test_the_phone_test_can_be_skipped_but_it_is_written_down(окно, monkeypatch):
-    """Телефона нет в нашем Wi-Fi — точка не должна встать. Пропуск возможен, но он записан
-    вместе с тем, кто его сделал, и стоит автоцены: сделку смотрит человек."""
-    import httpx
+def test_the_phone_test_cannot_be_skipped(окно):
+    """Кнопку «Нет в нашей сети» владелец убрал: пропустить тест на телефоне нельзя, и без
+    его результата сделка не уходит. Страница теста открывается с любого интернета, так что
+    «телефон не в нашей сети» причиной больше не бывает."""
+    from PySide6.QtWidgets import QLabel, QPushButton
     окно.cfg.update({"ocenka_bot": "PintelOlxBot", "ocenka_bot_token": "123:ABC",
                      "ocenka_chat_id": "-1001"})
     _чистый_без_теста(окно)
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
-    assert not окно.s_work.b_отправить.isEnabled()          # теста не было
-    окно.тест_не_будет()
-    assert окно.s_work.b_отправить.isEnabled()              # пропуск отмечен — работать можно
-    ушло = {}
-    _через_бота(окно, monkeypatch)
-    monkeypatch.setattr(httpx, "post", lambda url, data=None, files=None, timeout=None:
-                        (ушло.update(files=files),
-                         httpx.Response(200, json={"ok": True, "result": {"message_id": 1}}))[1])
-    окно.s_work._отправить()
-    окно.tasks[-1].wait(5000)
-    посылка = json.loads(ушло["files"]["document"][1].decode("utf-8"))
-    assert "тест_телефона" not in посылка
-    assert "Асылбек" in посылка["тест_пропущен"]                 # кто отметил — из настроек точки
-    assert "Тест на телефоне пропущен" in посылка["сделка"]["comment_ocenka"]
+    э = окно.s_work
+    assert not э.b_отправить.isEnabled()                    # теста не было
+    assert not hasattr(окно, "тест_не_будет") and not hasattr(э, "пропустить_тест")
+    страница = э.правая.widget(ui_deal.СТР_ТЕСТ)
+    assert [b.text() for b in страница.findChildren(QPushButton)] == ["Другой код"]
+    слова = " ".join(l.text() for l in страница.findChildren(QLabel)) + э.почему_нельзя()
+    assert "нашей сети" not in слова
+    assert "Нужен тест на телефоне" in э.почему_нельзя()
+    _тест_прошёл(окно)
+    assert э.b_отправить.isEnabled()                        # тест пройден — работать можно
+
+
+def test_another_code_does_not_throw_away_a_test_already_being_taken(окно, monkeypatch):
+    """«Другой код» нажали, а клиент уже открыл страницу по прошлому QR и проходит тест на
+    ней. Его результат касса обязана принять: заставлять клиента проходить тест второй раз
+    только потому, что на экране сменился код, нельзя. А вот после готового результата
+    «Другой код» значит «тест заново» — и прежние коды в счёт уже не идут."""
+    from pintel_core import phonetest
+    окно.client.enabled = True
+    _сразу(окно, monkeypatch)
+    monkeypatch.setattr(окно.client, "открыть_тест",
+                        lambda токен, ev_id=None: f"https://kiosk.pintelkz.com/t/{токен}")
+    ответы = {}
+    monkeypatch.setattr(окно.client, "результат_теста", lambda токен: ответы.get(токен, {}))
+    monkeypatch.setattr(окно.client, "медиа", lambda код: {"известно": True, "начали": False})
+    окно.cfg["ocenka_bot"] = "PintelOlxBot"
+    окно.начать_сделку()
+    первый = окно.код_теста
+    окно._привязка_готова("Асылбек Н.")
+    окно.анкета_готова({**АНКЕТА, "имя": "Зама", "телефон": "+77058837953"})
+    окно.state = "scanning"
+    окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
+    окно.новый_код_теста()                                  # «Другой код»
+    второй = окно.код_теста
+    assert второй != первый and окно.коды_теста == [первый, второй]
+    ответы[первый] = {k: phonetest.ОК for k in phonetest.КЛЮЧИ}   # тест прошли по первому QR
+    окно._спросить_тест()
+    assert окно.s_work._тест_закрыт() and окно.тест_телефона
+
+    # результат есть; «Другой код» теперь — это тест заново, старый ответ не подставляется
+    окно.новый_код_теста()
+    assert окно.коды_теста == [окно.код_теста] and not окно.s_work._тест_закрыт()
+    окно._спросить_тест()
+    assert not окно.s_work._тест_закрыт(), "прошлый результат не должен закрыть новый тест"
+
+    # новая сделка — коды прошлой в неё не идут
+    окно.go_home()
+    окно.начать_сделку()
+    assert окно.коды_теста == [окно.код_теста] and первый not in окно.коды_теста
+
+
+def test_the_kiosk_lan_address_is_not_shown_while_the_domain_is_asked(окно, monkeypatch):
+    """Пока сервер не дал адрес на домене, QR на экране нет: адрес самой кассы открывается
+    только с её Wi-Fi, и телефон, успевший его считать, грузил бы страницу без конца.
+    Сервер не ответил — код кассы показываем, но говорим словами, что нужен Wi-Fi точки."""
+    from pintel_kiosk.client import ServerError
+    окно.client.enabled = True
+    monkeypatch.setattr(kapp.phoneweb, "адрес_в_сети", lambda: "192.168.1.50")
+    отложено = []
+    monkeypatch.setattr(окно, "_run", lambda fn, ok=None, err=None: отложено.append((fn, ok, err)))
+    окно.новый_код_теста()
+    э = окно.s_work
+    assert э.qr_тест.pm is None and э.тест_ссылка.text() == "", "адрес кассы показали до ответа"
+    assert "Готовим код" in э.тест_подсказка.text()
+    fn, ok, err = отложено.pop()
+    ok(f"https://kiosk.pintelkz.com/t/{окно.код_теста}")
+    assert "kiosk.pintelkz.com" in э.тест_ссылка.text() and э.qr_тест.pm is not None
+    assert э.тест_подсказка.text() == ui_deal.ПОДСКАЗКА_ТЕСТА
+
+    окно.новый_код_теста()
+    fn, ok, err = отложено.pop()
+    err(str(ServerError("нет связи с сервером")))
+    assert "192.168.1.50" in э.тест_ссылка.text() and окно.тест_через_сервер is False
+    assert "Wi-Fi точки" in э.тест_подсказка.text()
 
 
 def test_every_deal_gets_its_own_one_time_link(окно):
@@ -2033,3 +2094,48 @@ def test_the_employee_can_ask_the_bot_to_write_again(окно, monkeypatch):
     assert not э.b_напомнить.isVisible()
     окно.начать_сделку()
     assert э.b_напомнить.isHidden() and э.напомнить_итог.isHidden()
+
+
+# ---------------------------------------------------------------- тест на телефоне после привязки
+
+def test_the_phone_test_result_arrives_after_the_link_screen(окно, monkeypatch):
+    """Сделка начинается с экрана привязки, а код теста заведён ещё раньше. Пока сотрудник
+    сканирует QR привязки, опрос результата глохнуть не должен: иначе клиент проходит тест,
+    телефон отдаёт результат серверу, а касса ждёт вечно — и лечилось это только кнопкой
+    «Другой код», после которой клиент проходил тест второй раз (точка 2, 13.11.2026:
+    четыре сделки из четырёх)."""
+    from pintel_core import phonetest
+    окно.client.enabled = True
+    окно.cfg["ocenka_bot"] = "PintelOlxBot"
+    monkeypatch.setattr(окно.client, "открыть_тест",
+                        lambda токен, ev_id=None: f"https://kiosk.pintelkz.com/t/{токен}")
+    monkeypatch.setattr(окно.client, "результат_теста", lambda токен: {})
+    monkeypatch.setattr(окно.client, "медиа", lambda код: {"известно": True, "начали": False})
+    окно.начать_сделку()
+    for поток in окно.tasks:
+        поток.wait(5000)
+    for _ in range(50):
+        QApplication.processEvents()
+    assert окно.state == "link" and окно.тест_через_сервер and окно.тест_опрос.isActive()
+    окно._спросить_тест()                      # тик опроса: сотрудник ещё сканирует QR привязки
+    for поток in окно.tasks:
+        поток.wait(5000)
+    for _ in range(50):
+        QApplication.processEvents()
+    assert окно.тест_опрос.isActive(), "опрос теста заглох на экране привязки"
+
+    окно._привязка_готова("Асылбек Н.")
+    окно.анкета_готова({**АНКЕТА, "имя": "Зама", "телефон": "+77058837953"})
+    окно.state = "scanning"
+    окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
+    assert окно.тест_опрос.isActive(), "QR теста на экране, а результат никто не спрашивает"
+    # клиент прошёл тест — следующий же круг опроса приносит результат на кассу
+    monkeypatch.setattr(окно.client, "результат_теста",
+                        lambda токен: {k: phonetest.ОК for k in phonetest.КЛЮЧИ})
+    окно._тест_спрашиваем = False
+    окно._спросить_тест()
+    for поток in окно.tasks:
+        поток.wait(5000)
+    for _ in range(50):
+        QApplication.processEvents()
+    assert окно.s_work._тест_закрыт() and окно.тест_телефона

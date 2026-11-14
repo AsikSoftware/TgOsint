@@ -1086,3 +1086,188 @@ def test_the_kiosk_can_make_the_bot_remind_the_employee(app, monkeypatch, tmp_pa
         conn.execute(sqltext("UPDATE kiosk_media SET device_id = 7311 WHERE code = 'ABCD12'"))
     assert "уже создана" in напомнить()["почему"]
     assert k.post("/api/kiosk/media/ABCD12/remind", headers={"X-Kiosk-Token": "pk_wrong"}).status_code == 401
+
+
+# ---------- касса прислала то, что не лезет в колонку ----------
+
+@pytest.fixture(autouse=True)
+def как_в_postgres():
+    """SQLite не проверяет ни длину VARCHAR, ни тип INTEGER, а боевой PostgreSQL роняет на
+    них вставку. Здесь та же строгость включается руками, перед записью в базу: без неё
+    тесты зелёные, а сервер отвечает 500 — так и было со 02.11 по 13.11.2026.
+
+    Включено для всех тестов этого файла: строка длиннее колонки в любом месте сервера —
+    это будущий 500 на боевом, и узнавать о нём лучше здесь."""
+    from sqlalchemy import Integer, String, event, inspect as sa_inspect
+    from sqlalchemy.exc import DataError
+
+    def отказ(причина):
+        return DataError("INSERT", {}, Exception(причина))
+
+    def строго(session, _контекст, _объекты):
+        for объект in list(session.new) + list(session.dirty):
+            for поле in sa_inspect(type(объект)).column_attrs:
+                тип, значение = поле.columns[0].type, getattr(объект, поле.key, None)
+                if значение is None:
+                    continue
+                if isinstance(тип, String):
+                    if not isinstance(значение, str):
+                        raise отказ(f"{поле.key}: в текстовую колонку пришло {type(значение).__name__}")
+                    if "\x00" in значение:
+                        raise отказ("PostgreSQL text fields cannot contain NUL (0x00) bytes")
+                    if тип.length and len(значение) > тип.length:
+                        raise отказ(f"value too long for type character varying({тип.length})")
+                elif isinstance(тип, Integer):
+                    try:
+                        число = int(значение)
+                    except (TypeError, ValueError):
+                        raise отказ(f"invalid input syntax for type integer: {поле.key}")
+                    if not -2 ** 31 <= число < 2 ** 31:
+                        raise отказ("integer out of range")
+
+    event.listen(SessionLocal, "before_flush", строго)
+    yield
+    event.remove(SessionLocal, "before_flush", строго)
+
+
+# основание цены из оценки, застрявшей в очереди кассы точки 2: 36 знаков при колонке в 32
+ДЛИННОЕ_ОСНОВАНИЕ = "прайс: батарея 93% → столбец «91-95»"
+
+
+def test_the_stuck_evaluation_with_a_long_price_reason_is_accepted(app, как_в_postgres):
+    """Со 02.11 по 13.11.2026 касса точки 2 раз в минуту слала одну и ту же оценку и 630 раз
+    получила 500. В отчёте лежала цена по прайсу (кассы до 28.10 считали её сами), а её
+    «основание» — 36 знаков — сервер клал в колонку `price_column` на 32. PostgreSQL на
+    этом роняет вставку: «value too long for type character varying(32)».
+
+    Короткая колонка — не причина терять оценку: полный текст и так лежит в отчёте."""
+    H = точка("Очередь-1", "pk_ochered_1")
+    k = TestClient(app, follow_redirects=False, raise_server_exceptions=False)
+    rep, snap = real_report()
+    rep["цена"] = {"валюта": "₸", "цена": 260000, "основание": ДЛИННОЕ_ОСНОВАНИЕ, "нехватка": []}
+    assert len(ДЛИННОЕ_ОСНОВАНИЕ) > Evaluation.__table__.c.price_column.type.length
+    body = {"client_id": "00008140-0011223344556677-a1b2c3d4e5f6", "report": rep, "snapshot": snap}
+
+    r = k.post("/api/kiosk/evaluations", json=body, headers=H)
+    assert r.status_code == 200, r.text
+    assert r.json()["создана"] is True
+    db = SessionLocal()
+    ev = db.get(Evaluation, r.json()["id"])
+    assert ev.price_offer == 260000 and ev.price_column == ДЛИННОЕ_ОСНОВАНИЕ[:32]
+    assert ev.report["цена"]["основание"] == ДЛИННОЕ_ОСНОВАНИЕ        # в отчёте — целиком
+    db.close()
+    # касса досылает то же самое ещё раз (ответ не дошёл) — второй оценки не появляется
+    r2 = k.post("/api/kiosk/evaluations", json=body, headers=H)
+    assert r2.status_code == 200 and r2.json()["id"] == r.json()["id"] and r2.json()["создана"] is False
+
+    # тот же отчёт, досланный позже (история Apple), ломался бы на той же колонке
+    rep2 = {**rep, "итог": {**rep["итог"], "вердикт": "В" * 50}}
+    r3 = k.patch(f"/api/kiosk/evaluations/{r.json()['id']}", json={"report": rep2}, headers=H)
+    assert r3.status_code == 200, r3.text
+    db = SessionLocal()
+    ev = db.get(Evaluation, r.json()["id"])
+    assert ev.verdict == "В" * 32 and ev.price_column == ДЛИННОЕ_ОСНОВАНИЕ[:32]
+    db.close()
+
+
+def test_a_report_the_server_cannot_digest_is_still_an_evaluation(app, как_в_postgres):
+    """Отчёт собирает касса, и на точках стоят сборки разных месяцев: поле может оказаться
+    длиннее колонки, строкой вместо числа или вовсе не тем, чем мы его ждём. Колонки оценки
+    — это выжимка для очереди и поиска; не влезло или не разобралось — в выжимке пусто или
+    обрезано, а сам отчёт сохранён как пришёл. Падать с 500 здесь нельзя: касса будет слать
+    то же самое вечно."""
+    H = точка("Очередь-2", "pk_ochered_2")
+    k = TestClient(app, follow_redirects=False, raise_server_exceptions=False)
+    rep, snap = real_report()
+    rep["паспорт"] = {**rep["паспорт"], "серийник": "S" * 40, "imei": "4" * 40, "imei2": None,
+                      "модель": "iPhone " + "очень длинное имя " * 6, "код_модели": "iPhone18,4-" + "x" * 40,
+                      "ios": "27.0.1 (сборка 24A5279h, бета 3)", "цвет": ["BLACK"]}
+    rep["память"] = {"объём_гб": "256 ГБ"}
+    rep["батарея"] = {**rep["батарея"], "здоровье_%": "93", "циклы": 10 ** 12}
+    rep["итог"] = {"вердикт": "ИДЕАЛ, но " + "с оговорками " * 5}
+    rep["цена"] = {"цена": "договорная", "основание": {"столбец": "91-95"}}
+    rep["apple_история"] = {"Display": "сырое", "Battery": {"меняли": True}}
+    rep["правовой"] = "не прочитался"
+    rep["sickw"] = ["мусор"]
+    r = k.post("/api/kiosk/evaluations", json={"client_id": "c\x00-мусор-" + "я" * 80, "report": rep, "snapshot": snap},
+               headers=H)
+    assert r.status_code == 200, r.text
+    db = SessionLocal()
+    ev = db.get(Evaluation, r.json()["id"])
+    assert ev.serial == "S" * 32 and ev.imei == "4" * 20 and len(ev.model_name) == 64
+    assert ev.model_code == ("iPhone18,4-" + "x" * 40)[:32] and len(ev.ios) == 16 and len(ev.verdict) == 32
+    assert ev.capacity_gb is None and ev.battery_health == 93 and ev.battery_cycles is None
+    assert ev.price_offer is None and ev.price_column is None and ev.colour is None
+    assert ev.apple_summary == "менялось: Battery" and ev.locks_summary == "чисто"
+    assert "\x00" not in ev.client_id and len(ev.client_id) <= 64
+    assert ev.report["память"] == {"объём_гб": "256 ГБ"}                # отчёт — как пришёл
+    assert ev.device.serial == "S" * 32 and ev.device.imei == "4" * 20 and len(ev.device.model_name) == 64
+    db.close()
+
+
+def test_what_the_base_refuses_comes_back_as_4xx_with_a_reason(app, monkeypatch):
+    """База всё-таки отказала — отвечаем 4xx и причиной словами, а не «Internal Server Error».
+    По 4xx новая касса понимает, что слать это снова бессмысленно, и откладывает оценку;
+    500 она считает поломкой сервера и ждёт починки. Сессия после отказа остаётся рабочей."""
+    from sqlalchemy.exc import DataError, IntegrityError, OperationalError
+    from pintel_server.services import evaluations as ev_service
+    H = точка("Очередь-3", "pk_ochered_3")
+    k = TestClient(app, follow_redirects=False, raise_server_exceptions=False)
+    rep, snap = real_report()
+    body = {"client_id": "c-отказ", "report": rep, "snapshot": snap}
+    настоящая = ev_service.create_from_kiosk
+
+    def упасть(ошибка):
+        def подмена(db, kiosk, payload):
+            db.add(Device(serial="полуготовое"))          # то, что успели положить до отказа
+            db.flush()
+            raise ошибка
+        monkeypatch.setattr(ev_service, "create_from_kiosk", подмена)
+
+    упасть(DataError("INSERT INTO evaluations …", {"serial": "СЕКРЕТ"},
+                     Exception("value too long for type character varying(16)")))
+    r = k.post("/api/kiosk/evaluations", json=body, headers=H)
+    assert r.status_code == 422, r.text
+    assert "оценка не принята" in r.json()["detail"] and "character varying(16)" in r.json()["detail"]
+    assert "СЕКРЕТ" not in r.text and "INSERT" not in r.text       # ни запроса, ни значений наружу
+
+    упасть(IntegrityError("INSERT", {}, Exception("duplicate key value violates unique constraint")))
+    r = k.post("/api/kiosk/evaluations", json=body, headers=H)
+    assert r.status_code == 409 and "оценка не принята" in r.json()["detail"]
+
+    # база недоступна — это не отказ, а «попробуйте позже»: касса обязана дослать
+    упасть(OperationalError("SELECT", {}, Exception("connection refused")))
+    r = k.post("/api/kiosk/evaluations", json=body, headers=H)
+    assert r.status_code == 503, r.text
+
+    monkeypatch.setattr(ev_service, "create_from_kiosk", настоящая)
+    db = SessionLocal()
+    assert db.scalar(select(Device).where(Device.serial == "полуготовое")) is None   # откатили
+    db.close()
+    r = k.post("/api/kiosk/evaluations", json=body, headers=H)
+    assert r.status_code == 200 and r.json()["создана"] is True
+
+
+def test_two_copies_of_one_evaluation_at_once_make_one(app, monkeypatch):
+    """Касса шлёт оценку и тут же досылает её из очереди: два запроса с одним client_id идут
+    одновременно, оба не находят записи, второй упирается в уникальный ключ. Раньше это был
+    бы 500 и ещё один круг досылки; теперь второй получает ту же оценку, что и первый."""
+    from pintel_server.services import evaluations as ev_service
+    H = точка("Очередь-4", "pk_ochered_4")
+    k = TestClient(app, follow_redirects=False, raise_server_exceptions=False)
+    rep, snap = real_report()
+    body = {"client_id": "c-гонка", "report": rep, "snapshot": snap}
+    первый = k.post("/api/kiosk/evaluations", json=body, headers=H).json()
+
+    настоящий, раз = ev_service._найти_по_client_id, []
+
+    def не_видит_в_первый_раз(db, cid):
+        раз.append(cid)
+        return None if len(раз) == 1 else настоящий(db, cid)
+    monkeypatch.setattr(ev_service, "_найти_по_client_id", не_видит_в_первый_раз)
+    r = k.post("/api/kiosk/evaluations", json=body, headers=H)
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == первый["id"] and r.json()["создана"] is False
+    db = SessionLocal()
+    assert len(db.scalars(select(Evaluation).where(Evaluation.client_id == "c-гонка")).all()) == 1
+    db.close()

@@ -68,7 +68,8 @@ class NetThread(QThread):
                 try:
                     sent = self.client.flush_queue()
                     self.client.heartbeat({"драйвер": self.device_state != NO_DRIVER, "телефон": self.device_state,
-                                           "в_очереди": self.client.queued(), "версия": __version__})
+                                           "в_очереди": self.client.queued(),
+                                           "отвергнуто": self.client.rejected(), "версия": __version__})
                     # журнал и эталоны — туда же: раньше они лежали только на этой машине
                     строк = self.client.отправить_логи(забрать_логи())
                     эталоны = self.client.отправить_эталоны(
@@ -188,6 +189,7 @@ class KioskWindow(QMainWindow):
         super().__init__()
         self.cfg = cfg
         self.client = Client(cfg)
+        self.client.log = log_line             # что стало с очередью досылки — в журнал точки
         self.state = "idle"
         self.wait_unplug = False
         self.pipeline = None
@@ -490,6 +492,7 @@ class KioskWindow(QMainWindow):
                 "Токен": (self.client.token[:6] + "…") if self.client.token else "не задан",
                 "Версия": __version__,
                 "Оценок в очереди": self.client.queued(),
+                "Не принято сервером": self.client.rejected(),
                 "Бот Оценки": self.cfg.get("ocenka_bot") or "не задан"}
 
     def открыть_меню(self):

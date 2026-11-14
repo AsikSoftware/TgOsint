@@ -68,13 +68,15 @@ def убрать_старое(дней=90):
     приём: записать очередную оценку будет некуда.
 
     Эталоны не трогаем: они обезличены, по 85 КБ и ограничены числом (reference_keep).
-    Чеки клиентам и остатки очереди на сервер чистим вместе с оценками."""
+    Чеки клиентам и остатки очереди на сервер чистим вместе с оценками — и те, что сервер
+    отверг (`queue/rejected`): за 90 дней их успевают разобрать, а весят они как оценка."""
     if not дней or int(дней) <= 0:
         return 0
     порог = time.time() - int(дней) * 86400
     убрано = 0
     цели = (glob.glob(os.path.join(data_dir(), "out", "*"))
-            + glob.glob(os.path.join(data_dir(), "queue", "*.json")))
+            + glob.glob(os.path.join(data_dir(), "queue", "*.json"))
+            + glob.glob(os.path.join(data_dir(), "queue", "rejected", "*")))
     for путь in цели:
         try:
             if os.path.getmtime(путь) >= порог:
@@ -269,6 +271,15 @@ class Pipeline(QThread):
         if сказал:
             snap.setdefault("repair_history_meta", {})["батарея_телефона"] = dict(сказал)
 
+    def _не_ушло(self) -> str:
+        """Что написать на шаге «отправка», когда оценка до сервера не дошла.
+
+        «Отправим позже» — только если она правда стоит в очереди. Сервер её отверг — она
+        лежит на киоске и сама никуда не уйдёт, обещать обратное нельзя."""
+        if not self.client.enabled or getattr(self.client, "отвергнуто", ""):
+            return "сохранено на киоске"
+        return "отправим позже"
+
     async def _взять_прошлую(self, ld) -> bool:
         """Взять проверку этого телефона, сделанную недавно. → взяли (и `done` уже ушёл)?
 
@@ -315,8 +326,7 @@ class Pipeline(QThread):
         server = await asyncio.to_thread(self.client.upload, payload)
         if not server:
             server = {"номер": self.client.local_number(), "локально": True}
-            self._step("upload", "done" if not self.client.enabled else "warn",
-                       "сохранено на киоске" if not self.client.enabled else "отправим позже")
+            self._step("upload", "done" if not self.client.enabled else "warn", self._не_ушло())
         else:
             self._step("upload", "done", "отправлено")
         log_line(f"взята прошлая проверка: {находка['словами']}, папка {находка['путь']}, "
@@ -478,8 +488,7 @@ class Pipeline(QThread):
         server = await asyncio.to_thread(self.client.upload, payload)   # без связи кладёт в очередь сама
         if not server:
             server = {"номер": self.client.local_number(), "локально": True}
-            self._step("upload", "done" if not self.client.enabled else "warn",
-                       "сохранено на киоске" if not self.client.enabled else "отправим позже")
+            self._step("upload", "done" if not self.client.enabled else "warn", self._не_ушло())
         else:
             self._step("upload", "done", "отправлено")
         result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial, "out": out}

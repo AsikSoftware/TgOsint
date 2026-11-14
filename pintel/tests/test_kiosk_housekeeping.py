@@ -69,6 +69,20 @@ def test_leftover_queue_and_receipts_are_cleaned(точка):
     assert not os.path.exists(хвост) and not os.path.exists(чек)
 
 
+def test_what_the_server_refused_is_cleaned_too(точка):
+    """Отвергнутые сервером оценки лежат в queue/rejected, пока их не разберут. Вечно они
+    там лежать не должны: каждая весит как оценка, а диск на точке один."""
+    папка = os.path.join(точка, "queue", "rejected")
+    os.makedirs(папка, exist_ok=True)
+    старая, причина, свежая = (os.path.join(папка, n) for n in ("a-1.json", "a-1.txt", "b-2.json"))
+    for p in (старая, причина, свежая):
+        open(p, "w").write("x")
+    _состарить(старая, 120)
+    _состарить(причина, 120)
+    assert worker.убрать_старое(90) == 2
+    assert os.listdir(папка) == ["b-2.json"]
+
+
 def test_cleanup_can_be_turned_off(точка):
     старая = os.path.join(точка, "out", "20260101_101010_phone")
     os.makedirs(старая, exist_ok=True)

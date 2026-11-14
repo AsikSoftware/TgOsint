@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """API киоска. Авторизация — заголовок X-Kiosk-Token (токен выдаёт администратор в Настройках)."""
+import logging
 import os
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import DataError, IntegrityError, InterfaceError, OperationalError
 from sqlalchemy.orm import Session as DbSession
 
 from .. import audit
@@ -21,6 +23,7 @@ from ..services import points as points_service
 from ..services import sickw_service
 
 router = APIRouter(prefix="/api/kiosk", tags=["kiosk"])
+log = logging.getLogger("pintel.kiosk_api")
 
 
 class SickwIn(BaseModel):
@@ -206,9 +209,34 @@ def sickw(body: SickwIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = 
     return r
 
 
+def _отказ_базы(db, kiosk_id, что, e) -> HTTPException:
+    """База не приняла оценку → ответ с причиной вместо голого «Internal Server Error».
+
+    Касса смотрит на код. 4xx — «это не примут никогда»: она откладывает оценку в сторону и
+    перестаёт её слать. 5xx — «сервер сломан или занят»: оценка остаётся в очереди и уйдёт
+    позже. Поэтому отказ по содержимому — 422 и 409, а недоступная база — 503.
+
+    Причину берём первой строкой сообщения базы: дальше у PostgreSQL идёт DETAIL со
+    значениями («Key (serial)=(…)»), а им в ответе и в журнале точки делать нечего."""
+    db.rollback()
+    причина = (str(getattr(e, "orig", None) or e).strip().splitlines() or ["без пояснения"])[0][:200]
+    if isinstance(e, DataError):
+        код, текст = 422, f"оценка не принята: поле не помещается в базу ({причина})"
+    elif isinstance(e, IntegrityError):
+        код, текст = 409, f"оценка не принята: запись противоречит уже сохранённым ({причина})"
+    else:
+        код, текст = 503, "база сервера недоступна, оценку нужно прислать позже"
+    log.warning("киоск %s, %s: %s — %s", kiosk_id, что, код, причина)
+    return HTTPException(код, текст)
+
+
 @router.post("/evaluations")
 def create_evaluation(body: EvaluationIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
-    ev, created = ev_service.create_from_kiosk(db, kiosk, body.model_dump())
+    kiosk_id = kiosk.id
+    try:
+        ev, created = ev_service.create_from_kiosk(db, kiosk, body.model_dump())
+    except (DataError, IntegrityError, OperationalError, InterfaceError) as e:
+        raise _отказ_базы(db, kiosk_id, "новая оценка", e)
     return {"id": ev.id, "номер": ev.number, "день": ev.day, "создана": created,
             "статус": ev.status, "ссылка_отчёта": ev_service.report_url(ev),
             "ссылка_чека": ev_service.check_url(ev),
@@ -220,7 +248,11 @@ def update_evaluation(ev_id: int, body: UpdateIn, kiosk: Kiosk = Depends(current
     ev = db.get(Evaluation, ev_id)
     if not ev or ev.kiosk_id != kiosk.id:
         raise HTTPException(404, "оценка не найдена")
-    ev_service.update_from_kiosk(db, kiosk, ev, body.report, body.snapshot_patch)
+    kiosk_id = kiosk.id
+    try:
+        ev_service.update_from_kiosk(db, kiosk, ev, body.report, body.snapshot_patch)
+    except (DataError, IntegrityError, OperationalError, InterfaceError) as e:
+        raise _отказ_базы(db, kiosk_id, f"обновление оценки {ev_id}", e)
     return {"id": ev.id, "статус": ev.status, "apple": ev.apple_summary}
 
 

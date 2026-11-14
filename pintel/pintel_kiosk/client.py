@@ -13,7 +13,19 @@ from .config import app_dir, data_dir
 
 
 class ServerError(RuntimeError):
-    pass
+    """Сервер не помог. `код` — код ответа HTTP; None — до нашего сервера не дошли вовсе."""
+
+    def __init__(self, текст="", код=None):
+        super().__init__(текст)
+        self.код = код
+
+
+# Сервер разобрал оценку и отказал по её содержимому: второй раз он ответит то же самое.
+# 401 и 403 сюда не входят — это токен точки, его чинят, и оценка после этого уйдёт.
+ОТКАЗ_НАВСЕГДА = (400, 409, 413, 422)
+# Сервер сломан или занят (5xx и прочее): оценка ждёт в очереди, пауза между попытками
+# растёт вдвое — от двух минут до часа.
+ПАУЗА_С, ПАУЗА_МАКС_С = 120, 3600
 
 
 class Client:
@@ -34,6 +46,10 @@ class Client:
         self.last_error = ""
         self.qdir = os.path.join(data_dir(), "queue")
         self._замок = threading.Lock()
+        self.log = lambda текст: None          # журнал точки: его подставляет окно (worker.log_line)
+        self.отвергнуто = ""                   # почему сервер не взял последнюю оценку; "" — взял или не дошло
+        self._отложено = {}                    # имя файла очереди → (попыток, не раньше какого времени)
+        self._часы = time.monotonic
 
     def сменить_токен(self, токен: str) -> None:
         self.token = str(токен or "").strip()
@@ -85,10 +101,18 @@ class Client:
             if r.status_code in (401, 403):
                 self.online = False
             self.last_error = f"сервер ответил {r.status_code}: {detail}"
+            raise ServerError(self.last_error, r.status_code)
+        try:
+            ответ = r.json()
+        except ValueError:
+            # 200 и не JSON — отвечал не наш сервер: страница входа гостевой сети, заглушка
+            # прокси. Считать это доставкой нельзя, это та же «нет связи».
+            self.online = False
+            self.last_error = "вместо сервера ответила чужая страница — проверьте интернет на точке"
             raise ServerError(self.last_error)
         self.online = True
         self.last_error = ""
-        return r.json()
+        return ответ
 
     # ---------- API ----------
     def config(self):
@@ -135,15 +159,50 @@ class Client:
 
         Сервера нет вовсе — в очередь не кладём: досылать некуда (flush_queue работает
         только при настроенном сервере), а те же слепок и отчёт уже лежат в папке out.
-        Копия весит около мегабайта на оценку и росла бы вечно."""
+        Копия весит около мегабайта на оценку и росла бы вечно.
+
+        Сервер ответил отказом по содержимому (`ОТКАЗ_НАВСЕГДА`) — в очередь тоже не кладём:
+        второй раз он ответит то же. Оценка ложится в `queue/rejected` с причиной, а причина
+        остаётся в `self.отвергнуто`, чтобы проверка не обещала «отправим позже»."""
+        self.отвергнуто = ""
         try:
             res = self._req("POST", "/api/kiosk/evaluations", json=payload, timeout=60)
-        except ServerError:
+        except ServerError as e:
             if self.enabled:
-                path = os.path.join(self.qdir, f"{payload['client_id']}.json")
-                json.dump(payload, open(path, "w", encoding="utf-8"), ensure_ascii=False)
+                имя = f"{payload['client_id']}.json"
+                path = os.path.join(self.qdir, имя)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                if e.код in ОТКАЗ_НАВСЕГДА:
+                    self.отвергнуто = str(e)
+                    self._отложить_отвергнутое(имя, str(e))
             return None
         return res
+
+    def _отложить_отвергнутое(self, имя, причина):
+        """Оценку, которую сервер не возьмёт никогда, — из очереди в `queue/rejected`.
+
+        Не удаляем: это данные проверки, и решать их судьбу должен человек. Рядом кладём
+        причину текстом; строка уходит и в журнал точки, а он — на сервер. В журнал идёт
+        только хвост имени: в начале имени файла стоит серийник телефона."""
+        папка = os.path.join(self.qdir, "rejected")
+        try:
+            os.makedirs(папка, exist_ok=True)
+            os.replace(os.path.join(self.qdir, имя), os.path.join(папка, имя))
+            with open(os.path.join(папка, имя[:-5] + ".txt"), "w", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {причина}\n")
+        except OSError as e:
+            self.log(f"очередь: оценку …{имя[:-5][-12:]} не удалось отложить: {e}")
+            return
+        self.log(f"очередь: сервер не принял оценку …{имя[:-5][-12:]} и не примет ({причина}) — "
+                 f"больше не шлём, файл отложен в queue/rejected")
+
+    def rejected(self):
+        """Сколько оценок сервер отверг навсегда (лежат в `queue/rejected`)."""
+        try:
+            return len([n for n in os.listdir(os.path.join(self.qdir, "rejected")) if n.endswith(".json")])
+        except OSError:
+            return 0
 
     def update_evaluation(self, ev_id, report, snapshot_patch=None):
         return self._req("PATCH", f"/api/kiosk/evaluations/{ev_id}",
@@ -268,21 +327,53 @@ class Client:
         return self._req("POST", "/api/kiosk/heartbeat", json={"version": __version__, "status": status})
 
     def flush_queue(self, limit=20):
-        """Дослать накопленное. → сколько ушло."""
+        """Дослать накопленное. → сколько ушло.
+
+        Что бывает с оценкой из очереди:
+
+        * ушла — файл удаляем;
+        * нет связи или не тот токен точки — так будет с каждой, останавливаемся до
+          следующего раза, очередь стоит как стояла;
+        * сервер отказал по содержимому (`ОТКАЗ_НАВСЕГДА`) — откладываем в `queue/rejected`
+          и больше не шлём;
+        * сервер сломан (5xx) — оценка остаётся, но следующая попытка не через минуту, а
+          через растущую паузу, и про каждую попытку есть строка в журнале.
+
+        В двух последних случаях идём дальше по очереди. Раньше на первой же неудаче её
+        бросали, и одна оценка, которую сервер не берёт, запирала все, что стоят за ней:
+        со 02.11 по 13.11.2026 касса точки 2 отправила одну и ту же оценку 630 раз.
+        """
         sent = 0
-        for name in sorted(os.listdir(self.qdir))[:limit]:
-            if not name.endswith(".json"):
-                continue
+        сейчас = self._часы()
+        имена = [n for n in sorted(os.listdir(self.qdir)) if n.endswith(".json")]
+        for name in list(self._отложено):
+            if name not in имена:                                # файл убрали — память о нём не нужна
+                self._отложено.pop(name, None)
+        готовые = [n for n in имена if self._отложено.get(n, (0, 0))[1] <= сейчас]
+        for name in готовые[:limit]:
             path = os.path.join(self.qdir, name)
             try:
-                payload = json.load(open(path, encoding="utf-8"))
-                self._req("POST", "/api/kiosk/evaluations", json=payload, timeout=60)
-            except ServerError:
-                break
+                with open(path, encoding="utf-8") as f:
+                    payload = json.load(f)
             except Exception:                                    # noqa: BLE001 — битый файл
                 os.rename(path, path + ".bad")
                 continue
+            try:
+                self._req("POST", "/api/kiosk/evaluations", json=payload, timeout=60)
+            except ServerError as e:
+                if e.код is None or e.код in (401, 403):
+                    break
+                if e.код in ОТКАЗ_НАВСЕГДА:
+                    self._отложить_отвергнутое(name, str(e))
+                    continue
+                попыток = self._отложено.get(name, (0, 0))[0] + 1
+                пауза = min(ПАУЗА_С * 2 ** (попыток - 1), ПАУЗА_МАКС_С)
+                self._отложено[name] = (попыток, сейчас + пауза)
+                self.log(f"очередь: оценка …{name[:-5][-12:]} не ушла ({e}); попытка {попыток}, "
+                         f"следующая через {пауза // 60} мин")
+                continue
             os.remove(path)
+            self._отложено.pop(name, None)
             sent += 1
         return sent
 

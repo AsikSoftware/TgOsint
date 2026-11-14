@@ -221,7 +221,6 @@ class KioskWindow(QMainWindow):
         for s in (self.s_main, self.s_link, self.s_start, self.s_work, self.s_token, self.s_admin):
             self.stack.addWidget(s)
         self.s_link.готово.connect(self._привязка_готова)
-        self.s_link.без_привязки.connect(self._без_привязки)
         self.s_link.отмена.connect(self.go_home)
         self.s_link.новый_код.connect(self.новый_код_медиа)
         # привязан ли сотрудник к этой сделке и как его зовут в боте Оценки
@@ -817,17 +816,6 @@ class KioskWindow(QMainWindow):
         self.state = "intake"
         self.show_screen(self.s_start)
 
-    def _без_привязки(self):
-        """Сервер не видит бота (или бот не задан): работаем по-старому — QR для медиа
-        появится на шаге фото и видео, цены на кассе не будет."""
-        if self.state != "link":
-            return
-        self.привязан, self.сотрудник = False, ""
-        self.s_work.set_привязка(None)
-        log_line(f"оценка {self.код_медиа or '—'}: продолжили без привязки")
-        self.state = "intake"
-        self.show_screen(self.s_start)
-
     def анкета_готова(self, данные):
         """Состояние выбрано, клиент записан. Запечатанный — по IMEI с коробки, без кабеля;
         остальные — читаем телефон, имя уже стоит в окне сделки."""
@@ -1096,8 +1084,8 @@ class KioskWindow(QMainWindow):
             self.s_work.set_медиа({})           # ждём первого ответа сервера
             self.медиа_опрос.start(1500 if self.state == "link" else 3000)
         else:
-            # Без связи с сервером спросить некого. Держать из-за этого сделку нельзя:
-            # касса должна работать и в одиночку — по-старому, с QR для медиа.
+            # Без связи с сервером спросить некого, и привязку увидеть нечем. Экран привязки
+            # говорит это словами; обхода нет — без привязки сделка не начинается.
             слепо = {"известно": False, "почему": "касса не связана с сервером"}
             self.s_work.set_медиа(слепо)
             self.s_link.set_состояние(слепо)

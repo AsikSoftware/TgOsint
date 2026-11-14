@@ -904,10 +904,11 @@ def test_the_receipt_can_be_printed_before_the_deal_is_sent(окно, tmp_path, 
 # ---------------------------------------------------------------- прошлая проверка на экране
 
 def test_a_reused_check_is_visible_with_a_way_out(окно):
-    """Проверку взяли прошлую — это видно словами, и рядом есть кнопка «заново».
+    """Проверку взяли прошлую — это видно на плашке, и рядом есть кнопка «заново».
 
     Иначе экран выглядит как после обычного чтения по кабелю, и отчёт получасовой давности
-    не отличить от сделанного минуту назад."""
+    не отличить от сделанного минуту назад. Длинного текста «кабелем не перечитывали» под
+    итогом нет — владелец его убрал; сомнение (сверка с телефоном не вышла) стоит в плашке."""
     окно.cfg["ocenka_bot"] = "PintelOlxBot"
     окно.начать_сделку()
     окно.анкета_готова(АНКЕТА)
@@ -921,8 +922,17 @@ def test_a_reused_check_is_visible_with_a_way_out(окно):
                       for i in range(окно.s_work.плашки.count())
                       if окно.s_work.плашки.itemAt(i).widget() is not None)
     assert "Проверка прошлая" in плашки and "40 мин назад" in плашки
-    assert "не перечитывали" in окно.s_work.повтор_текст.text()
+    assert "не сверена" not in плашки, "сверка сошлась — тревожить нечем"
+    from PySide6.QtWidgets import QLabel
+    assert not any("не перечитывали" in l.text() for l in окно.s_work.findChildren(QLabel))
     assert окно.s_work.b_перепроверить.isVisibleTo(окно.s_work)
+    # телефон на сверку не ответил — прошлую проверку взяли, но это сказано тут же
+    окно.s_work.показать({**rep, "повторная_проверка": {**rep["повторная_проверка"],
+                                                       "сверка": "не сверили: телефон не ответил"}})
+    плашки = " ".join(окно.s_work.плашки.itemAt(i).widget().text()
+                      for i in range(окно.s_work.плашки.count())
+                      if окно.s_work.плашки.itemAt(i).widget() is not None)
+    assert "Проверка прошлая" in плашки and "с телефоном не сверена" in плашки
     # телефона на кабеле нет — говорим прямо, а не делаем вид, что читаем
     окно.кабель = "NO_DEVICE"
     окно.перепроверить_телефон()
@@ -1498,33 +1508,42 @@ def test_the_deal_is_linked_to_the_employee_before_anything_else(окно, monke
     assert окно.привязан and окно.s_work.привязка == "Асылбек Н."
 
 
-def test_a_blind_server_does_not_hold_the_point_at_the_link_screen(окно):
-    """Сервер не видит бота — это не «никто не сканировал». Касса говорит об этом и даёт
-    работать по-старому: QR для медиа появится на своём шаге, цены на кассе не будет."""
+def test_there_is_no_way_past_the_link_screen_without_linking(окно):
+    """Обхода привязки нет: кнопку «Продолжить без привязки» владелец убрал. Сервер не видит
+    бота — это не «никто не сканировал»: касса говорит об этом словами и ждёт, а на анкету
+    уходит только когда привязка пришла."""
+    from PySide6.QtWidgets import QPushButton
+    from pintel_kiosk import ui_link
+
+    def кнопки():
+        return [b.text() for b in окно.s_link.findChildren(QPushButton) if not b.isHidden()]
+
     окно.cfg["ocenka_bot"] = "PintelOlxBot"
     окно.начать_сделку()
-    assert окно.s_link.b_без.isHidden()
+    assert not hasattr(окно.s_link, "b_без") and not hasattr(окно, "_без_привязки")
     окно._медиа_спросили({"известно": False, "почему": "касса не видит базу Оценки"})
-    assert not окно.s_link.b_без.isHidden() and "не видит" in окно.s_link.статус.text()
-    окно.s_link.b_без.click()
-    assert окно.state == "intake" and окно.привязан is False and окно.s_work.привязка is None
+    assert "не видит" in окно.s_link.статус.text()
+    assert "без привязки" not in окно.s_link.статус_подпись.text().lower()
+    assert кнопки() == ["Отменить", "Другой код"] and окно.state == "link"
+    # связь вернулась, сотрудник отсканировал — идём дальше сами
+    окно._медиа_спросили({"известно": True, "начали": True, "сотрудник": "Асылбек Н."})
+    assert окно.s_link.привязан
 
-    # привязка не приходит полминуты (бот лежит или ещё не знает такой ссылки) — касса не
-    # встаёт: тот же выход на прежний порядок
+    # привязка не приходит полминуты (бот лежит или код не считался) — подсказываем взять
+    # другой код; уйти без привязки по-прежнему нельзя
     окно.go_home()
     окно.начать_сделку()
-    окно._медиа_спросили({"известно": True, "начали": False})
-    assert окно.s_link.b_без.isHidden(), "сразу уходить не предлагаем"
-    from pintel_kiosk import ui_link
     окно.s_link._начали -= ui_link.ТЕРПЕНИЕ_С + 1
     окно._медиа_спросили({"известно": True, "начали": False})
-    assert not окно.s_link.b_без.isHidden()
+    assert "Другой код" in окно.s_link.статус_подпись.text()
+    assert кнопки() == ["Отменить", "Другой код"] and окно.state == "link"
 
     # бот в кассе не задан вовсе — привязывать не к чему, и это сказано сразу
     окно.go_home()
     окно.cfg["ocenka_bot"] = ""
     окно.начать_сделку()
-    assert not окно.s_link.b_без.isHidden() and "не задан" in окно.s_link.статус.text()
+    assert "не задан" in окно.s_link.статус.text() and кнопки() == ["Отменить"]
+    assert "без привязки" not in окно.s_link.статус_подпись.text().lower()
 
 
 def test_the_price_is_asked_from_the_bot_when_the_checks_are_closed(окно, monkeypatch):
@@ -1600,7 +1619,9 @@ def test_the_employee_names_the_sum_in_the_bot_and_the_screen_only_waits(окн�
     assert э.сумма_клиенту() == 165000
     окно._медиа_спросили({"известно": True, "начали": True, "фото": 3, "видео": True,
                           "готово": True, "сделка": 7312, "ошибка": ""})
-    assert "Сумма клиенту: 165 000 ₸" in э.итог_текст.text() and "185" not in э.итог_текст.text()
+    assert "Сумма: 165 000 ₸" in э.итог_текст.text() and "185" not in э.итог_текст.text()
+    assert э.итог_текст.text().startswith("Сделка № 7312 создана\n"), "без «она уже у оценщика в боте»"
+    assert "клиенту" not in э.итог_текст.text() and "оценщика" not in э.итог_текст.text()
 
 
 def test_the_bot_failing_to_ask_for_the_sum_is_said_and_can_be_retried(окно, monkeypatch):
@@ -1700,6 +1721,7 @@ def test_sending_makes_the_bot_ask_for_media_and_the_deal_appears_after_it(ок�
     assert э.медиа_код.isHidden() and not э.медиа_бот.isHidden(), "QR для медиа больше нет"
     assert э.b_другой_код.isHidden()
     assert "Асылбек Н." in э.медиа_бот_текст.text()
+    assert э.медиа.isHidden(), "подзаголовка «бот сам напишет… код сканировать не нужно» нет"
 
     def строки():
         return [э.медиа_список.itemAt(i).widget().text() for i in range(э.медиа_список.count())]
@@ -1709,6 +1731,8 @@ def test_sending_makes_the_bot_ask_for_media_and_the_deal_appears_after_it(ок�
                           "посылка_ждёт": True})
     assert any("Фото 2 из 3" in с for с in строки()) and окно._ждём_сделку
     assert "Откройте бота" in э.медиа_бот_заголовок.text()
+    # что прислать, бот говорит сотруднику сам — на кассе только к кому привязано
+    assert э.медиа_бот_текст.text() == "Привязано: Асылбек Н."
     assert э.степпер.готово[4] is False
 
     окно._медиа_спросили({"известно": True, "начали": True, "фото": 3, "видео": True,
@@ -1743,7 +1767,6 @@ def test_the_receipt_does_not_wait_for_media_when_the_deal_is_linked(окно, m
     # а у сделки без привязки — как раньше: только когда фото и видео дошли до бота
     окно.go_home()
     окно.начать_сделку()
-    окно._без_привязки()
     окно.анкета_готова({**АНКЕТА, "имя": "Зама", "телефон": "+77058837953"})
     окно.state = "scanning"
     окно.on_done({"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip"), "client_id": "x"})
@@ -1930,7 +1953,7 @@ def test_the_price_page_says_only_what_cannot_be_seen(окно, monkeypatch):
     _бот_ответил(окно, запросы[-1]["запрос_цены"], цена=385000)
     э = окно.s_work
     assert "385" in э.цена_число.text() and э.цена_подпись.text() == ""
-    assert э.цена_дальше.text() == "Сделка привязана к: Асылбек Н.."
+    assert э.цена_дальше.text() == "Сделка привязана к: Асылбек Н.", "точка одна, а не две"
     слова = " ".join(l.text() for l in э.правая.widget(ui_deal.СТР_ЦЕНА).findChildren(QLabel))
     for лишнее in ("Цену считает бот", "Её же увидит клиент", "ЧТО БУДЕТ ДАЛЬШЕ", "напишет вам"):
         assert лишнее not in слова, лишнее

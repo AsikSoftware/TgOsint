@@ -18,12 +18,13 @@
 """
 import html
 import re
+import time
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLineEdit, QPushButton, QSizePolicy, QStackedWidget, QTextEdit,
-                               QVBoxLayout, QWidget)
+                               QLineEdit, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
+                               QTextEdit, QVBoxLayout, QWidget)
 
 from pintel_core import colours
 from pintel_core import history as история_мод
@@ -56,6 +57,17 @@ QFrame#карточка { background: %(card)s; border: 1px solid %(border)s; bo
 QFrame#фокус { background: %(card_hi)s; border: 2px solid %(tint_border)s; border-radius: 26px; }
 QFrame#всплывашка { background: #FFFFFF; border: 2px solid %(tint_border)s; border-radius: 20px; }
 QFrame#плашка_истории { background: %(card)s; border: 1px solid %(line)s; border-radius: 19px; }
+QFrame#окно_истории { background: %(ground)s; border: 1px solid %(tint_border)s; border-radius: 28px; }
+QFrame#запись { background: %(card)s; border: 1px solid %(border)s; border-radius: 18px; }
+QFrame#беда_истории { background: %(warnbg)s; border: none; border-radius: 14px; }
+QFrame#окно_истории QScrollBar:vertical { background: %(screen)s; width: 12px; border-radius: 6px;
+    margin: 0; }
+QFrame#окно_истории QScrollBar::handle:vertical { background: %(ring)s; border-radius: 6px;
+    min-height: 56px; }
+QFrame#окно_истории QScrollBar::add-line:vertical, QFrame#окно_истории QScrollBar::sub-line:vertical {
+    height: 0; }
+QFrame#окно_истории QScrollBar::add-page:vertical, QFrame#окно_истории QScrollBar::sub-page:vertical {
+    background: transparent; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
 """ % C
@@ -475,6 +487,330 @@ class ПанельИстории(QFrame):
         return self.layout().totalHeightForWidth(int(ширина))
 
 
+# ---------- история телефона окном по центру ----------
+
+# Вид записи сказан словом на ярлыке; цвет полосы и ярлыка — только подсказка глазу.
+ЦВЕТ_ЗАПИСИ = {"заявка": (C["brand"], C["tint"]), "оценка": (C["ok"], C["okbg"]),
+               "проверка": (C["body"], "#E9EEF6")}
+ОКНО_ИСТОРИИ_ШИРИНА = 1080
+ОКНО_ИСТОРИИ_ПОЛЯ = 56                # от края экрана до окна, не меньше
+ПОЛОСА_ПРОКРУТКИ = 12 + 14            # сама полоса и зазор между ней и записями
+ЗАГОЛОВОК_ИСТОРИИ = "Мы уже знаем этот телефон"
+ЗАКРЫТЬ_ИСТОРИЮ = "Понятно, продолжить"
+# Окно появляется само — в ту секунду, когда сотрудник может что-то нажимать посреди экрана.
+# Нажатие, начатое до окна, закрыть его не должно: первые полсекунды кнопка молчит.
+ПАУЗА_ЗАКРЫТИЯ_С = 0.6
+
+
+def _ярлык(текст, цвет, фон, размер=13):
+    l = label(текст, font_=font(FONT_TEXT, размер, W.Bold, 0.8))
+    l.setStyleSheet(f"background: {фон}; color: {цвет}; border-radius: 10px; padding: 5px 12px;")
+    return l
+
+
+class ЗаписьИстории(QFrame):
+    """Одна запись в окне истории: что это и когда — сверху, деньги — крупно, остальное —
+    строкой ниже. Цену в записи ищут первой, поэтому у неё своя строка, а не место в общей."""
+
+    def __init__(self, запись):
+        super().__init__()
+        self.setObjectName("запись")
+        цвет, фон = ЦВЕТ_ЗАПИСИ.get(запись["вид"], (C["body"], C["screen"]))
+        ряд = QHBoxLayout(self)
+        ряд.setContentsMargins(16, 16, 24, 17)
+        ряд.setSpacing(18)
+        полоса = QFrame()
+        полоса.setFixedWidth(6)
+        полоса.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        полоса.setStyleSheet(f"background: {цвет}; border: none; border-radius: 3px;")
+        ряд.addWidget(полоса)
+        текст = QVBoxLayout()
+        текст.setContentsMargins(0, 0, 0, 0)
+        текст.setSpacing(7)
+        верх = QHBoxLayout()
+        верх.setSpacing(14)
+        верх.addWidget(_ярлык(история_мод.ВИДЫ[запись["вид"]][0].upper(), цвет, фон))
+        self.название = label(запись["название"], font_=font(FONT_TEXT, 22, W.Bold))
+        верх.addWidget(self.название)
+        верх.addStretch(1)
+        self.когда = label(запись["когда"], font_=font(FONT_TEXT, 18, W.Medium), color=C["muted"])
+        верх.addWidget(self.когда)
+        текст.addLayout(верх)
+        self.деньги = label("", wrap=True, font_=font(FONT_TEXT, 21, W.Medium))
+        self.деньги.setTextFormat(Qt.RichText)
+        self.деньги.setText("&nbsp;&nbsp;·&nbsp;&nbsp;".join(
+            f"<span style='color:{C['muted']}'>{html.escape(подпись)}</span>&nbsp;"
+            f"<b>{html.escape(сумма).replace(' ', '&nbsp;')}</b>" for подпись, сумма in запись["деньги"]))
+        self.деньги.setVisible(bool(запись["деньги"]))
+        текст.addWidget(self.деньги)
+        self.подробно = label(" · ".join(запись["подробно"]), wrap=True,
+                              font_=font(FONT_TEXT, 17), color=C["body"])
+        self.подробно.setVisible(bool(запись["подробно"]))
+        текст.addWidget(self.подробно)
+        ряд.addLayout(текст, 1)
+
+
+class _Лента(QScrollArea):
+    """Список записей, который можно тянуть пальцем или мышью.
+
+    Полоса прокрутки на экране точки узкая, и пальцем в неё попадают со второго раза.
+    Нажимать в списке нечего, поэтому любое движение по нему — это прокрутка."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._тянем = None
+
+    def mousePressEvent(self, e):                                # noqa: N802 — имя от Qt
+        self._тянем = (e.position().y(), self.verticalScrollBar().value())
+        e.accept()
+
+    def mouseMoveEvent(self, e):                                 # noqa: N802
+        if self._тянем is not None:
+            откуда, было = self._тянем
+            self.verticalScrollBar().setValue(int(было - (e.position().y() - откуда)))
+        e.accept()
+
+    def mouseReleaseEvent(self, e):                              # noqa: N802
+        self._тянем = None
+        e.accept()
+
+
+class ОкноИстории(QWidget):
+    """История телефона окном по центру экрана — поверх всего, пока сотрудник её не закроет.
+
+    Зачем, если есть плашка наверху. Плашку надо заметить и нажать, а нажимали её редко:
+    цену называли, не зная, что аппарат у нас уже оценивали. Поэтому, когда кабель дочитал
+    телефон и записи нашлись, они встают посреди экрана сами, и дальше работать нельзя,
+    пока окно не закрыто кнопкой. Плашка остаётся как была — по ней список открывают снова.
+
+    Это не диалог Qt, а виджет поверх рабочего экрана: экраны живут внутри сцены и
+    масштабируются под монитор целиком (`ScaledHost`), а отдельное окно системы встало бы
+    мимо масштаба и поверх чужих программ. Сам виджет — затемнение на весь экран: оно и
+    гасит то, что под ним, и ловит нажатия мимо окна.
+    """
+
+    закрыли = Signal()
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._проявлено, self._открыто_в, self._фокус_был = 1.0, 0.0, None
+        self._появление = QVariantAnimation(self)
+        self._появление.setStartValue(0.0)
+        self._появление.setEndValue(1.0)
+        self._появление.setDuration(200)
+        self._появление.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._появление.valueChanged.connect(self._шаг_появления)
+
+        self.окно = QFrame(self)
+        self.окно.setObjectName("окно_истории")
+        сл = QVBoxLayout(self.окно)
+        сл.setContentsMargins(44, 34, 44, 34)
+        сл.setSpacing(0)
+        сл.addWidget(kicker("ИСТОРИЯ ЭТОГО ТЕЛЕФОНА", 14, 2.2, C["brand"]))
+        сл.addSpacing(8)
+        self.заголовок = label(ЗАГОЛОВОК_ИСТОРИИ, font_=font(FONT_HEAD, 34, W.Bold))
+        сл.addWidget(self.заголовок)
+        сл.addSpacing(4)
+        self.аппарат = label("", wrap=True, font_=font(FONT_TEXT, 19, W.Medium), color=C["muted"])
+        сл.addWidget(self.аппарат)
+        сл.addSpacing(16)
+        # сколько записей какого вида — и заодно легенда к цветам записей ниже
+        self.сводка = QHBoxLayout()
+        self.сводка.setSpacing(10)
+        сл.addLayout(self.сводка)
+        сл.addSpacing(18)
+        self.прокрутка = _Лента()
+        self.список = QWidget()
+        лента = QVBoxLayout(self.список)
+        лента.setContentsMargins(0, 0, 0, 0)
+        лента.setSpacing(12)
+        self.прокрутка.setWidget(self.список)
+        сл.addWidget(self.прокрутка)
+        # Источник, который не ответил, говорит об этом и здесь: «две записи» при молчащей
+        # Оценке — не вся история.
+        self.беда_рамка = QFrame()
+        self.беда_рамка.setObjectName("беда_истории")
+        в_беде = QVBoxLayout(self.беда_рамка)
+        в_беде.setContentsMargins(18, 12, 18, 12)
+        self.беда = label("", wrap=True, font_=font(FONT_TEXT, 17, W.Medium), color=C["warntext"])
+        в_беде.addWidget(self.беда)
+        self.беда_отступ = QWidget()
+        self.беда_отступ.setFixedHeight(14)
+        сл.addWidget(self.беда_отступ)
+        сл.addWidget(self.беда_рамка)
+        сл.addSpacing(24)
+        низ = QHBoxLayout()
+        низ.setSpacing(24)
+        self.подсказка = label("Список останется наверху: плашка «История телефона».", wrap=True,
+                               font_=font(FONT_TEXT, 17), color=C["muted"])
+        низ.addWidget(self.подсказка, 1)
+        self.b_закрыть = _кнопка(ЗАКРЫТЬ_ИСТОРИЮ)
+        self.b_закрыть.setFocusPolicy(Qt.NoFocus)      # пробел и Enter окно не закрывают
+        self.b_закрыть.setMinimumWidth(400)
+        self.b_закрыть.clicked.connect(self._нажали_закрыть)
+        низ.addWidget(self.b_закрыть)
+        сл.addLayout(низ)
+
+    # ---------- содержимое ----------
+    def наполнить(self, данные, аппарат=""):
+        """Ответ сервера → записи в окне. `аппарат` — что за телефон, строкой из шапки."""
+        лента = self.список.layout()
+        while лента.count():
+            старое = лента.takeAt(0).widget()
+            if старое is not None:
+                # убрать сразу, а не «когда-нибудь»: отложенное удаление до следующего круга
+                # событий оставляет прошлую запись лежать под новой
+                старое.setParent(None)
+                старое.deleteLater()
+        while self.сводка.count():
+            старое = self.сводка.takeAt(0).widget()
+            if старое is not None:
+                старое.setParent(None)
+                старое.deleteLater()
+        # `show()` у каждого нового виджета — не лишний. Положенный в раскладку видимого
+        # окна, виджет остаётся скрытым до следующего круга событий, а скрытого раскладка
+        # не считает: высота списка выходила нулевой, и окно, обновлённое открытым,
+        # оставалось размером под прошлый ответ.
+        for запись in история_мод.записи(данные):
+            карточка = ЗаписьИстории(запись)
+            лента.addWidget(карточка)
+            карточка.show()
+        for вид, сколько in история_мод.сводка(данные):
+            цвет, фон = ЦВЕТ_ЗАПИСИ[вид]
+            ярлык = _ярлык(сколько, цвет, фон, 16)
+            self.сводка.addWidget(ярлык)
+            ярлык.show()
+        self.сводка.addStretch(1)
+        self.аппарат.setText(str(аппарат or ""))
+        self.аппарат.setVisible(bool(аппарат))
+        беда = история_мод.словами(данные)["беда"]
+        self.беда.setText(("Часть истории не спросилась: " + беда) if беда else "")
+        self.беда_рамка.setVisible(bool(беда))
+        self.беда_отступ.setVisible(bool(беда))
+        self.прокрутка.verticalScrollBar().setValue(0)
+        if not self.isHidden():
+            self.разложить()
+
+    def записей(self) -> int:
+        return self.список.layout().count()
+
+    # ---------- место на экране ----------
+    def разложить(self):
+        """Затемнение — на весь экран, окно — по центру. Список занимает столько, сколько
+        просят записи, но окно не выше экрана: что не поместилось, прокручивается."""
+        экран = self.parentWidget()
+        if экран is None:
+            return
+        self.setGeometry(экран.rect())
+        ширина = max(560, min(ОКНО_ИСТОРИИ_ШИРИНА, self.width() - 2 * ОКНО_ИСТОРИИ_ПОЛЯ))
+        поля, рамка = self.окно.layout().contentsMargins(), self.окно.contentsMargins()
+        внутри = ширина - поля.left() - поля.right() - рамка.left() - рамка.right()
+        self.прокрутка.setFixedHeight(0)                  # сколько просит всё, кроме списка
+        остальное = self.окно.layout().totalHeightForWidth(ширина)
+        предел = max(200, self.height() - 2 * ОКНО_ИСТОРИИ_ПОЛЯ - остальное)
+        нужно = max(0, self.список.layout().totalHeightForWidth(внутри))
+        длинный = нужно > предел
+        if длинный:                                       # место под полосу прокрутки
+            внутри -= ПОЛОСА_ПРОКРУТКИ
+            нужно = max(0, self.список.layout().totalHeightForWidth(внутри))
+        self.прокрутка.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn if длинный
+                                                  else Qt.ScrollBarAlwaysOff)
+        self.список.setFixedSize(внутри, нужно)
+        self.прокрутка.setFixedHeight(min(нужно, предел))
+        self.окно.setFixedSize(ширина, остальное + min(нужно, предел))
+        self._поставить()
+
+    def _поставить(self):
+        """Окно по центру; пока оно появляется — чуть ниже своего места."""
+        сдвиг = round((1.0 - self._проявлено) * 18)
+        self.окно.move((self.width() - self.окно.width()) // 2,
+                       (self.height() - self.окно.height()) // 2 + сдвиг)
+
+    def _шаг_появления(self, v):
+        self._проявлено = float(v)
+        self._поставить()
+        self.update()
+
+    def paintEvent(self, e):                                     # noqa: N802 — имя от Qt
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        k = self._проявлено
+        p.fillRect(self.rect(), QColor(11, 27, 51, int(132 * k)))
+        # Тень окна — несколько расходящихся полупрозрачных контуров. Эффект тени Qt здесь
+        # не годится: экран живёт в сцене, и эффект перерисовывал бы всё окно на каждый
+        # блик кнопки.
+        место = QRectF(self.окно.geometry())
+        p.setPen(Qt.NoPen)
+        for шаг in range(1, 10):
+            p.setBrush(QColor(11, 27, 51, int(7 * k)))
+            p.drawRoundedRect(место.adjusted(-шаг * 2.2, 8 - шаг * 1.2, шаг * 2.2, 8 + шаг * 2.6),
+                              28 + шаг * 2.2, 28 + шаг * 2.2)
+
+    # ---------- открыть и закрыть ----------
+    def открыть(self):
+        if not self.isHidden():
+            self.разложить()
+            return
+        экран = self.parentWidget()
+        self._фокус_был = экран.focusWidget() if экран is not None else None
+        self._открыто_в = time.monotonic()
+        self._проявлено = 0.0
+        self.show()
+        self.raise_()
+        self.разложить()                 # после show: стили уже приложены, размеры настоящие
+        self.setFocus(Qt.OtherFocusReason)
+        self._появление.start()
+
+    def _нажали_закрыть(self):
+        if time.monotonic() - self._открыто_в < ПАУЗА_ЗАКРЫТИЯ_С:
+            return
+        self.закрыть()
+
+    def закрыть(self):
+        """Сотрудник прочитал и закрыл."""
+        if self.убрать():
+            self.закрыли.emit()
+
+    def убрать(self) -> bool:
+        """Спрятать без «прочитано»: сделку отменили или записей больше нет. → было ли открыто."""
+        if self.isHidden():
+            return False
+        self._появление.stop()
+        self._проявлено = 1.0
+        self.hide()
+        было, self._фокус_был = self._фокус_был, None
+        try:
+            if было is not None and было.isVisible():
+                было.setFocus(Qt.OtherFocusReason)       # курсор — в то поле, где стоял
+        except RuntimeError:                              # поля уже нет — и не надо
+            pass
+        return True
+
+    # Пока окно открыто, до экрана под ним не доходит ничего: ни нажатия, ни клавиши. И
+    # клавишами оно не закрывается: окно встаёт, пока сотрудник печатает имя клиента, и
+    # пробел или Enter закрыли бы его раньше, чем он его увидит.
+    def keyPressEvent(self, e):                                  # noqa: N802
+        e.accept()
+
+    def focusNextPrevChild(self, вперёд):                        # noqa: N802
+        return True
+
+    def mousePressEvent(self, e):                                # noqa: N802
+        e.accept()
+
+    def mouseReleaseEvent(self, e):                              # noqa: N802
+        e.accept()
+
+    def mouseDoubleClickEvent(self, e):                          # noqa: N802
+        e.accept()
+
+    def wheelEvent(self, e):                                     # noqa: N802
+        e.accept()
+
+
 class WorkScreen(Screen):
     """Всё, что делает сотрудник после анкеты."""
 
@@ -524,6 +860,12 @@ class WorkScreen(Screen):
         self.история_плашка.нажали.connect(self.история_переключить)
         self.история_панель = ПанельИстории(self)
         self.история_панель.hide()
+        # И она же окном по центру: открывается сама, когда записи нашлись, и ждёт, пока
+        # её закроют. `история_прочитана` — какие записи сотрудник уже закрыл в этой сделке.
+        self.история_прочитана = None
+        self.история_окно = ОкноИстории(self)
+        self.история_окно.hide()
+        self.история_окно.закрыли.connect(self._историю_прочли)
         # Модель и память — крупно, это и есть «какой телефон». iOS и IMEI нужны для сверки,
         # а не для чтения с двух метров, поэтому они мелкой строкой ниже.
         self.аппарат_подробно = label("", font_=font(FONT_TEXT, 16, W.Medium), color=C["muted"])
@@ -939,6 +1281,8 @@ class WorkScreen(Screen):
         self.set_привязка(None)
         self.история = {}                              # угол чистый: это другой телефон
         self.история_панель.hide()
+        self.история_прочитана = None
+        self.история_окно.убрать()
         self.история_плашка.set(история_мод.словами({}), False)
         self._нарисовать_ручную()
         self._нарисовать_тест()
@@ -1016,6 +1360,28 @@ class WorkScreen(Screen):
         self.история_панель.наполнить(вид)
         if not self.история_панель.isHidden():
             self._историю_положить()
+        self._историю_окном(вид)
+
+    def _историю_окном(self, вид):
+        """Записи нашлись — они встают окном посреди экрана сами, и сделка ждёт, пока
+        сотрудник его закроет. Плашку наверху это не меняет: по ней список смотрят снова.
+
+        Одни и те же записи второй раз не выскакивают: телефон в одной сделке читают и
+        дважды (переподключили кабель, «Проверить заново»), и история спрашивается каждый
+        раз. Показываем снова, только если ответ стал другим."""
+        if вид["ждём"]:
+            return                                       # спрашиваем — что открыто, пусть стоит
+        записи = tuple(вид["строки"])
+        if not записи:
+            self.история_окно.убрать()
+            return
+        if self.история_окно.isHidden() and (записи == self.история_прочитана or self.отправлено):
+            return
+        self.история_окно.наполнить(self.история, self.аппарат.text())
+        self.история_окно.открыть()
+
+    def _историю_прочли(self):
+        self.история_прочитана = tuple(история_мод.словами(self.история)["строки"])
 
     def история_переключить(self):
         """Нажали по плашке: список развернулся. Нажали снова — угол опять пустой."""
@@ -1041,6 +1407,8 @@ class WorkScreen(Screen):
         super().resizeEvent(e)
         if not self.история_панель.isHidden():
             self._историю_положить()
+        if not self.история_окно.isHidden():
+            self.история_окно.разложить()
 
     СТРОКИ_КАБЕЛЯ = ("connect", "battery", "locks", "apple", "upload")
 

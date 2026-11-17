@@ -131,6 +131,7 @@ class AdminScreen(Screen):
     закрыть = Signal()
     сменить_токен = Signal(str)
     обновить = Signal()
+    режим_мс = Signal()             # скрытый режим: обновление товаров МойСклада по IMEI
 
     def __init__(self):
         super().__init__(gray=True)
@@ -169,6 +170,18 @@ class AdminScreen(Screen):
         ряд.addWidget(o)
         ряд.addStretch(1)
         пв.addLayout(ряд)
+        # Скрытый режим: касса читает телефоны со склада и обновляет их карточки в МойСкладе
+        # (товар ищется по IMEI). Сделок в нём нет; выход — кнопкой на самом экране режима.
+        пв.addSpacing(18)
+        пв.addWidget(kicker("МОЙСКЛАД", 14, 2.4, C["brand"]))
+        пв.addWidget(label("Режим обновления: телефон со склада подключают кабелем, касса находит его "
+                           "товар по IMEI и после подтверждения обновляет карточку.", "muted", wrap=True))
+        ряд_мс = QHBoxLayout()
+        self.b_мс = _кнопка("Режим обновления МойСклада", "ghost")
+        self.b_мс.clicked.connect(self.режим_мс.emit)
+        ряд_мс.addWidget(self.b_мс)
+        ряд_мс.addStretch(1)
+        пв.addLayout(ряд_мс)
         пв.addStretch(1)
         тело.addWidget(правая, 1)
         self.root.addLayout(тело, 1)

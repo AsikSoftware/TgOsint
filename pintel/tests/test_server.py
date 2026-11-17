@@ -915,6 +915,33 @@ def test_the_point_learns_who_is_linked_and_asks_the_bot_for_a_price(app, monkey
     assert привязан["начали"] is True and привязан["сотрудник"] == "Асылбек Н."
     assert привязан["оценка"] is None and привязан["цену_считают"] is False
 
+    # Скрытый режим обновления МойСклада идёт тем же путём: касса кладёт запрос, бот отвечает
+    # в ту же колонку, сервер только передаёт — и лишнего на экран кассы не пропускает.
+    assert привязан["мойсклад"] is None
+    просьба = {"версия": 1, "код": "ABCD12", "запрос_цены": "m1", "imei": ["356789012345678"],
+               "мойсклад": {"что": "найти"}, "поля": {"akb_exact": 88}}
+    assert k.post("/api/kiosk/media/ABCD12/quote", headers=H, json={"посылка": просьба}).json() == {"принято": True}
+    with движок.begin() as conn:
+        лежит = conn.execute(sqltext("SELECT quote_request FROM kiosk_media")).scalar()
+        assert '"мойсклад"' in лежит and '"найти"' in лежит
+        conn.execute(sqltext("UPDATE kiosk_media SET quote_request = NULL, quote = :q"), {"q": json.dumps({
+            "запрос": "m1", "мойсклад": {
+                "что": "найти", "найден": True, "записано": False, "почему": "",
+                "товар": {"id": "t-1", "код": "40117", "название": "026 Ip 13 128", "папка": "БУ телефоны/Apple",
+                          "buyPrice": 150000},
+                "изменения": [{"поле": "АКБ", "было": "86-90%", "станет": "88%", "attributes": "лишнее"}],
+                "заметки": ["Статус оставлен «Есть видимые дефекты»"], "attributes": [{"meta": "служебное"}]}},
+            ensure_ascii=False)})
+    мс = k.get("/api/kiosk/media/ABCD12", headers=H).json()
+    assert мс["мойсклад"] == {
+        "запрос": "m1", "что": "найти", "найден": True, "записано": False, "почему": "",
+        "товар": {"id": "t-1", "код": "40117", "название": "026 Ip 13 128", "папка": "БУ телефоны/Apple"},
+        "изменения": [{"поле": "АКБ", "было": "86-90%", "станет": "88%"}],
+        "заметки": ["Статус оставлен «Есть видимые дефекты»"]}
+    assert мс["оценка"]["цена"] is None, "ответ про МойСклад — не цена"
+    with движок.begin() as conn:
+        conn.execute(sqltext("UPDATE kiosk_media SET quote = NULL"))
+
     да = k.post("/api/kiosk/media/ABCD12/quote", headers=H, json={"посылка": посылка}).json()
     assert да == {"принято": True}
     ждём = k.get("/api/kiosk/media/ABCD12", headers=H).json()

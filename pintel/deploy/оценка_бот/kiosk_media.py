@@ -63,8 +63,10 @@ router_kiosk_media = Router()
 # переходов на бота. Фильтруем по тексту, а не параметрами CommandStart: так обработчик
 # работает в любой версии aiogram 3 и наверняка не перехватит чужой /start.
 СТАРТ = re.compile(r"^/start(?:@\w+)?\s+p([A-Z0-9]{4,12})\b")
-# «k» — привязка в начале сделки: бот запоминает сотрудника и медиа пока не просит
-ПРИВЯЗКА = re.compile(r"^/start(?:@\w+)?\s+k([A-Z0-9]{4,12})\b")
+# «k» — привязка в начале сделки: бот запоминает сотрудника и медиа пока не просит.
+# «u» — то же для скрытого режима обновления МойСклада: сделки не будет, касса читает
+# телефоны со склада и обновляет их карточки от имени этого сотрудника.
+ПРИВЯЗКА = re.compile(r"^/start(?:@\w+)?\s+([ku])([A-Z0-9]{4,12})\b")
 # пункт ручной диагностики: префикс, код сделки, ключ пункта (ASCII, из kiosk_core.ПУНКТЫ)
 ПУНКТ = re.compile(r"^kmchk_([A-Z0-9]{4,12})_([a-z]+)$")
 ГОТОВО_ДИАГ = re.compile(r"^kmchkok_([A-Z0-9]{4,12})$")
@@ -273,7 +275,7 @@ async def привязать(message: Message, state: FSMContext):
     совпало = ПРИВЯЗКА.match(message.text or "")
     if not совпало:
         return
-    код = совпало.group(1)
+    вид, код = совпало.group(1), совпало.group(2)
     сотрудник = await _сотрудник(message.chat.id)
     if сотрудник is None:
         await message.answer("Этот код — для сотрудников Pintel. Если вы сотрудник, "
@@ -285,8 +287,11 @@ async def привязать(message: Message, state: FSMContext):
         return
     shop_id = kiosk_core.точка_сотрудника(сотрудник.staff_id, сотрудник.shop_id)
     await _завести(код, сотрудник.id, message.chat.id, shop_id)
-    await message.answer(kiosk_core.текст_привязки(
-        сотрудник.first_name, (await _имя_точки(shop_id)) if shop_id else ""))
+    точка = (await _имя_точки(shop_id)) if shop_id else ""
+    if вид == "u":
+        await message.answer(kiosk_core.текст_привязки_обновления(сотрудник.first_name, точка))
+        return
+    await message.answer(kiosk_core.текст_привязки(сотрудник.first_name, точка))
 
 
 @router_kiosk_media.message(F.text.regexp(СТАРТ.pattern))
@@ -932,6 +937,11 @@ async def _посчитать_цену(bot: Bot, код: str) -> None:
     if not сырое:
         return
     строка = await _строка(код)
+    мойсклад = kiosk_core.запрос_мойсклада(сырое)
+    if мойсклад is not None:
+        # касса в режиме обновления: не цена и не сделка, а карточка товара на складе
+        await _обновить_мойсклад(bot, код, мойсклад, строка)
+        return
     запрос, посылка = "", {}
     try:
         посылка = kiosk_core.разобрать(сырое)
@@ -962,6 +972,47 @@ async def _посчитать_цену(bot: Bot, код: str) -> None:
                               {"q": json.dumps(ответ, ensure_ascii=False), "c": код})
         await session.commit()
     log.warning("kiosk: цена по коду %s: %s", код, ответ.get("цена") or ответ.get("почему"))
+
+
+async def _обновить_мойсклад(bot: Bot, код: str, посылка: dict, строка) -> None:
+    """Касса в скрытом режиме обновления прочитала телефон со склада. Находим его товар в
+    МойСкладе по IMEI и отвечаем, что изменится («найти»), а после подтверждения сотрудника
+    на кассе — пишем («записать»). Ответ кладём туда же, где касса читает ответ о цене.
+
+    Пишет в МойСклад только привязанный сотрудник: кассу без привязки не слушаем — иначе
+    карточки товаров мог бы менять кто угодно, знающий код обмена."""
+    log = logging.getLogger(__name__)
+    что = "записать" if (посылка.get("мойсклад") or {}).get("что") == "записать" else "найти"
+    chat_id = (строка or {}).get("chat_id")
+    if not chat_id:
+        ответ = {"что": что, "найден": False,
+                 "почему": "касса не привязана к сотруднику — отсканируйте QR в боте Оценки"}
+    else:
+        try:
+            try:
+                from utils import ms_card_update
+            except ImportError:
+                import ms_card_update
+            ответ = await asyncio.to_thread(ms_card_update.обновить, посылка)
+        except Exception as exc:                                 # noqa: BLE001
+            log.exception("kiosk: МойСклад по коду %s не обновился", код)
+            ответ = {"что": что, "найден": False,
+                     "почему": f"МойСклад не ответил ({type(exc).__name__}) — попробуйте ещё раз"}
+    итог = {"запрос": str(посылка.get("запрос_цены") or "")[:40], "мойсклад": ответ}
+    async with async_session_factory() as session:
+        await session.execute(text("UPDATE kiosk_media SET quote = :q WHERE code = :c"),
+                              {"q": json.dumps(итог, ensure_ascii=False), "c": код})
+        await session.commit()
+    товар = (ответ.get("товар") or {}).get("код") or "—"
+    log.warning("kiosk: МойСклад по коду %s: %s, товар %s, изменений %s%s", код, что, товар,
+                len(ответ.get("изменения") or []),
+                "" if ответ.get("найден") else f" — {ответ.get('почему')}")
+    if ответ.get("записано") and chat_id:
+        try:
+            await bot.send_message(chat_id=chat_id, text=kiosk_core.текст_обновления_мойсклада(
+                ответ, str(посылка.get("точка") or "")))
+        except Exception as exc:                                 # noqa: BLE001 — запись уже сделана
+            log.warning("kiosk: сотруднику про товар %s не написать: %s", товар, type(exc).__name__)
 
 
 async def _есть_колонка(таблица: str, колонка: str) -> bool:

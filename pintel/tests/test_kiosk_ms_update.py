@@ -1,0 +1,229 @@
+# -*- coding: utf-8 -*-
+"""Скрытый режим обновления МойСклада на кассе — от кнопки в меню администратора до записи.
+
+Телефон со склада подключают кабелем; касса читает его, бот находит товар по IMEI, сотрудник
+видит «было → станет» и подтверждает. В МойСклад ходит бот — здесь он и сервер подменены, и
+проверяется, что именно касса просит и что показывает.
+"""
+import os
+
+import pytest
+
+pytest.importorskip("PySide6")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton       # noqa: E402
+
+from pintel_core import reference                                      # noqa: E402
+from pintel_core.analysis import report as report_mod                  # noqa: E402
+from pintel_core.devicelink import snapshot                            # noqa: E402
+from pintel_core.external import ms_update, ocenka                     # noqa: E402
+from pintel_kiosk import app as kapp                                   # noqa: E402
+from pintel_kiosk import config as kconfig                             # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ССЫЛКА = "https://kiosk.pintelkz.com/check/AbC_123-xyz_0987"
+
+
+def _отчёт(имя="эталон_iPhone-14-Pro_iOS26.5.zip"):
+    snap, _ = reference.load_bundle(os.path.join(HERE, "fixtures_real", "эталоны", имя), loads=snapshot.loads)
+    return report_mod.build(snap)
+
+
+@pytest.fixture
+def окно(monkeypatch):
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_тест",
+                          "point": "16/38 Pintel", "ocenka_bot": "PintelOlxBot"})
+    w.client.enabled = True
+    запросы = []
+
+    def run(fn, ok=None, err=None):                       # сеть — без потоков: важен порядок
+        try:
+            итог = fn()
+        except Exception as exc:                          # noqa: BLE001
+            if err:
+                err(str(exc))
+            return
+        if ok:
+            ok(итог)
+    monkeypatch.setattr(w, "_run", run)
+    monkeypatch.setattr(w.client, "спросить_цену",
+                        lambda код, посылка: (запросы.append(посылка), {"принято": True})[1])
+    monkeypatch.setattr(w.client, "медиа", lambda код: {"известно": True, "начали": False})
+    monkeypatch.setattr(w.client, "update_evaluation", lambda ev_id, тело, patch=None: {"ok": True})
+    читали = []
+    monkeypatch.setattr(w, "мс_читать", lambda: (читали.append(1), setattr(w, "state", "ms_scan"),
+                                                 setattr(w, "wait_unplug", True), w.s_ms.читаем())[0])
+    w.запросы, w.читали = запросы, читали
+    yield w
+    for поток in (w.poller, w.net):
+        поток.stop()
+        поток.wait(2000)
+    w.close()
+    w.deleteLater()
+
+
+def _ответ(окно, что="найти", **замены):
+    """Ответ бота, каким его отдаёт сервер, — на последний вопрос кассы."""
+    мс = {"запрос": окно._мс_запрос, "что": что, "найден": True, "записано": что == "записать", "почему": "",
+          "товар": {"id": "t-1", "код": "40117", "название": "026 Ip 14 Pro 128", "папка": "БУ телефоны/Apple"},
+          "изменения": [{"поле": "АКБ", "было": "80-85%", "станет": "81%"},
+                        {"поле": "Цикл", "было": "", "станет": "1642"}],
+          "заметки": []}
+    мс.update(замены)
+    окно._медиа_спросили({"известно": True, "начали": True, "мойсклад": мс})
+
+
+def _до_телефона(окно):
+    окно.мс_переключить()
+    окно._привязка_готова("Данияр К.")
+    assert окно.state == "ms_wait" and окно.stack.currentWidget() is окно.s_ms
+
+
+def _прочитан(окно, rep=None):
+    окно.on_tick("READY", "", 1)
+    assert окно.читали and окно.state == "ms_scan"
+    окно._мс_прочитано({"report": rep or _отчёт(), "server": {"id": 65, "ссылка_чека": ССЫЛКА}, "client_id": "x"})
+
+
+def test_the_mode_is_switched_on_from_the_admin_menu_and_links_the_employee_once(окно):
+    """Режим включают из скрытого меню администратора. Первым делом — привязка: QR ведёт в
+    бота со своей командой («u», не «k»), и карточки потом обновляются от имени сотрудника.
+    Привязка одна на весь заход — телефоны дальше идут подряд."""
+    assert not окно.мс_режим and окно.s_admin.b_мс.text() == "Режим обновления МойСклада"
+    окно.s_admin.b_мс.click()
+    assert окно.мс_режим and окно.state == "ms_link" and окно.stack.currentWidget() is окно.s_link
+    assert окно.s_link.заголовок.text() == "Кто обновляет?" and "МойСклад" in окно.s_link.шапка_текст.text()
+    assert len(окно.код_медиа) >= 4
+    from pintel_core.external import ocenka_media
+    assert ocenka_media.ссылка_обновления("PintelOlxBot", "ABCD12") == "https://t.me/PintelOlxBot?start=uABCD12"
+    # привязка пришла тем же опросом, что и в сделке
+    окно._медиа_спросили({"известно": True, "начали": True, "сотрудник": "Данияр К."})
+    assert окно.s_link.привязан
+    окно.s_link._уход.stop()
+    окно.s_link.готово.emit(окно.s_link.имя)
+    assert окно.state == "ms_wait" and окно.сотрудник == "Данияр К."
+    assert "Данияр К." in окно.s_ms.кто.text() and "Подключите телефон" in окно.s_ms.главное.text()
+    # обычная сделка в этом режиме не начинается: экран ожидания не показан вовсе
+    assert окно.stack.currentWidget() is окно.s_ms
+
+
+def test_without_a_server_or_a_bot_the_mode_does_not_start(окно):
+    """Обновлять карточки некому — так и сказано в меню, режим не включается."""
+    окно.client.enabled = False
+    окно.мс_переключить()
+    assert not окно.мс_режим and "токен" in окно.s_admin.ответ.text()
+    окно.client.enabled = True
+    окно.cfg["ocenka_bot"] = ""
+    окно.мс_переключить()
+    assert not окно.мс_режим and "бот" in окно.s_admin.ответ.text()
+
+
+def test_a_phone_is_read_and_its_product_is_shown_before_anything_is_written(окно):
+    """Телефон прочитан — касса просит бота НАЙТИ товар по IMEI и показывает «было → станет».
+    В запросе — оба IMEI и то, что прочитал кабель; записи никто не просил."""
+    _до_телефона(окно)
+    _прочитан(окно)
+    assert окно.state == "ms_view" and len(окно.запросы) == 1
+    запрос = окно.запросы[0]
+    assert запрос["мойсклад"] == {"что": "найти"} and запрос["код"] == окно.код_медиа
+    assert len(запрос["imei"]) == 2 and запрос["запрос_цены"] == окно._мс_запрос
+    assert запрос["поля"]["akb_exact"] == 81 and запрос["поля"]["akb_cycles"] == 1642 and запрос["поля"]["ddr"] == 128
+    assert запрос["поля"]["ссылка_чека"] == ССЫЛКА and запрос["поля"]["phone_status"] is None
+    assert "клиент" not in запрос and "сделка" not in запрос, "в режиме обновления нет ни клиента, ни сделки"
+    assert "Ищем товар" in окно.s_ms.главное.text() and not окно.s_ms.b_записать.isEnabled()
+
+    _ответ(окно)
+    assert окно.s_ms.состояние == "найден" and "40117" in окно.s_ms.товар.text()
+    слова = " | ".join(l.text() for l in окно.s_ms.findChildren(QLabel))
+    for нужно in ("АКБ", "80-85%", "81%", "Цикл", "1642", "БЫЛО", "СТАНЕТ"):
+        assert нужно in слова, нужно
+    assert окно.s_ms.b_записать.isEnabled() and окно.s_ms.b_записать.text() == "Обновить в МойСкладе"
+    assert len(окно.запросы) == 1, "показ ничего не пишет"
+
+
+def test_writing_happens_only_after_the_button_and_into_the_shown_product(окно):
+    """Запись — только по кнопке, и именно в тот товар, который показали. После записи —
+    «Товар обновлён», а телефон отключили — касса ждёт следующий, привязка та же."""
+    _до_телефона(окно)
+    _прочитан(окно)
+    _ответ(окно)
+    окно.s_ms.b_записать.click()
+    assert len(окно.запросы) == 2 and окно.запросы[1]["мойсклад"] == {"что": "записать", "товар": "t-1"}
+    assert окно.запросы[1]["запрос_цены"] != окно.запросы[0]["запрос_цены"]
+    assert окно.s_ms.b_записать.text() == "Записываем…" and not окно.s_ms.b_записать.isEnabled()
+    окно.s_ms.b_записать.click()
+    assert len(окно.запросы) == 2, "вторая запись, пока идёт первая, не уходит"
+    _ответ(окно, "записать")
+    assert окно.s_ms.состояние == "записано" and "обновлён" in окно.s_ms.главное.text()
+    assert окно.last["report"]["мойсклад"]["товар"] == "40117"
+    assert окно.last["report"]["мойсклад"]["сотрудник"] == "Данияр К."
+    код = окно.код_медиа
+    окно.on_tick("NO_DEVICE", "", 0)                                  # телефон отключили
+    assert окно.state == "ms_wait" and окно.код_медиа == код and окно.привязан
+    окно.on_tick("READY", "", 1)                                      # следующий телефон
+    assert len(окно.читали) == 2 and окно.state == "ms_scan"
+
+
+def test_an_answer_to_an_older_question_or_a_refusal_never_looks_like_success(окно):
+    """Ответ на прошлый вопрос не принимается за ответ на новый; товара нет — сказано словами,
+    кнопки записи нет; бот молчит — касса не ждёт вечно."""
+    _до_телефона(окно)
+    _прочитан(окно)
+    старый = окно._мс_запрос
+    окно._медиа_спросили({"известно": True, "мойсклад": {"запрос": "чужой", "что": "найти", "найден": True,
+                                                         "товар": {"id": "x"}, "изменения": []}})
+    assert окно.s_ms.состояние == "ищем" and окно._мс_запрос == старый
+    _ответ(окно, найден=False, почему="в МойСкладе нет товара с таким IMEI")
+    assert окно.s_ms.состояние == "беда" and "нет товара" in окно.s_ms.пояснение.text()
+    assert окно.s_ms.b_записать.isHidden() and not окно.s_ms.b_дальше.isHidden()
+    окно.мс_записать()
+    assert len(окно.запросы) == 1, "без найденного товара записи не бывает"
+
+    # бот молчит дольше отведённого — говорим это, а не крутим «ищем» вечно
+    окно.s_ms.b_дальше.click()
+    окно.on_tick("NO_DEVICE", "", 0)
+    _прочитан(окно)
+    окно._мс_спросили_в -= kapp.МС_ЖДАТЬ_БОТА + 1
+    окно._медиа_спросили({"известно": True, "мойсклад": None})
+    assert окно.s_ms.состояние == "беда" and "не ответил" in окно.s_ms.пояснение.text()
+
+    # сервер запрос не принял (касса не привязана, бот прежний) — причина его словами
+    окно.s_ms.b_дальше.click()
+    окно.on_tick("NO_DEVICE", "", 0)
+    окно.client.спросить_цену = lambda код, посылка: {"принято": False, "почему": "бот Оценки ещё не умеет"}
+    _прочитан(окно)
+    assert окно.s_ms.состояние == "беда" and "не умеет" in окно.s_ms.пояснение.text()
+
+
+def test_leaving_the_mode_returns_the_kiosk_to_ordinary_work(окно):
+    """«Выйти из режима» — обычный экран ожидания, слова привязки снова про сделку, и новая
+    сделка начинается как всегда. После перезапуска программы режим выключен сам."""
+    _до_телефона(окно)
+    окно.s_ms.b_выйти.click()
+    assert not окно.мс_режим and окно.state == "idle" and окно.stack.currentWidget() is окно.s_main
+    assert окно.s_link.заголовок.text() == "Кто оценивает?"
+    окно.начать_сделку()
+    assert окно.state == "link" and not окно.мс_режим
+    assert окно.s_link.шапка_текст.text() == "Новая оценка"
+
+
+def test_the_cable_finding_goes_into_the_request_as_status_and_report():
+    """Что касса говорит боту про состояние: только заменённая деталь (или неродная батарея)
+    меняет его на «был в ремонте»; причина идёт в комментарий, из которого бот соберёт «Отчёт
+    диагностики». У чистого телефона состояние не трогается вовсе."""
+    чистый = ms_update.поля(_отчёт(), точка="16/38 Pintel", ссылка_чека=ССЫЛКА)
+    assert чистый["phone_status"] is None and "изменено" not in чистый["comment_ocenka"]
+    assert чистый["akb"] == "80-85" and чистый["sim"] in ocenka.SIM_ВАРИАНТЫ
+    ремонт = ms_update.поля(_отчёт("эталон_iPhone-15-Pro_iOS26.6.1_ремонт.zip"), точка="16/38 Pintel")
+    assert ремонт["phone_status"] == ocenka.СТАТУС_РЕМОНТ and ремонт["color"] == "BLACK"
+    assert "Товар со склада → изменено:" in ремонт["comment_ocenka"] and "Экран" in ремонт["comment_ocenka"]
+    assert ремонт["ссылка_чека"] == "", "ссылки нет — поле «Заключение» не трогаем"
+    # чего кабель не прочитал, того в запросе нет: пустым заполненное не затирают
+    пустой = ms_update.поля({})
+    assert пустой["akb"] is None and пустой["akb_exact"] is None and пустой["sim"] is None and пустой["ddr"] is None
+    запрос = ms_update.запрос(_отчёт(), "ABCD12", что="записать", номер="q7", товар="t-1")
+    assert запрос["мойсклад"] == {"что": "записать", "товар": "t-1"} and запрос["код"] == "ABCD12"

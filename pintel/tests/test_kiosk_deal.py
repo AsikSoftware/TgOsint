@@ -161,8 +161,8 @@ def test_deal_starts_with_the_intake_then_one_window(окно):
     assert окно.state == "intake" and окно.stack.currentWidget() is окно.s_start
     окно.анкета_готова({**АНКЕТА, "имя": "Зама", "телефон": "+77058837953"})
     assert окно.state == "work" and окно.stack.currentWidget() is окно.s_work
-    assert окно.stack.count() == 6, \
-        "ожидание, привязка, анкета, работа плюс токен и меню администратора"
+    assert окно.stack.count() == 7, \
+        "ожидание, привязка, анкета, работа плюс токен, меню администратора и скрытый режим МойСклада"
 
 
 def test_client_is_taken_before_the_phone_is_read(окно):

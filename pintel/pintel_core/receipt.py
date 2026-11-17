@@ -396,6 +396,12 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
     низ = (f'<div class="низ"><div>{тесты}</div><div class="kod">{qr}</div></div>'
            if (тесты or qr) else "")
 
+    # У телефона со склада (скрытый режим обновления МойСклада) клиента нет: блок «Клиент» с
+    # прочерком и пустой линией подписи на таком листе был бы просьбой расписаться никому.
+    клиент_блок = (f"""<div><div class="кикер">Клиент</div>
+    <div class="кто"><b>{_э(сделка.get('клиент') or '—')}</b> · {_э(сделка.get('телефон') or '')}</div>
+    <div class="линия">подпись</div></div>""" if (сделка.get("клиент") or сделка.get("телефон")) else "")
+
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <title>Сертификат диагностики {_э(d['модель'] or '')} · {_э(сделка.get('номер') or '')}</title>
 <style>{СТИЛЬ}</style></head><body>
@@ -440,9 +446,7 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
 {низ}
 
 <div class="подписи">
-  <div><div class="кикер">Клиент</div>
-    <div class="кто"><b>{_э(сделка.get('клиент') or '—')}</b> · {_э(сделка.get('телефон') or '')}</div>
-    <div class="линия">подпись</div></div>
+  {клиент_блок}
   <div><div class="кикер">Оценку провёл</div>
     <div class="кто"><b>{_э(сделка.get('сотрудник') or '—')}</b> · {_э(сделка.get('точка') or '')}</div>
     <div class="линия">подпись</div></div>

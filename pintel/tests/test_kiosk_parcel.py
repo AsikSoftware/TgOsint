@@ -694,3 +694,134 @@ def test_cycles_are_left_out_of_the_deal_until_the_column_exists(бот_моду
     мусор = _полная(бот_модуль)
     мусор["сделка"]["akb_cycles"] = -5
     assert ядро.колонки(мусор)["akb_cycles"] is None
+
+
+# ---------------------------------------------------------------- режим обновления МойСклада
+
+def _мс_обстановка(бот_модуль, monkeypatch, *, строка, ответ=None, падает=None):
+    """Запрос режима обновления лежит в таблице обмена; `utils.ms_card_update` подменён."""
+    import json as _json
+    журнал, вызовы = [], []
+    просьба = {"версия": 1, "код": "ABCD12", "запрос_цены": "m-7", "точка": "16/38 Pintel",
+               "imei": ["356789012345678"], "мойсклад": {"что": "найти"}, "поля": {"akb_exact": 88}}
+    сырое = {"текст": _json.dumps(просьба, ensure_ascii=False)}
+    monkeypatch.setattr(бот_модуль, "async_session_factory", lambda: Сессия(
+        журнал, lambda текст, п: сырое["текст"] if текст.startswith("SELECT quote_request") else None))
+
+    async def _строка(код):
+        return dict(строка, code=код) if строка is not None else None
+    monkeypatch.setattr(бот_модуль, "_строка", _строка)
+
+    def обновить(посылка):
+        вызовы.append(посылка)
+        if падает:
+            raise падает
+        return ответ
+    utils = types.ModuleType("utils")
+    utils.ms_card_update = types.SimpleNamespace(обновить=обновить)
+    monkeypatch.setitem(sys.modules, "utils", utils)
+    monkeypatch.setitem(sys.modules, "utils.ms_card_update", utils.ms_card_update)
+
+    def записано():
+        return [_json.loads(п["q"]) for т, п in журнал if т.startswith("UPDATE kiosk_media SET quote = ")]
+
+    def просить(что):
+        просьба["мойсклад"] = {"что": что, **({"товар": "t-1"} if что == "записать" else {})}
+        сырое["текст"] = _json.dumps(просьба, ensure_ascii=False)
+    return записано, вызовы, просить
+
+
+НАЙДЕН = {"что": "найти", "найден": True, "записано": False, "почему": "",
+          "товар": {"id": "t-1", "код": "40117", "название": "026 Ip 13 128", "папка": "БУ телефоны/Apple"},
+          "изменения": [{"поле": "АКБ", "было": "86-90%", "станет": "88%"}], "заметки": []}
+
+
+def test_an_update_request_is_answered_from_the_warehouse_not_from_the_price_list(бот_модуль, monkeypatch):
+    """Касса в скрытом режиме обновления шлёт запрос тем же путём, что и цену. Бот по ключу
+    `мойсклад` идёт не в прайс, а в МойСклад, и отвечает туда же, где касса читает ответ.
+    На «найти» сотруднику ничего не пишем: он смотрит на экран кассы."""
+    async def нельзя(*a, **k):
+        raise AssertionError("для режима обновления цену не считают")
+    monkeypatch.setattr(бот_модуль, "_оценить", нельзя)
+    записано, вызовы, _ = _мс_обстановка(бот_модуль, monkeypatch, ответ=НАЙДЕН,
+                                         строка={"chat_id": 777, "user_id": 5, "shop_id": 14})
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._посчитать_цену(бот, "ABCD12"))
+    assert len(вызовы) == 1 and вызовы[0]["imei"] == ["356789012345678"]
+    assert записано() == [{"запрос": "m-7", "мойсклад": НАЙДЕН}]
+    assert бот.письма == []
+
+
+def test_after_the_write_the_employee_gets_what_changed(бот_модуль, monkeypatch):
+    """«Записать»: бот обновил карточку и пишет привязанному сотруднику, что именно изменилось."""
+    записан = {**НАЙДЕН, "что": "записать", "записано": True}
+    записано, вызовы, просить = _мс_обстановка(бот_модуль, monkeypatch, ответ=записан,
+                                               строка={"chat_id": 777, "user_id": 5, "shop_id": 14})
+    просить("записать")
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._посчитать_цену(бот, "ABCD12"))
+    assert вызовы[0]["мойсклад"] == {"что": "записать", "товар": "t-1"}
+    assert записано()[0]["мойсклад"]["записано"] is True
+    assert len(бот.письма) == 1 and бот.письма[0][0] == 777
+    текст = бот.письма[0][1]
+    assert "40117" in текст and "АКБ: 86-90% → <b>88%</b>" in текст and "16/38 Pintel" in текст
+
+
+def test_an_unlinked_kiosk_cannot_change_the_warehouse(бот_модуль, monkeypatch):
+    """Кассу без привязанного сотрудника не слушаем: в МойСклад не идём вовсе. И если МойСклад
+    упал — касса узнаёт об этом словами, а не ждёт вечно."""
+    записано, вызовы, просить = _мс_обстановка(бот_модуль, monkeypatch, ответ=НАЙДЕН,
+                                               строка={"chat_id": None, "user_id": None})
+    просить("записать")
+    asyncio.run(бот_модуль._посчитать_цену(ФейкБот(), "ABCD12"))
+    assert вызовы == [] and записано()[0]["мойсклад"]["найден"] is False
+    assert "не привязана" in записано()[0]["мойсклад"]["почему"]
+
+    записано, вызовы, _ = _мс_обстановка(бот_модуль, monkeypatch, падает=RuntimeError("HTTP 503"),
+                                         строка={"chat_id": 777, "user_id": 5})
+    бот = ФейкБот()
+    asyncio.run(бот_модуль._посчитать_цену(бот, "ABCD12"))
+    ответ = записано()[0]
+    assert ответ["запрос"] == "m-7" and ответ["мойсклад"]["найден"] is False
+    assert "МойСклад не ответил" in ответ["мойсклад"]["почему"] and "503" not in ответ["мойсклад"]["почему"]
+    assert бот.письма == []
+
+
+def test_the_update_link_binds_the_employee_with_its_own_words(бот_модуль, monkeypatch):
+    """QR режима обновления ведёт в бота со своей командой («u»). Бот привязывает сотрудника
+    так же, как в сделке, но отвечает про склад, а не про фото и видео."""
+    core = бот_модуль.kiosk_core
+    assert бот_модуль.ПРИВЯЗКА.match("/start uABCD12").groups() == ("u", "ABCD12")
+    assert бот_модуль.ПРИВЯЗКА.match("/start kABCD12").groups() == ("k", "ABCD12")
+    assert бот_модуль.ПРИВЯЗКА.match("/start pABCD12") is None, "«p» — прежний приём медиа, не привязка"
+    заведено = []
+
+    async def _сотрудник(chat_id):
+        return types.SimpleNamespace(id=5, staff_id=1, shop_id=14, first_name="Асылбек")
+
+    async def _строка(код):
+        return None
+
+    async def _завести(код, user_id, chat_id, shop_id=None):
+        заведено.append((код, user_id, chat_id))
+
+    async def _имя_точки(shop_id):
+        return "16/38 Pintel"
+    monkeypatch.setattr(бот_модуль, "_сотрудник", _сотрудник)
+    monkeypatch.setattr(бот_модуль, "_строка", _строка)
+    monkeypatch.setattr(бот_модуль, "_завести", _завести)
+    monkeypatch.setattr(бот_модуль, "_имя_точки", _имя_точки)
+    monkeypatch.setattr(core, "точка_сотрудника", lambda staff_id, shop_id: shop_id)
+    склад, сделка = Письмо("/start uABCD12"), Письмо("/start kABCD12")
+    asyncio.run(бот_модуль.привязать(склад, Состояние()))
+    asyncio.run(бот_модуль.привязать(сделка, Состояние()))
+    assert заведено == [("ABCD12", 5, 777), ("ABCD12", 5, 777)]
+    assert "режиме обновления МойСклада" in склад.ответы[0] and "фото" not in склад.ответы[0]
+    assert "Сделка на кассе привязана" in сделка.ответы[0]
+
+    # запрос обновления узнаётся по одному ключу; обычный запрос цены им не считается
+    assert core.запрос_мойсклада('{"мойсклад": {"что": "найти"}, "код": "A"}')["код"] == "A"
+    assert core.запрос_мойсклада('{"сделка": {"model": "iPhone 13"}}') is None
+    assert core.запрос_мойсклада("не json") is None
+    пусто = core.текст_обновления_мойсклада({"товар": {"код": "40117", "название": "Ip 13"}, "изменения": []})
+    assert "Менять было нечего" in пусто

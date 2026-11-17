@@ -18,14 +18,18 @@ from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsVie
 from pintel_core import phonetest
 from pintel_core.devicelink import apple_service, connect
 from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER, READY
-from pintel_core.external import ocenka
+from pintel_core.external import ms_update, ocenka
 
 from . import phoneweb
 
-from . import __version__, config, ui, ui_admin, ui_deal, ui_link, ui_start
+from . import __version__, config, ui, ui_admin, ui_deal, ui_link, ui_start, ui_update
 from .client import Client, ServerError
 from .config import data_dir
 from .worker import Pipeline, SealedPipeline, log_line, забрать_логи, убрать_старое
+
+# Режим обновления МойСклада: сколько секунд ждать ответ бота (он ходит в МойСклад несколькими
+# запросами), прежде чем сказать сотруднику, что ответа нет.
+МС_ЖДАТЬ_БОТА = 40
 
 
 class Poller(QThread):
@@ -220,8 +224,20 @@ class KioskWindow(QMainWindow):
         # остальное приходит с сервера. Меню администратора скрыто от клиента сочетанием клавиш.
         self.s_token = ui_admin.TokenScreen()
         self.s_admin = ui_admin.AdminScreen()
-        for s in (self.s_main, self.s_link, self.s_start, self.s_work, self.s_token, self.s_admin):
+        # Скрытый режим обновления МойСклада: включается из меню администратора, сделок в нём
+        # нет — касса читает телефоны со склада и обновляет их карточки товаров по IMEI.
+        self.s_ms = ui_update.UpdateScreen(точка)
+        for s in (self.s_main, self.s_link, self.s_start, self.s_work, self.s_token, self.s_admin,
+                  self.s_ms):
             self.stack.addWidget(s)
+        self.мс_режим = False
+        self._мс_запрос, self._мс_что, self._мс_товар, self._мс_спросили_в = "", "", {}, 0.0
+        self.s_admin.режим_мс.connect(self.мс_переключить)
+        self.s_ms.записать.connect(self.мс_записать)
+        self.s_ms.дальше.connect(self.мс_дальше)
+        self.s_ms.выйти.connect(self.мс_выключить)
+        self.s_ms.пропустить_apple.connect(self.on_skip_apple)
+        self.s_ms.починить_связь.connect(self.починить_связь)
         self.s_link.готово.connect(self._привязка_готова)
         self.s_link.отмена.connect(self.go_home)
         self.s_link.новый_код.connect(self.новый_код_медиа)
@@ -629,10 +645,29 @@ class KioskWindow(QMainWindow):
                 self.s_main.set_device("wait")
                 if self.client.enabled and self.client.online:
                     self.s_main.set_status("Готов к работе", ok=True)
-        elif self.state in ("link", "intake"):
+        elif self.state in ("link", "intake", "ms_link"):
             # привязка и анкета ещё не пройдены: кабель подключили — ждём, читать телефон рано
             if state == NO_DEVICE:
                 self.wait_unplug = False
+        elif self.state == "ms_wait":
+            # режим обновления: телефон со склада подключили — читаем
+            if state == NO_DEVICE:
+                self.wait_unplug = False
+            elif state == READY and count and not self.wait_unplug:
+                self.мс_читать()
+        elif self.state == "ms_scan":
+            if state == NO_DEVICE and self.pipeline:
+                self.pipeline.cancel.set()
+                self.pipeline.остановить_слушателя()
+                self.wait_unplug = False
+                self.мс_ждать("Телефон отключили. Подключите снова — проверка начнётся заново.")
+        elif self.state == "ms_view":
+            # товар показан, но не подтверждён — экран остаётся: подтвердить можно и без кабеля.
+            # Записано или не получилось — телефон отключили, значит, ждём следующий.
+            if state == NO_DEVICE:
+                self.wait_unplug = False
+                if self.s_ms.состояние in ("записано", "беда") and not self._мс_запрос:
+                    self.мс_ждать()
         elif self.state == "work":
             # окно уже открыто: телефон подключили — начинаем читать, отключили — ждём следующий.
             # Запечатанный кабелем не читается вовсе.
@@ -818,6 +853,12 @@ class KioskWindow(QMainWindow):
 
     def _привязка_готова(self, имя):
         """Сотрудник отсканировал QR — сделка его. Идём на анкету."""
+        if self.state == "ms_link":
+            # режим обновления: привязка одна на весь заход, дальше телефоны идут подряд
+            self.привязан, self.сотрудник = True, str(имя or "").strip()
+            log_line(f"режим обновления МойСклада: обновляет {self.сотрудник or '(без имени)'}, код {self.код_медиа}")
+            self.мс_ждать()
+            return
         if self.state != "link":
             return
         self.привязан, self.сотрудник = True, str(имя or "").strip()
@@ -825,6 +866,185 @@ class KioskWindow(QMainWindow):
         log_line(f"оценка {self.код_медиа}: привязана к сотруднику {self.сотрудник or '(без имени)'}")
         self.state = "intake"
         self.show_screen(self.s_start)
+
+    # ---------- скрытый режим: обновление товаров МойСклада ----------
+    # Телефон лежит на складе, его товар в МойСкладе уже есть, а данных диагностики в карточке
+    # нет. В этом режиме касса читает телефон по кабелю, бот Оценки находит товар по IMEI
+    # (штрихкод товара — это IMEI) и показывает, что изменится; запись — после подтверждения.
+    # Сделок, клиента, теста на телефоне и медиа здесь нет. В МойСклад ходит бот: ключ у него.
+    # Запросы идут тем же путём, что и запрос автоцены, ответ приходит тем же опросом.
+
+    def мс_переключить(self):
+        """Кнопка в меню администратора: включить режим (выход — на экране самого режима)."""
+        if self.мс_режим:
+            self.мс_выключить()
+            return
+        if not self.client.enabled:
+            self.s_admin.ответ.setText("Режим обновления работает только через сервер: сначала задайте токен точки.")
+            return
+        if not self.cfg.get("ocenka_bot"):
+            self.s_admin.ответ.setText("В настройках точки не задан бот Оценки — обновлять карточки некому.")
+            return
+        if self.pipeline and self.pipeline.isRunning():
+            self.pipeline.cancel.set()
+            self.pipeline.остановить_слушателя()
+        self.мс_режим = True
+        log_line("режим обновления МойСклада: включён")
+        self.мс_начать()
+
+    def мс_начать(self):
+        """Привязка сотрудника — одна на весь заход: карточки обновляются от его имени."""
+        from pintel_core.external import ocenka_media
+        self.last, self.привязан, self.сотрудник = None, False, ""
+        self._мс_запрос, self._мс_товар = "", {}
+        self.код_медиа = ocenka_media.новый_код()
+        self.state = "ms_link"
+        self.s_link.режим("обновление")
+        self.s_link.начать()
+        self.s_link.показать_код(self.код_медиа,
+                                 ocenka_media.ссылка_обновления(self.cfg["ocenka_bot"], self.код_медиа))
+        self._медиа_спрашиваем = False
+        self.медиа_опрос.start(1500)
+        self.show_screen(self.s_link)
+
+    def мс_ждать(self, почему=""):
+        """Ждём следующий телефон со склада."""
+        self.state = "ms_wait"
+        self.last = None
+        self._мс_запрос, self._мс_товар = "", {}
+        self.медиа_опрос.stop()
+        self.s_ms.set_сотрудник(self.сотрудник)
+        self.s_ms.ждать(почему)
+        self.show_screen(self.s_ms)
+        if self.кабель == READY and not self.wait_unplug:
+            self.мс_читать()
+
+    def мс_читать(self):
+        """Телефон на кабеле — читаем его так же, как в сделке, всегда заново."""
+        if self.pipeline and self.pipeline.isRunning():
+            self.pipeline.cancel.set()
+            self.pipeline.остановить_слушателя()
+            self.pipeline.wait(3000)
+        self.state = "ms_scan"
+        self.wait_unplug = True
+        self.s_ms.читаем()
+        self.pipeline = Pipeline(self.cfg, self.client, self, заново=True)
+        self.pipeline.status.connect(self._мс_связь)
+        self.pipeline.step.connect(self.s_ms.set_step)
+        self.pipeline.done.connect(self._мс_прочитано)
+        self.pipeline.failed.connect(self._мс_не_прочитано)
+        self.pipeline.start()
+
+    def _мс_связь(self, state, human):
+        if self.state == "ms_scan" and state != READY:
+            self.s_ms.set_step("connect", "run", human)
+            self.s_ms.set_trouble(human)
+
+    def _мс_не_прочитано(self, text):
+        if self.state != "ms_scan":
+            return
+        self.state = "ms_view"
+        self.s_ms.set_step("connect", "fail", "не удалось")
+        self._мс_беда("Не получилось прочитать телефон: " + str(text)
+                      + ". Отключите и подключите кабель заново.")
+
+    def _мс_прочитано(self, result):
+        """Телефон прочитан — спрашиваем у бота его товар и что в нём изменится."""
+        if self.state != "ms_scan":
+            return
+        self.last = result
+        self.state = "ms_view"
+        self.s_ms.set_телефон(result.get("report") or {})
+        self._мс_спросить(ms_update.НАЙТИ)
+
+    def _мс_спросить(self, что):
+        rep = (self.last or {}).get("report") or {}
+        self._мс_запрос, self._мс_что = uuid.uuid4().hex[:10], что
+        self._мс_спросили_в = time.monotonic()
+        посылка = ms_update.запрос(
+            rep, self.код_медиа, что=что, номер=self._мс_запрос,
+            товар=str((self._мс_товар or {}).get("id") or ""), точка=self.cfg.get("point") or "",
+            ссылка_чека=((self.last or {}).get("server") or {}).get("ссылка_чека") or "")
+        if что == ms_update.ЗАПИСАТЬ:
+            self.s_ms.пишем()
+        else:
+            self.s_ms.ищем()
+        код, запрос = self.код_медиа, self._мс_запрос
+
+        def ответили(res):
+            if запрос != self._мс_запрос:            # уже спросили заново — этот ответ устарел
+                return
+            if not (res or {}).get("принято"):
+                self._мс_запрос = ""
+                self.медиа_опрос.stop()
+                self._мс_беда(str((res or {}).get("почему") or "сервер не ответил"))
+
+        self._run(lambda: self.client.спросить_цену(код, посылка), ok=ответили,
+                  err=lambda e: ответили({"принято": False, "почему": str(e)[:120]}))
+        self._медиа_спрашиваем = False
+        self.медиа_опрос.start(1200)                 # ответ бота придёт тем же опросом
+
+    def _мс_ответ(self, состояние):
+        """Опрос принёс ответ бота про товар — если он на НАШ последний вопрос."""
+        if not self._мс_запрос:
+            return
+        мс = (состояние or {}).get("мойсклад")
+        if not (isinstance(мс, dict) and мс.get("запрос") == self._мс_запрос):
+            if time.monotonic() - self._мс_спросили_в > МС_ЖДАТЬ_БОТА:
+                self._мс_запрос = ""
+                self.медиа_опрос.stop()
+                self._мс_беда(f"бот Оценки не ответил за {МС_ЖДАТЬ_БОТА} секунд — попробуйте ещё раз")
+            return
+        self._мс_запрос = ""
+        self.медиа_опрос.stop()
+        товар = мс.get("товар") or {}
+        if self._мс_что == ms_update.НАЙТИ:
+            if not мс.get("найден"):
+                self._мс_беда(мс.get("почему") or "товар не найден")
+                return
+            self._мс_товар = dict(товар)
+            self.s_ms.показать_товар(мс)
+            log_line(f"МойСклад: найден товар {товар.get('код') or '?'}, к изменению полей: "
+                     f"{len(мс.get('изменения') or [])}")
+            return
+        if not мс.get("записано"):
+            self._мс_беда(мс.get("почему") or "МойСклад запись не подтвердил")
+            return
+        self.s_ms.записано(мс)
+        поля = ", ".join(str(и.get("поле")) for и in (мс.get("изменения") or []))
+        log_line(f"МойСклад: товар {товар.get('код') or '?'} обновлён ({поля or 'без изменений'}), "
+                 f"сотрудник {self.сотрудник or '—'}")
+        # что и кем записано — в оценку на нашем сервере: там это видно и через год
+        # и сертификат этой проверки — тот, на который ведёт «Заключение» товара: номером
+        # в нём стоит код товара, клиента у телефона со склада нет
+        self._дослать_на_сервер({
+            "мойсклад": {"товар": товар.get("код"), "изменения": list(мс.get("изменения") or []),
+                         "сотрудник": self.сотрудник, "когда": datetime.now().isoformat(timespec="seconds")},
+            "чек": {"номер": f"товар {товар.get('код') or ''}".strip(), "клиент": "", "телефон": "",
+                    "сотрудник": self.сотрудник, "точка": self.cfg.get("point") or ""}})
+
+    def _мс_беда(self, текст):
+        log_line(f"МойСклад: {текст}")
+        self.s_ms.беда(текст)
+
+    def мс_записать(self):
+        """Сотрудник подтвердил «было → станет» — просим бота записать."""
+        if self.state == "ms_view" and (self._мс_товар or {}).get("id") and not self._мс_запрос:
+            self._мс_спросить(ms_update.ЗАПИСАТЬ)
+
+    def мс_дальше(self):
+        """Этот телефон закончен. Тот же аппарат на кабеле второй раз не читаем."""
+        if not self.state.startswith("ms_") or self._мс_запрос:
+            return
+        if self.pipeline and self.pipeline.isRunning():
+            self.pipeline.cancel.set()               # слушатель истории Apple больше не нужен
+            self.pipeline.остановить_слушателя()
+        self.wait_unplug = self.кабель == READY
+        self.мс_ждать("Отключите этот телефон и подключите следующий." if self.wait_unplug else "")
+
+    def мс_выключить(self):
+        """Выход из режима — обратно к обычной работе кассы."""
+        self.go_home()
 
     def анкета_готова(self, данные):
         """Состояние выбрано, клиент записан. Запечатанный — по IMEI с коробки, без кабеля;
@@ -1072,6 +1292,9 @@ class KioskWindow(QMainWindow):
         привязки, по нему бот узнаёт сотрудника, называет цену и создаёт сделку. Придумываем
         его на месте: в базу Оценки с точки хода нет, строку по коду заведёт сам бот."""
         from pintel_core.external import ocenka_media
+        if self.state == "ms_link":               # «Другой код» на привязке режима обновления
+            self.мс_начать()
+            return
         self.привязан, self.сотрудник = False, ""
         self._цена_подпись = self._цена_запрос = ""
         self.s_work.set_привязка(None)
@@ -1125,13 +1348,16 @@ class KioskWindow(QMainWindow):
         потоке и не больше одного зараз."""
         if not (self.client.enabled and self.код_медиа) or self._медиа_спрашиваем:
             return
-        if self.state not in ("link", "work", "intake", "scanning"):
+        if self.state in ("ms_link", "ms_view"):
+            pass                                 # режим обновления: ждём привязку или ответ бота
+        elif self.state not in ("link", "work", "intake", "scanning"):
             self.медиа_опрос.stop()
             return
-        if self.s_work.отправлено and not self._ждём_сделку:
+        elif self.s_work.отправлено and not self._ждём_сделку:
             self.медиа_опрос.stop()
             return
-        self._цена_пересчитать()                 # данные могли поменяться с прошлого круга
+        else:
+            self._цена_пересчитать()             # данные могли поменяться с прошлого круга
         self._медиа_спрашиваем = True
         код = self.код_медиа
         self._run(lambda: self.client.медиа(код), ok=self._медиа_спросили,
@@ -1140,10 +1366,14 @@ class KioskWindow(QMainWindow):
     def _медиа_спросили(self, состояние):
         self._медиа_спрашиваем = False
         состояние = состояние or {}
-        if self.state == "link":
+        if self.state in ("link", "ms_link"):
             # экран привязки ждёт одного: открыл ли сотрудник ссылку
             self.s_link.set_состояние(состояние)
             self.медиа_опрос.setInterval(1500 if состояние.get("известно") else 5000)
+            return
+        if self.state.startswith("ms_"):
+            if self.state == "ms_view":
+                self._мс_ответ(состояние)
             return
         self._цена_пришла(состояние)
         if self._ждём_сделку:
@@ -1432,6 +1662,10 @@ class KioskWindow(QMainWindow):
             self.pipeline.остановить_слушателя()
         self.state = "idle"
         self.last = None
+        if self.мс_режим:
+            log_line("режим обновления МойСклада: выключен")
+        self.мс_режим, self._мс_запрос, self._мс_товар = False, "", {}
+        self.s_link.режим("сделка")
         self._вопрос_истории += 1               # сделку бросили — ответ по ней уже не нужен
         self.сделка, self.код_медиа, self.анкета = {}, "", {}
         self.привязан, self.сотрудник = False, ""

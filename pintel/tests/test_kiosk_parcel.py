@@ -127,7 +127,9 @@ class ФейкБот:
         self.письма.append((chat_id, text))
 
 
-ПОСЫЛКА = '{"версия": 1, "код": "ABCD12", "сделка": {"model": "iPhone 14 Pro"}}'
+# как у живой кассы: цвет и ошибка Panic full в сделке есть, иначе обработчик её не откроет
+ПОСЫЛКА = ('{"версия": 1, "код": "ABCD12", "сделка": {"model": "iPhone 14 Pro", "color": "BLACK",'
+           ' "akb_exact": 86, "phone_status": "Не был в ремонте", "panic_full": false}}')
 СТРОКА = {"code": "ABCD12", "chat_id": 777, "user_id": 5, "shop_id": 14, "device_id": None,
           "photos": "f1||f2||f3", "video": "v1", "checks": None}
 
@@ -246,8 +248,11 @@ def test_the_parcel_is_locked_read_and_only_then_cleared(бот_модуль, mo
 ПОЛНАЯ = {
     "версия": 1, "код": "ABCD12", "shop_id": 14, "точка": "16/38 Pintel",
     "клиент": {"имя": "Арман", "телефон": "+77051234567"}, "imei": ["356789012345678"],
+    # цвет и ошибка Panic full есть у живой кассы всегда: без них обработчик сделку не
+    # откроет (решение владельца 17.11.2026, pintel_core/analysis/обязательное.py)
     "сделка": {"model": "iPhone 13", "ddr": 128, "akb": "75-79", "akb_exact": 75,
-               "akb_cycles": 1810, "sim": "Стандарт", "phone_status": "Не был в ремонте"},
+               "akb_cycles": 1810, "sim": "Стандарт", "phone_status": "Не был в ремонте",
+               "color": "BLACK", "panic_full": False},
     "ручная_диагностика": {"keys": True, "vibro": True, "sim": True, "glue": True,
                            "wifi": True, "charge": True, "apple": True, "body": True},
     "тест_телефона": {"sensor": "ok", "multitouch": "ok", "screen": "ok", "speaker": "ok",
@@ -915,3 +920,32 @@ def test_the_deal_is_written_with_the_looked_up_model_number(бот_модуль
     assert вставленное("A2891", "A2890") == "A2890"            # справочник бота главнее
     assert вставленное("A2891", None) == "A2891"               # новой модели в справочнике нет
     assert вставленное("iPhone19,3", None) is None             # и номера нет — пусто
+
+
+def test_a_parcel_without_the_mandatory_values_is_held_not_opened(бот_модуль, monkeypatch):
+    """Последний заслон у бота: касса старой сборки может прислать сделку без цвета, без
+    процента батареи, без статуса или без паники. По такой сделке цена была бы выдумкой —
+    обработчик считает это «прочей бедой», а не ожиданием медиа: сделку он не откроет, а
+    причина уйдёт словами в строку обмена, и касса её покажет."""
+    import copy
+    строка = {"code": "ABCD12", "chat_id": 777, "user_id": 5, "shop_id": 14, "device_id": None,
+              "photos": "f1||f2||f3", "video": "v1", "checks": None, "media_asked": None,
+              "quote": None, "parcel": None}
+    async def магазины():
+        return [{"id": 14, "name": "16/38 Pintel"}]
+    monkeypatch.setattr(бот_модуль, "_магазины", магазины)
+    полная = _полная(бот_модуль)
+    assert asyncio.run(бот_модуль._прочие_беды(полная, строка)) == [], "полную посылку задержали"
+
+    for убрать, слово in (("color", "цвет"), ("akb_exact", "здоровье батареи"),
+                          ("phone_status", "статус телефона"), ("panic_full", "Panic full")):
+        п = copy.deepcopy(полная)
+        п["сделка"].pop(убрать, None)
+        беды = asyncio.run(бот_модуль._прочие_беды(п, строка))
+        assert беды and any(слово in x for x in беды), (убрать, беды)
+
+    # запечатанный читают не кабелем: с него ни батареи, ни паники не требуется
+    зап = copy.deepcopy(полная)
+    зап["сделка"].update({"phone_status": бот_модуль.kiosk_core.СТАТУС_НОВЫЙ,
+                          "akb_exact": None, "panic_full": None})
+    assert asyncio.run(бот_модуль._прочие_беды(зап, строка)) == []

@@ -114,17 +114,30 @@ def test_report_does_not_claim_a_clean_board_when_it_could_not_read():
     assert not any("panic full: ЕСТЬ" in x for x in rep["внимание"])
 
 
+ДАННЫЕ_СДЕЛКИ = {"модель": "iPhone 14 Pro", "память": 256, "имя_клиента": "Зама",
+                 "телефон_клиента": "+77058837953", "imei": "350585886690250",
+                 "акб": 86, "статус_ремонта": "Не был в ремонте", "цвет": "BLACK"}
+
+
 @pytest.mark.parametrize("паника,ждём", [
     (panic.разобрать(["panic-full-2026-10-01-1.ips"]), True),
     (panic.разобрать(["stacks-2026-10-02.ips"]), False),
-    ({"проверено": False, "panic_full": None}, None),
 ])
 def test_export_sends_what_we_actually_know(паника, ждём):
-    """В сделку уходит ровно то, что прочитали: True, False или пусто. У Оценки пустое
-    поле печатается как «Panic full: -», и это честно."""
+    """В сделку уходит ровно то, что прочитали: есть отчёт о панике или нет."""
     from pintel_core.external import ocenka
-    данные = {"модель": "iPhone 14 Pro", "память": 256, "имя_клиента": "Зама",
-              "телефон_клиента": "+77058837953", "imei": "350585886690250",
-              "акб": 86, "статус_ремонта": "Не был в ремонте",
-              "panic_full": (паника or {}).get("panic_full")}
+    данные = {**ДАННЫЕ_СДЕЛКИ, "panic_full": (паника or {}).get("panic_full")}
     assert ocenka.посылка(данные, "7KQ4M")["сделка"]["panic_full"] is ждём
+
+
+def test_an_unread_panic_does_not_become_a_deal_at_all():
+    """А непрочитанную панику в сделку больше не отправляем вовсе: владелец распорядился
+    запрещать (17.11.2026). Прежде она уезжала пустым полем — у Оценки это печаталось как
+    «Panic full: -», и отличить «не было» от «не прочитали» по карточке было нельзя."""
+    from pintel_core.external import ocenka
+    with pytest.raises(ocenka.ОшибкаЭкспорта) as e:
+        ocenka.проверить_готовность({**ДАННЫЕ_СДЕЛКИ, "panic_full": None})
+    assert "Panic full" in str(e.value)
+    # запечатанный аппарат читают не кабелем — с него паника не требуется
+    ocenka.проверить_готовность({**ДАННЫЕ_СДЕЛКИ, "panic_full": None, "акб": None,
+                                 "состояние": "новый", "статус_ремонта": ocenka.СТАТУС_НОВЫЙ})

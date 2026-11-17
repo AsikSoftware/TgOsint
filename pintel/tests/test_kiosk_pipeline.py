@@ -81,7 +81,7 @@ class FakeClient:
 
 @pytest.fixture
 def fake_core(monkeypatch):
-    snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"), encoding="utf-8").read())
+    snap = _слепок_из_файла()                    # как у живой проверки: с отчётами о сбоях
     snap.pop("repair_history", None)
     async def wait_ready(on_status=None, deadline=None): return FakeStatus()
     async def open_diag(ld, attempts=6, delays=None): return object(), 1
@@ -457,8 +457,12 @@ def test_a_changed_phone_is_read_again_even_if_the_report_is_fresh(fake_core, mo
 # ---------------------------------------------------------------- шаг «Модель и память» не зависает
 
 def _слепок_из_файла():
-    return snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
+    snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
                                encoding="utf-8").read())
+    # Архивный слепок снят до чтения отчётов о сбоях, а живая проверка их читает — и без них
+    # сделка теперь не создаётся (решение владельца 17.11.2026)
+    snap.setdefault("panic", {"проверено": True, "panic_full": False, "полных": 0, "паник_всего": 0})
+    return snap
 
 
 def test_the_phone_is_asked_about_memory_once_at_the_very_end(fake_core, monkeypatch):

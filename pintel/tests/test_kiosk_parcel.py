@@ -530,6 +530,9 @@ class Состояние:
     async def get_state(self):
         return self.имя
 
+    async def clear(self):
+        self.имя = None
+
 
 def test_the_employee_answers_with_a_number_and_it_becomes_the_sum_for_the_client(бот_модуль, monkeypatch):
     """Ответ сотрудника — сообщение из одних цифр. Его ловим по базе, а не по памяти бота:
@@ -585,6 +588,94 @@ def test_the_employee_answers_with_a_number_and_it_becomes_the_sum_for_the_clien
     поздно = Письмо("160000")
     asyncio.run(принять(поздно, **ещё))
     assert "записать некуда" in поздно.ответы[0]
+
+
+def _с_именами_состояний(бот_модуль, monkeypatch):
+    """В подменном aiogram у состояний нет имён. Здесь они как настоящие, и у бота есть
+    диспетчер с хранилищем, которое помнит, что в него ставили."""
+    for имя in ("приём", "сумма"):
+        monkeypatch.setattr(бот_модуль.KioskMediaState, имя,
+                            types.SimpleNamespace(state=f"KioskMediaState:{имя}"), raising=False)
+    base = types.ModuleType("aiogram.fsm.storage.base")
+    base.StorageKey = lambda **k: (k["bot_id"], k["chat_id"], k["user_id"])
+    monkeypatch.setitem(sys.modules, "aiogram.fsm.storage", types.ModuleType("aiogram.fsm.storage"))
+    monkeypatch.setitem(sys.modules, "aiogram.fsm.storage.base", base)
+    поставлено = []
+
+    class Хранилище:
+        async def set_state(self, key=None, state=None):
+            поставлено.append((key, getattr(state, "state", state)))
+
+        async def update_data(self, key=None, data=None):
+            pass
+    monkeypatch.setattr(бот_модуль, "_диспетчер", types.SimpleNamespace(storage=Хранилище()))
+    return поставлено
+
+
+def test_asking_for_the_sum_makes_the_next_number_the_sum_without_start(бот_модуль, monkeypatch):
+    """Главное меню бота оставляет диалог сотрудника в своём состоянии после любой кнопки
+    («Открытые оценки», «Выкуп») и не снимает его. Раньше число в ответ на вопрос о сумме в
+    таком диалоге уходило мимо — сумма проходила только после /start. Теперь бот, задав
+    вопрос, сам переводит диалог в «ждём сумму» — как он уже делает с фото и видео."""
+    import json as _json
+    поставлено = _с_именами_состояний(бот_модуль, monkeypatch)
+
+    class Бот(ФейкБот):
+        id = 42
+
+        async def send_message(self, chat_id=None, text=None, **k):
+            await super().send_message(chat_id=chat_id, text=text)
+            return types.SimpleNamespace(message_id=5512)
+
+    журнал = []
+    _запрос_цены(бот_модуль, monkeypatch, журнал, сумму_назовёт_сотрудник=True,
+                 строка={"shop_id": 14, "checks": None, "chat_id": 777})
+    asyncio.run(бот_модуль._посчитать_цену(Бот(), "ABCD12"))
+    assert поставлено == [((42, 777, 777), "KioskMediaState:сумма")], поставлено
+
+    # автоцены нет или касса прежней сборки — вопроса нет, и диалог сотрудника не трогаем
+    поставлено.clear()
+    _запрос_цены(бот_модуль, monkeypatch, [], строка={"shop_id": 14, "checks": None, "chat_id": 777})
+    asyncio.run(бот_модуль._посчитать_цену(Бот(), "ABCD12"))
+    assert поставлено == []
+
+    ждёт = {"цена": 185000, "почему": "", "запрос": "q-42", "ждём_сумму": True, "вопрос": 5512}
+    хранится = {"quote": _json.dumps(ждёт, ensure_ascii=False)}
+
+    def ответы(текст, п):
+        if текст.startswith("SELECT code, quote FROM kiosk_media WHERE chat_id"):
+            return {"code": "ABCD12", "quote": хранится["quote"]} if хранится["quote"] else None
+        return None
+    monkeypatch.setattr(бот_модуль, "async_session_factory", lambda: Сессия([], ответы))
+    фильтр = бот_модуль._сумма_без_состояния
+
+    # диалог ждёт сумму — число наше, без /start
+    assert asyncio.run(фильтр(Письмо("170000"), Состояние("KioskMediaState:сумма")))["ksum_code"] == "ABCD12"
+    # после вопроса сотрудник ушёл в другое дело (нажал кнопку меню) — число не наше…
+    assert asyncio.run(фильтр(Письмо("170000"), Состояние("OcenkaState:open"))) is False
+    # …кроме ответа на сам вопрос
+    assert asyncio.run(фильтр(Письмо("170000", на=5512), Состояние("OcenkaState:open")))
+
+    # суммы уже никто не ждёт, а диалог всё «ждёт сумму» — снимаем своё состояние, чужое не трогаем
+    хранится["quote"] = None
+    своё, чужое = Состояние("KioskMediaState:сумма"), Состояние("OcenkaState:open")
+    assert asyncio.run(фильтр(Письмо("170000"), своё)) is False and своё.имя is None
+    assert asyncio.run(фильтр(Письмо("170000"), чужое)) is False and чужое.имя == "OcenkaState:open"
+
+
+def test_media_sent_while_the_dialog_still_waits_for_the_sum_is_taken(бот_модуль, monkeypatch):
+    """Перевести диалог из «ждём сумму» в приём медиа могло не выйти. Присланное фото всё
+    равно наше: по базе видно, что медиа у этого сотрудника просили. А вот в чужом диалоге
+    фото не трогаем, как и раньше."""
+    _с_именами_состояний(бот_модуль, monkeypatch)
+
+    async def ждёт(chat_id):
+        return "ABCD12"
+    monkeypatch.setattr(бот_модуль, "_код_ждущий_медиа", ждёт)
+    фильтр = бот_модуль._ждём_медиа_без_состояния
+    assert asyncio.run(фильтр(Письмо(""), Состояние(None))) == {"kmedia_code": "ABCD12"}
+    assert asyncio.run(фильтр(Письмо(""), Состояние("KioskMediaState:сумма"))) == {"kmedia_code": "ABCD12"}
+    assert asyncio.run(фильтр(Письмо(""), Состояние("OcenkaState:video"))) is False
 
 
 def test_cycles_are_left_out_of_the_deal_until_the_column_exists(бот_модуль, monkeypatch):

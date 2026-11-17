@@ -268,3 +268,20 @@ def test_the_receipt_says_when_the_check_was_not_repeated():
     txt = receipt.html(СДЕЛКА, rep)
     assert "сегодня в 13:20, 40 мин назад" in txt and "не перечитывали" in txt
     assert "не перечитывали" not in receipt.html(СДЕЛКА, _отчёт())
+
+
+def test_an_undetermined_find_my_is_not_printed_green():
+    """«Не определился» — это не «выключен». Зелёная строка про «Найти iPhone» в сертификате
+    клиента означает, что аппарат чист; если мы этого не знаем, писать так нельзя."""
+    for статус, ждём in (("выключен", ("выключен", "ок")),
+                         ("включён", ("включён", "плохо")),
+                         ("не определился", ("не определился", "внимание"))):
+        rep = _отчёт()
+        rep["правовой"]["найти_iphone"] = статус
+        rep["sickw"] = {**(rep.get("sickw") or {}), "fmi_включён": None}
+        html = receipt.html(СДЕЛКА, rep)
+        куски = [x for x in html.split("Найти iPhone")[1:]]
+        assert куски, "строки про «Найти iPhone» в сертификате нет"
+        рядом = куски[0][:260]
+        assert ждём[0] in рядом, (статус, рядом)
+        assert ждём[1] in рядом, (статус, рядом)

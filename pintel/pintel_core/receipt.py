@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Чек оценки на A4 — то, что клиент уносит на руках.
+"""Сертификат диагностики на A4 — то, что клиент уносит на руках.
+
+Раньше лист назывался чеком («Заключение по оценке»); 17.11.2026 владелец переименовал его в
+«Сертификат диагностики». В коде, в адресе страницы (`/check/…`) и в ключах посылки слово «чек»
+осталось: по этим адресам уже ходят напечатанные QR.
 
 Собирается из готового отчёта и данных сделки, без Qt: здесь только HTML, а печать или
 PDF делает приложение. Так содержимое чека проверяется тестами, а не глазами.
@@ -28,6 +32,13 @@ PDF делает приложение. Так содержимое чека пр
 
 Цены на чеке нет: её считает Оценка по своему прайсу уже после создания сделки.
 
+**Лист всегда один.** Поля и отступы подобраны так, что обычный аппарат и аппарат с ремонтом
+(десять строк деталей) помещаются на A4 сами. Для листа длиннее — прошлая проверка, все строки
+блокировок, ответ реестра по трём IMEI разом — внизу страницы стоит маленький скрипт
+(`ПОДГОНКА`): он меряет высоту и ужимает лист целиком ровно настолько, чтобы подписи не
+уехали на второй. Ширина листа поэтому задана жёстко (`ШИРИНА_ММ`), одинаково на экране и
+на бумаге: иначе высота на экране ничего не говорила бы о высоте при печати.
+
 Логотип вшит в страницу (data:), чтобы чек печатался и открывался на любом компьютере,
 без интернета и без соседних файлов.
 """
@@ -44,25 +55,33 @@ from . import colours
 ЛОГОТИП_ФАЙЛ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
 _логотип_кеш = None
 
+# Лист A4 и его поля, мм. Из них же считается, сколько высоты есть у содержимого (`ПОДГОНКА`).
+ПОЛЕ_СВЕРХУ_ММ, ПОЛЕ_СБОКУ_ММ = 11, 14
+ШИРИНА_ММ = 210 - 2 * ПОЛЕ_СБОКУ_ММ
+ВЫСОТА_ММ = 297 - 2 * ПОЛЕ_СВЕРХУ_ММ
+
 СТИЛЬ = """
-  @page { size: A4; margin: 13mm 14mm; }
+  @page { size: A4; margin: %(поле_сверху)dmm %(поле_сбоку)dmm; }
   * { box-sizing: border-box; }
   body { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; color: #11161C; font-size: 10.5pt;
-         line-height: 1.42; margin: 0; }
+         line-height: 1.36; margin: 0; }
+  #лист { width: %(ширина)dmm; margin: 0 auto; }
+  /* поля экрана — у body, а не у листа: высоту листа меряет скрипт, и на бумаге этих полей нет */
+  @media screen { body { padding: 8mm 0; } }
   .шапка { display: flex; justify-content: space-between; align-items: flex-start; gap: 12mm; }
   .шапка img { height: 13mm; }
   .реквизиты { text-align: right; font-size: 8.5pt; color: #6B7580; line-height: 1.5; }
-  .черта { border-top: 2px solid #11161C; margin: 3mm 0 4mm 0; }
-  .титул { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4mm; }
+  .черта { border-top: 2px solid #11161C; margin: 2.5mm 0 3mm 0; }
+  .титул { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3mm; }
   h1 { font-size: 17pt; margin: 0; letter-spacing: -.3pt; }
   .номер { font-size: 9pt; color: #6B7580; }
-  .две { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm 7mm; }
+  .две { display: grid; grid-template-columns: 1fr 1fr; gap: 3.5mm 7mm; }
   .блок { break-inside: avoid; }
-  .стопка { display: grid; gap: 4mm; align-content: start; }
+  .стопка { display: grid; gap: 3.5mm; align-content: start; }
   .широкий { grid-column: 1 / -1; }
   .кикер { font-size: 7.5pt; font-weight: 700; letter-spacing: .9pt; color: #6B7580;
-           text-transform: uppercase; margin-bottom: 1.5mm; }
-  .строка { display: flex; justify-content: space-between; gap: 4mm; padding: 1.1mm 0;
+           text-transform: uppercase; margin-bottom: 1.2mm; }
+  .строка { display: flex; justify-content: space-between; gap: 4mm; padding: .9mm 0;
             border-bottom: 1px solid #EFF2F6; }
   .строка:last-child { border-bottom: 0; }
   .к { color: #6B7580; }
@@ -72,29 +91,65 @@ _логотип_кеш = None
   .з.внимание { color: #7A4A00; }
   .ок { background: #E8F7EE; color: #0B6B35; }
   .внимание { background: #FFF4E0; color: #7A4A00; }
-  .модель { font-size: 13pt; font-weight: 700; margin: 0 0 1.5mm 0; }
-  .деталь { display: grid; grid-template-columns: 44mm 40mm 24mm 30mm 1fr; gap: 0 4mm;
-            padding: 1.1mm 0; border-bottom: 1px solid #EFF2F6; align-items: baseline; }
+  .модель { font-size: 13pt; font-weight: 700; margin: 0 0 1.2mm 0; }
+  /* Последняя колонка — результат — берёт всё, что осталось: «меняли, оригинал Apple» и
+     «не подтверждена» обязаны стоять в одну строку, перенос добавлял листу высоты. */
+  .деталь { display: grid; grid-template-columns: 40mm 36mm 16mm 24mm 1fr; gap: 0 4mm;
+            padding: .9mm 0; border-bottom: 1px solid #EFF2F6; align-items: baseline; }
   .деталь:last-child { border-bottom: 0; }
+  .деталь .з { white-space: nowrap; justify-self: end; padding-left: 2mm; }
   .деталь.головка { font-size: 7.5pt; font-weight: 700; letter-spacing: .6pt; color: #6B7580;
                     text-transform: uppercase; border-bottom: 1px solid #D5DBE3; }
   .деталь.головка span:last-child { text-align: right; }
   .пояснение { color: #6B7580; font-size: 9pt; }
-  .низ { display: grid; grid-template-columns: 1fr auto; gap: 0 7mm; margin-top: 5mm;
+  .низ { display: grid; grid-template-columns: 1fr auto; gap: 0 7mm; margin-top: 4mm;
          align-items: start; break-inside: avoid; }
   .kod { line-height: 0; }
   .тесты { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 3mm; }
-  .тесты + .кикер, .пояснение + .кикер { margin-top: 3mm; }
-  .т { padding: 1.1mm 0; border-bottom: 1px solid #EFF2F6; }
+  .тесты + .кикер, .пояснение + .кикер { margin-top: 2.5mm; }
+  .т { padding: .9mm 0; border-bottom: 1px solid #EFF2F6; }
   .т::before { content: "\\2713"; color: #0B6B35; font-weight: 700; margin-right: 2mm; }
   .т.сбой { color: #8B1111; font-weight: 700; }
   .т.сбой::before { content: "\\2715"; color: #8B1111; }
   .т.пропуск { color: #6B7580; }
   .т.пропуск::before { content: "\\2014"; color: #6B7580; }
-  .подписи { display: grid; grid-template-columns: 1fr 1fr; gap: 12mm; margin-top: 10mm; }
-  .линия { border-top: 1px solid #11161C; margin-top: 11mm; padding-top: 1.2mm;
+  .подписи { display: grid; grid-template-columns: 1fr 1fr; gap: 12mm; margin-top: 6mm;
+             break-inside: avoid; }
+  /* линии подписей — на одной высоте, даже когда длинное имя клиента легло в две строки */
+  .подписи > div { display: flex; flex-direction: column; }
+  .кто { margin-bottom: 9mm; }
+  .линия { border-top: 1px solid #11161C; margin-top: auto; padding-top: 1.2mm;
            font-size: 8pt; color: #6B7580; }
-"""
+""" % {"поле_сверху": ПОЛЕ_СВЕРХУ_ММ, "поле_сбоку": ПОЛЕ_СБОКУ_ММ, "ширина": ШИРИНА_ММ}
+
+# Лист длиннее A4 — ужать целиком, чтобы подписи не уехали на вторую страницу. Мерка — невидимый
+# брусок высотой с лист: по нему видно, сколько пикселей в миллиметре у этого экрана или
+# принтера. `zoom` меняет и раскладку, поэтому ширину расширяем обратно: лист остаётся во
+# всю страницу, а не съёживается к левому краю. Меряем до трёх раз — после ужатия строки
+# ложатся иначе. Браузер, который не пересчитывает высоту после `zoom`, получает коэффициент
+# сразу по первой мерке. Скрипт не выполнился — лист просто печатается как есть.
+ПОДГОНКА = """
+(function () {
+  function подогнать() {
+    var лист = document.getElementById('лист'), мерка = document.getElementById('мерка');
+    if (!лист || !мерка) return;
+    var есть = мерка.getBoundingClientRect().height, первая = 0, было = 0, z = 1;
+    if (!есть) return;
+    for (var круг = 0; круг < 3; круг++) {
+      var надо = лист.getBoundingClientRect().height;
+      if (!первая) первая = надо;
+      if (надо <= есть) break;
+      if (круг && надо >= было * 0.999) { z = есть / первая * 0.985; круг = 9; }
+      else z = z * есть / надо * 0.985;
+      было = надо;
+      лист.style.zoom = z;
+      лист.style.width = (%(ширина)d / z) + 'mm';
+    }
+  }
+  if (document.readyState === 'complete') подогнать();
+  else window.addEventListener('load', подогнать);
+})();
+""" % {"ширина": ШИРИНА_ММ}
 
 
 def логотип() -> str:
@@ -342,8 +397,10 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
            if (тесты or qr) else "")
 
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<title>Оценка {_э(d['модель'] or '')} · {_э(сделка.get('номер') or '')}</title>
+<title>Сертификат диагностики {_э(d['модель'] or '')} · {_э(сделка.get('номер') or '')}</title>
 <style>{СТИЛЬ}</style></head><body>
+<div id="мерка" style="position:absolute;visibility:hidden;width:1px;height:{ВЫСОТА_ММ - 2}mm"></div>
+<div id="лист">
 <div class="шапка">
   <div>{лого}</div>
   <div class="реквизиты">{реквизиты}</div>
@@ -352,7 +409,7 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
 
 <div class="титул">
   <div>
-    <h1>Заключение по оценке</h1>
+    <h1>Сертификат диагностики</h1>
     {повтор}
   </div>
   <div class="номер">№ {_э(сделка.get('номер') or '—')} · {когда:%d.%m.%Y %H:%M}</div>
@@ -384,10 +441,12 @@ def html(сделка: dict, rep: dict, когда: datetime | None = None) -> s
 
 <div class="подписи">
   <div><div class="кикер">Клиент</div>
-    <div><b>{_э(сделка.get('клиент') or '—')}</b> · {_э(сделка.get('телефон') or '')}</div>
+    <div class="кто"><b>{_э(сделка.get('клиент') or '—')}</b> · {_э(сделка.get('телефон') or '')}</div>
     <div class="линия">подпись</div></div>
   <div><div class="кикер">Оценку провёл</div>
-    <div><b>{_э(сделка.get('сотрудник') or '—')}</b> · {_э(сделка.get('точка') or '')}</div>
+    <div class="кто"><b>{_э(сделка.get('сотрудник') or '—')}</b> · {_э(сделка.get('точка') or '')}</div>
     <div class="линия">подпись</div></div>
 </div>
+</div>
+<script>{ПОДГОНКА}</script>
 </body></html>"""

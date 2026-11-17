@@ -217,7 +217,8 @@ def наши_проверки(db, имеи, кроме=None) -> list:
             "модель": f"{ev.model_name or ''} {ev.capacity_gb or ''}".strip(),
             "акб": ev.battery_health,
             "циклы": ev.battery_cycles,
-            "вердикт": ev.verdict,
+            # итог словом кассе не отдаём: владелец убрал его отовсюду (17.11.2026), а касса
+            # прежней сборки печатает в истории всё, что пришло
             "цена": ev.price_offer,
             "итог": ev.final_price,
             "детали": ev.apple_summary,

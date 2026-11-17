@@ -1401,7 +1401,7 @@ class KioskWindow(QMainWindow):
         from pintel_core import receipt
         rep = (self.last or {}).get("report") or {}
         сделка = self.сделка or self._чек_данные()
-        путь = os.path.join(data_dir(), "out", f"чек_{сделка.get('номер') or 'без-номера'}.html")
+        путь = os.path.join(data_dir(), "out", f"сертификат_{сделка.get('номер') or 'без-номера'}.html")
         with open(путь, "w", encoding="utf-8") as f:
             f.write(receipt.html(сделка, rep))
         try:
@@ -1412,12 +1412,12 @@ class KioskWindow(QMainWindow):
                 webbrowser.open("file://" + путь)
         except Exception as e:                         # noqa: BLE001
             log_line(f"чек не открылся: {e}")
-        self.s_work.итог_текст.setText("Чек сохранён: " + путь)
+        self.s_work.итог_текст.setText("Сертификат сохранён: " + путь)
         if not self.s_work.отправлено:
             # Сделки ещё нет, а чек уже напечатан — пусть он будет и в оценке на сервере:
             # иначе в общей базе останется проверка без того, что клиент унёс с собой.
             self._дослать_на_сервер({"чек": dict(сделка)})
-            self.s_work.сказать("Чек открыт для печати. Сделку в Оценку ещё не отправили.",
+            self.s_work.сказать("Сертификат открыт для печати. Сделку в Оценку ещё не отправили.",
                                 беда=False)
         log_line(f"чек напечатан до отправки: {путь}" if not self.s_work.отправлено
                  else f"чек напечатан: {путь}")

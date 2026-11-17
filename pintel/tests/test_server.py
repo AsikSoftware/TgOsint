@@ -163,6 +163,11 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
     asel = client_for(app, "asel", "asel123")
     page = asel.get("/queue").text
     assert "iPhone 12" in page and "Клиент идёт к кассе" in page and "уже приносили" in page
+    # итога одним словом на страницах сервера нет (владелец убрал его отовсюду, 17.11.2026)
+    for слово in ("не принимаем", "ПРОБЛЕМНЫЙ", "ХОРОШИЙ", "ИДЕАЛ"):
+        assert слово not in page, слово
+    сделка_стр = asel.get(f"/deal/{r1['id']}").text
+    assert "ПРОБЛЕМНЫЙ:" not in сделка_стр and "Проверка неполная:" not in сделка_стр
     assert asel.get(f"/deal/{r1['id']}").status_code == 200
     assert asel.post(f"/deal/{r1['id']}/take").status_code == 303
     r = asel.post(f"/deal/{r1['id']}/decide", data={"kind": "bought", "final_price": "80 000", "note": ""})
@@ -182,6 +187,19 @@ def test_kiosk_flow_and_decisions(app, monkeypatch):
     pub = TestClient(app).get(f"/r/{public}")
     assert pub.status_code == 200 and "iPhone 12" in pub.text
     assert "Цену назовёт сотрудник" in pub.text and "75 000" not in pub.text   # цену клиенту не показываем
+    for слово in ("Итог проверки", "Хорошее состояние", "Нужен сотрудник", "Нужен осмотр"):
+        assert слово not in pub.text, слово
+    стат = client_for(app, "admin", "admin123").get("/статистика")
+    assert стат.status_code == 200 and "Оценок" in стат.text
+    for слово in ("Вердикты", "ХОРОШИЙ", "ПРОБЛЕМНЫЙ", "ИДЕАЛ", "Без вопросов", "С вопросами", "с чеком"):
+        assert слово not in стат.text, слово
+    # и касса в истории телефона слова итога не получает: прежняя сборка печатает всё, что пришло
+    from pintel_server.services import history as history_service
+    db = SessionLocal()
+    с_имеи = db.scalar(select(Evaluation).where(Evaluation.imei.is_not(None)))
+    строки = history_service.наши_проверки(db, [с_имеи.imei]) if с_имеи else []
+    db.close()
+    assert строки and all("вердикт" not in с for с in строки)
 
 
 def test_sickw_via_server_uses_db_cache(app, monkeypatch):

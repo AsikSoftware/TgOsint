@@ -94,7 +94,9 @@ def по_точкам(db, дней: int = 7) -> list:
         на_связи = [k for k in свои if k.last_seen_at and (now() - k.last_seen_at).total_seconds() < 900]
         строки.append({"точка": p, "оценок": counts.get(p.id, 0), "дошло": дошло.get(p.id, 0),
                        "последняя": последняя.get(p.id), "машин": len(свои), "на_связи": len(на_связи),
-                       "токен": bool(p.token_hash)})
+                       # у точки токен лежит текстом (`token`); прежнее имя `token_hash` роняло
+                       # всю страницу статистики с ошибкой 500
+                       "токен": bool(p.token)})
     без_точки = counts.get(None, 0)
     if без_точки:
         строки.append({"точка": None, "оценок": без_точки, "дошло": дошло.get(None, 0),

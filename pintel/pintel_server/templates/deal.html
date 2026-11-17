@@ -14,8 +14,9 @@
   <span class="right pill {{ 'ok' if ev.status == 'bought' else ('bad' if ev.status == 'declined' else ('warn' if ev.status == 'at_counter' else ('info' if ev.status == 'in_work' else 'gray'))) }}">{{ ev.status_label }}{% if ev.assigned_user %} · {{ ev.assigned_user.name }}{% endif %}</span>
   <a class="btn sm" href="/queue">← Очередь</a>
 </div>
-{% if itog.get('вердикт') == 'ПРОБЛЕМНЫЙ' %}<div class="flash err">ПРОБЛЕМНЫЙ: {{ itog.get('почему') }}</div>
-{% elif itog.get('вердикт') == 'ПРОВЕРКА НЕПОЛНАЯ' %}<div class="flash err" style="background:var(--warn-bg);color:var(--warn)">Проверка неполная: {{ itog.get('почему') }}</div>{% endif %}
+{# Итога словом здесь нет (убран владельцем 17.11.2026) — только то, что нашла проверка. #}
+{% if itog.get('вердикт') == 'ПРОБЛЕМНЫЙ' and itog.get('почему') %}<div class="flash err">{{ itog.get('почему') }}</div>
+{% elif itog.get('вердикт') == 'ПРОВЕРКА НЕПОЛНАЯ' and itog.get('почему') %}<div class="flash err" style="background:var(--warn-bg);color:var(--warn)">{{ itog.get('почему') }}</div>{% endif %}
 {% if history %}<div class="flash" style="background:var(--primary-light);color:var(--primary)">Этот телефон уже приносили: {% for h in history %}<a href="/deal/{{ h.id }}">{{ '№' ~ h.number if h.number else 'б/н' }} от {{ h.created_at|dt('%d.%m.%Y') }} ({{ h.status_label }}{% if h.final_price %}, {{ h.final_price|money }}{% endif %})</a>{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
 <div class="deal">
   <div class="main">

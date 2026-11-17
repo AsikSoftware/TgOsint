@@ -230,7 +230,7 @@ def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> d
             "shop_id": shop_id,
             "photo_phone": ("||".join(photos) if photos else None),
             "video_phone": (videos[0][:200] if videos else None),
-            "comment": (ev.verdict or None),
+            "comment": None,                     # итог словом в сделку Оценки не пишем
             "comment_ocenka": _comment_ocenka(ev),
         })
 

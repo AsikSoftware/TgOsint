@@ -37,7 +37,7 @@
       <span>{{ p.city or '' }}{% if p.staff_name %} · {{ p.staff_name }}{% endif %}</span></div>
     {% if user.role == 'admin' %}
     <form method="post" action="/settings/points/{{ p.id }}" class="row" style="margin:4px 0 10px 0">
-      <input type="text" name="staff_name" value="{{ p.staff_name or '' }}" placeholder="кто у кассы — в чек" style="width:190px">
+      <input type="text" name="staff_name" value="{{ p.staff_name or '' }}" placeholder="кто у кассы — в сертификат" style="width:190px">
       <input type="text" name="city" value="{{ p.city or '' }}" placeholder="город" style="width:120px">
       <button class="btn sm" type="submit">Сохранить</button>
     </form>
@@ -90,7 +90,7 @@
         <div class="row"><input type="number" name="phone_test_port" value="{{ программа.phone_test_port }}" style="width:90px"> <span class="note">порт теста в локальной сети</span></div>
         <div class="row"><input type="number" name="reuse_days" value="{{ программа.reuse_days }}" style="width:90px"> <span class="note">дней брать прошлую проверку того же телефона (0 — всегда читать заново)</span></div>
         <div class="row"><label class="chk"><input type="checkbox" name="fullscreen" {{ 'checked' if программа.fullscreen }}>во весь экран</label></div>
-        <h3>Реквизиты в чеке клиента</h3>
+        <h3>Реквизиты в сертификате клиента</h3>
         <div class="row"><input type="text" name="company_name" value="{{ программа.company_name }}" placeholder="название" style="width:200px"></div>
         <div class="row"><input type="text" name="company_phone" value="{{ программа.company_phone }}" placeholder="телефон" style="width:200px"></div>
         <div class="row"><input type="text" name="company_site" value="{{ программа.company_site }}" placeholder="сайт" style="width:200px"></div>

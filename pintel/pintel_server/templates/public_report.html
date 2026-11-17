@@ -7,9 +7,7 @@
   <div class="brand"><img src="/static/logo.png" alt="Pintel Diagnostics"></div>
   <div><h1>{{ ev.model_name or 'iPhone' }}{% if ev.capacity_gb %} · {{ ev.capacity_gb }} ГБ{% endif %}</h1>
     <div class="sub">Оценка {{ '№' ~ ev.number if ev.number else 'без номера' }} от {{ ev.created_at|dt }}{% if ev.point %} · {{ ev.point.name }}{% endif %}</div></div>
-  <section class="sec"><h2>Итог проверки</h2>
-    <div class="verdict {{ 'bad' if ev.verdict == 'ПРОБЛЕМНЫЙ' else ('ok' if ev.verdict in ('ИДЕАЛ', 'ХОРОШИЙ') else 'warn') }}">{% if ev.verdict == 'ПРОБЛЕМНЫЙ' %}Нужен сотрудник{% elif ev.verdict in ('ИДЕАЛ', 'ХОРОШИЙ') %}Хорошее состояние{% else %}Нужен осмотр{% endif %}</div>
-    <div class="note">Цену назовёт сотрудник после осмотра корпуса и экрана.{% if ev.verdict == 'ПРОБЛЕМНЫЙ' and (rep.get('итог') or {}).get('почему') %} {{ (rep.get('итог') or {}).get('почему') }}{% endif %}</div></section>
+  <section class="sec"><div class="note">Цену назовёт сотрудник после осмотра корпуса и экрана.</div></section>
   <section class="sec"><h2>Батарея</h2>
     <div class="row" style="align-items:baseline"><span class="price" style="font-size:34px">{{ bat.get('здоровье_%') if bat.get('здоровье_%') is not none else '?' }} %</span><span class="muted">{{ bat.get('циклы') or '?' }} циклов</span></div></section>
   <section class="sec"><h2>Что говорит Apple</h2>

@@ -75,10 +75,9 @@ QScrollArea > QWidget > QWidget { background: transparent; }
 СОСТОЯНИЕ = {"ok": ("оригинальная", C["ok"]), "repaired": ("меняли, оригинал Apple", C["warntext"]),
              "used": ("б/у деталь", C["warntext"]), "bad": ("не подтверждена", C["badtext"])}
 
-# Вердикт одним словом — так, как его поймёт и клиент, а не только сотрудник.
-ВЕРДИКТЫ = {"ИДЕАЛ": ("Идеальный", C["ok"]), "ХОРОШИЙ": ("Хороший", C["ok"]),
-            "ПРОБЛЕМНЫЙ": ("Есть проблемы", C["badtext"]),
-            "ПРОВЕРКА НЕПОЛНАЯ": ("Проверка неполная", C["warntext"])}
+# Итога одним словом («Идеальный», «Хороший», «Есть проблемы») на экране нет: владелец убрал
+# его 17.11.2026 — пока что, отовсюду. Отчёт его по-прежнему считает (`итог.вердикт`), на
+# нём держатся тесты ядра; показывать его нельзя ни здесь, ни в истории, ни на сервере.
 
 # Страницы центральной карточки. Раньше индексы стояли числами в семи местах, и добавить
 # между ними ещё одну страницу было нельзя, не переставив все.
@@ -906,7 +905,7 @@ class WorkScreen(Screen):
         # Что мешает отправить — здесь же, между кнопками: рядом с той, которой не нажать
         self.ошибка = label("", wrap=True, font_=font(FONT_TEXT, 18, W.Medium), color=C["badtext"])
         self.ошибка.setAlignment(Qt.AlignCenter)
-        self.b_печать = _кнопка("Печать чека", "ghost")
+        self.b_печать = _кнопка("Печать сертификата", "ghost")
         self.b_печать.clicked.connect(self.печать.emit)
         self.b_отправить = _кнопка(ОТПРАВИТЬ)
         self.b_отправить.clicked.connect(self._отправить)
@@ -955,10 +954,6 @@ class WorkScreen(Screen):
         слова.addWidget(kicker("БАТАРЕЯ", 13, 2.0))
         self.вердикт_подпись = label("", wrap=True, font_=font(FONT_TEXT, 18, W.Medium), color=C["body"])
         слова.addWidget(self.вердикт_подпись)
-        слова.addSpacing(10)
-        слова.addWidget(kicker("ИТОГ ПРОВЕРКИ", 13, 2.0))
-        self.вердикт = label("", wrap=True, font_=font(FONT_HEAD, 28, W.Bold))
-        слова.addWidget(self.вердикт)
         слова.addStretch(1)
         верх.addWidget(self.кольцо, 0, Qt.AlignVCenter)
         верх.addLayout(слова, 1)
@@ -1303,7 +1298,6 @@ class WorkScreen(Screen):
         for r in self.шаги.values():
             r.set("wait", "")
         self.кольцо.set(None)
-        self.вердикт.setText("")
         self.вердикт_подпись.setText("")
         self.set_состояние("")
         self.режим(False)
@@ -1762,7 +1756,6 @@ class WorkScreen(Screen):
         пам = self.rep.get("память") or {}
         бат = self.rep.get("батарея") or {}
         вердикт = self.rep.get("детали_вердикт") or {}
-        итог = (self.rep.get("итог") or {}).get("вердикт") or ""
         self.готово = True
         self.аппарат.setText(" · ".join(x for x in (
             пас.get("модель"), f"{пам.get('объём_гб')} ГБ" if пам.get("объём_гб") else None) if x))
@@ -1771,11 +1764,7 @@ class WorkScreen(Screen):
             f"IMEI {пас.get('imei')}" if пас.get("imei") else None) if x))
         self._очистить_итоги()
 
-        # Главное — крупно в паспорте: кольцо батареи и вердикт одним словом. Раньше оба
-        # сидели мелкими плашками в общем ряду, и глаз искал их среди пяти одинаковых.
-        слово, цвет_слова = ВЕРДИКТЫ.get(итог, (итог.capitalize() or "Проверка", C["warntext"]))
-        self.вердикт.setText(слово)
-        self.вердикт.setStyleSheet(f"color: {цвет_слова}")
+        # Крупно в паспорте — кольцо батареи. Итога одним словом рядом с ним больше нет.
         здоровье = бат.get("здоровье_%")
         self.кольцо.set(здоровье)
         if здоровье is None:

@@ -443,10 +443,12 @@ def test_receipt_is_written_and_named_by_deal(окно, tmp_path, monkeypatch):
                    "коробка": True, "шнур": False}
     monkeypatch.setattr(kapp.os, "startfile", lambda p: None, raising=False)
     окно.напечатать_чек()
-    файл = tmp_path / "out" / "чек_7KQ4M.html"
+    файл = tmp_path / "out" / "сертификат_7KQ4M.html"
     assert файл.is_file()
     текст = файл.read_text(encoding="utf-8")
     assert "iPhone 14 Pro" in текст and "Зама" in текст
+    assert "Сертификат диагностики" in текст and "Сертификат сохранён" in окно.s_work.итог_текст.text()
+    assert окно.s_work.b_печать.text() == "Печать сертификата"
     assert "₸" not in текст, "цены на чеке быть не должно — её называет Оценка"
 
 
@@ -951,7 +953,7 @@ def test_the_receipt_can_be_printed_before_the_deal_is_sent(окно, tmp_path, 
     assert окно.s_work.b_печать.isEnabled(), "медиа дошли, а чек не напечатать"
     assert not окно.s_work.отправлено
     окно.напечатать_чек()
-    файл = tmp_path / "out" / f"чек_{окно.код_медиа}.html"
+    файл = tmp_path / "out" / f"сертификат_{окно.код_медиа}.html"
     assert файл.is_file()
     текст = файл.read_text(encoding="utf-8")
     assert "Зама" in текст and окно.код_медиа in текст and "iPhone 14 Pro" in текст
@@ -1393,16 +1395,22 @@ def test_po_shagu_mozhno_nazhat(окно):
 
 
 def test_pasport_govorit_glavnoe_krupno(окно):
-    """Кольцо батареи и вердикт одним словом — в паспорте телефона, а не мелкими плашками."""
+    """Кольцо батареи — крупно в паспорте телефона. Итога одним словом («Хороший», «Идеальный»,
+    «Есть проблемы») на экране нет: владелец убрал его отовсюду (17.11.2026). Отчёт его
+    по-прежнему считает — это видно по самому отчёту, а не по экрану."""
+    from PySide6.QtWidgets import QLabel
     _чистый(окно)
     э = окно.s_work
     assert э.кольцо.значение == 81
-    assert э.вердикт.text() == "Хороший"
     assert "1642" in э.вердикт_подпись.text() and "цикл" in э.вердикт_подпись.text()
     assert "iPhone 14 Pro" in э.аппарат.text() and "IMEI" in э.аппарат_подробно.text()
+    assert окно.last["report"]["итог"]["вердикт"] == "ХОРОШИЙ" and not hasattr(э, "вердикт")
+    слова = " | ".join(l.text() for l in э.findChildren(QLabel))
+    for слово in ("ИТОГ ПРОВЕРКИ", "Хороший", "Идеальный", "Есть проблемы", "Проверка неполная", "ХОРОШИЙ"):
+        assert слово not in слова, слово
     # новая сделка — паспорт пустой: чужой телефон на экране остаться не может
     э.начать()
-    assert э.кольцо.значение is None and э.вердикт.text() == "" and э.аппарат_подробно.text() == ""
+    assert э.кольцо.значение is None and э.вердикт_подпись.text() == "" and э.аппарат_подробно.text() == ""
 
 
 def test_slova_bez_emodzi_i_s_pravilnym_chislom():

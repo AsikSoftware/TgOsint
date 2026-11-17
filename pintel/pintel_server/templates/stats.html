@@ -8,23 +8,18 @@
   {% for ключ, подпись, дней in периоды %}
   <a class="btn sm {{ 'primary' if ключ == период else '' }}" href="/статистика?p={{ ключ }}">{{ подпись }}</a>
   {% endfor %}
-  <span class="note">считается по тому, что прислали точки: отчёт, вердикт, тест телефона и отметка о сделке в Оценке</span>
+  <span class="note">считается по тому, что прислали точки: отчёт, тест телефона и отметка о сделке в Оценке</span>
 </div>
 
 <div class="grid4" style="margin-top:12px">
   <div class="sig"><span>Оценок</span><span>{{ свод.оценок }}</span></div>
-  <div class="sig"><span>Без вопросов</span><span class="ok">{{ свод.идеальных }}</span></div>
-  <div class="sig"><span>С вопросами</span><span class="{{ 'warn' if свод.с_вопросами else '' }}">{{ свод.с_вопросами }}</span></div>
   <div class="sig"><span>Дошло до Оценки</span><span>{{ свод.дошло_до_бота }}</span></div>
 </div>
 
 <div class="grid2" style="margin-top:12px">
   <section class="sec">
-    <h2>Вердикты</h2>
-    {% for имя, сколько in свод.по_вердикту %}
-    <div class="kv"><span>{{ имя or 'без вердикта' }}</span><span>{{ сколько }}</span></div>
-    {% endfor %}
-    {% if свод.батарея_средняя %}<div class="kv"><span>Средний износ батареи</span><span>{{ свод.батарея_средняя }}%</span></div>{% endif %}
+    <h2>Батарея</h2>
+    {% if свод.батарея_средняя %}<div class="kv"><span>Средний износ батареи</span><span>{{ свод.батарея_средняя }}%</span></div>{% else %}<div class="note">Данных пока нет.</div>{% endif %}
   </section>
   <section class="sec">
     <h2>Тест на телефоне клиента</h2>
@@ -32,7 +27,7 @@
     <div class="kv"><span>Телефон ответил</span><span>{{ свод.тестов_отвечено }}</span></div>
     <div class="kv"><span>Прошёл целиком</span><span class="ok">{{ свод.тест_прошёл }}</span></div>
     <div class="kv"><span>Не прошёл</span><span class="{{ 'bad' if свод.тест_не_прошёл else '' }}">{{ свод.тест_не_прошёл }}</span></div>
-    <div class="kv"><span>Оценок с чеком</span><span>{{ свод.с_чеком }}</span></div>
+    <div class="kv"><span>Оценок с сертификатом</span><span>{{ свод.с_чеком }}</span></div>
     <div class="kv"><span>Эталонов прислано</span><span>{{ свод.эталонов }}</span></div>
   </section>
 </div>

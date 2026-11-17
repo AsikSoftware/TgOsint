@@ -27,7 +27,9 @@ def test_report_prints_for_every_real_phone(path):
     """На каждом живом аппарате отчёт обязан напечататься целиком и без исключений."""
     snap, _ = reference.load_bundle(path, loads=snapshot.loads)
     текст = doctor.fmt_report(report_mod.build(snap))
-    assert "ИТОГ" in текст and "Джейлбрейк" in текст
+    assert "Батарея" in текст and "Джейлбрейк" in текст
+    # итога одним словом в отчёте нет: владелец убрал его отовсюду (17.11.2026)
+    assert "ИТОГ:" not in текст
     assert "None" not in текст, "в тексте для оценщика не должно быть «None»:\n" + текст
 
 
@@ -49,4 +51,4 @@ def test_tunnel_diagnostics_are_printed():
 def test_report_survives_an_empty_snapshot():
     """Пустой слепок (телефон отключили на полпути) печатается, а не падает."""
     текст = doctor.fmt_report(report_mod.build({}))
-    assert "ИТОГ" in текст
+    assert "Батарея" in текст and "ИТОГ:" not in текст

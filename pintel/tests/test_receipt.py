@@ -138,12 +138,45 @@ def test_receipt_hides_empty_rows():
     assert "IMEI" in txt and "Свободно" not in txt and "Верификация" not in txt
 
 
-def test_receipt_is_plain_html_without_scripts():
-    """Печатаем документ, а не страницу: ни скриптов, ни внешних загрузок."""
+def test_receipt_loads_nothing_and_its_only_script_fits_the_sheet():
+    """Печатаем документ, а не страницу: внешних загрузок нет. Скрипт на листе один, вшитый,
+    и делает одно — ужимает слишком длинный лист до одной страницы; он ничего не грузит и
+    никуда не шлёт. Без него длинный лист уезжал подписями на вторую страницу, а подобрать
+    отступы заранее нельзя: шрифт на кассе (Windows) не тот, что на сервере."""
     txt = receipt.html({**СДЕЛКА, "ссылка": "https://kiosk.example/c/x"}, _отчёт())
-    assert "<script" not in txt.lower() and "http://" not in txt.replace("http://www.w3.org", "")
-    assert "https://" not in txt
+    assert "http://" not in txt.replace("http://www.w3.org", "") and "https://" not in txt
     assert re.search(r"@page\s*{[^}]*A4", txt)
+    скрипты = re.findall(r"<script([^>]*)>(.*?)</script>", txt, flags=re.S | re.I)
+    assert len(скрипты) == 1 and скрипты[0][0].strip() == "", "скрипт один и без src"
+    код = скрипты[0][1]
+    assert "zoom" in код and "getElementById('лист')" in код
+    for чужое in ("fetch(", "XMLHttpRequest", "import(", "src=", "cookie", "localStorage", "eval("):
+        assert чужое not in код, чужое
+
+
+def test_the_sheet_is_called_a_diagnostics_certificate():
+    """Лист называется «Сертификат диагностики» (владелец, 17.11.2026) — и в заголовке, и в
+    названии вкладки. Прежнего «Заключение по оценке» на нём нет."""
+    txt = receipt.html(СДЕЛКА, _отчёт())
+    assert "<h1>Сертификат диагностики</h1>" in txt
+    assert re.search(r"<title>Сертификат диагностики ", txt)
+    assert "Заключение по оценке" not in txt and "Чек" not in txt
+
+
+def test_the_sheet_is_built_to_stay_on_one_page():
+    """Лист обязан быть один: подписи на второй странице — это брак. Держат его три вещи, и
+    тест следит за каждой: жёсткая ширина листа (высота на экране равна высоте на бумаге),
+    результат детали в одну строку (перенос «не подтверждена» добавлял высоты) и мерка с
+    высотой страницы, по которой скрипт ужимает слишком длинный лист."""
+    txt = receipt.html(СДЕЛКА, _отчёт())
+    assert receipt.ШИРИНА_ММ == 182 and receipt.ВЫСОТА_ММ == 275
+    assert re.search(r"#лист\s*{\s*width:\s*182mm", txt) and '<div id="лист">' in txt
+    assert re.search(r'id="мерка"[^>]*height:273mm', txt)
+    assert re.search(r"\.деталь \.з\s*{[^}]*white-space:\s*nowrap", txt)
+    assert re.search(r"\.подписи\s*{[^}]*break-inside:\s*avoid", txt)
+    # итога одним словом на листе нет и не было — и появиться он не должен
+    for слово in ("Итог проверки", "Хороший", "Идеальный", "Есть проблемы", "ПРОБЛЕМНЫЙ", "ХОРОШИЙ", "ИДЕАЛ"):
+        assert слово not in txt, слово
 
 
 def test_receipt_escapes_client_input():

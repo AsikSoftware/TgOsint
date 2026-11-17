@@ -84,7 +84,7 @@ def fake_core(monkeypatch):
     snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"), encoding="utf-8").read())
     snap.pop("repair_history", None)
     async def wait_ready(on_status=None, deadline=None): return FakeStatus()
-    async def open_diag(ld): return object(), 1
+    async def open_diag(ld, attempts=6, delays=None): return object(), 1
     async def collect(ld, diag, log=None, **kw): return _без_диска(snap) if kw.get("память") is False else dict(snap)
     monkeypatch.setattr(worker.connect, "wait_ready", wait_ready)
     monkeypatch.setattr(worker.connect, "open_diagnostics", open_diag)
@@ -674,3 +674,49 @@ def test_the_collector_is_not_restarted_when_the_reading_restarts(fake_core, mon
     assert сборщики[0] is not None and сборщики[0] is сборщики[1], "сборщик пересоздали на второй попытке"
     p.cancel.set()
     p.wait(3000)
+
+
+def test_the_reading_step_always_ends_with_an_answer_or_a_refusal(fake_core, monkeypatch):
+    """Шаг «Модель и память» обязан кончаться — ответом или отказом словами, но не висеть.
+
+    Проверяем худший случай: связь рвётся на каждой попытке. Касса перечитывает телефон, но
+    не бесконечно: на всё чтение отведено ЖДАТЬ_ЧТЕНИЕ_ВСЕГО, и дальше сотрудник получает
+    понятную причину, а не крутящийся шаг."""
+    QCoreApplication.instance() or QCoreApplication([])
+    чтения = []
+
+    async def collect(ld, diag, log=None, **kw):
+        чтения.append(1)
+        raise snapshot.СвязьПропала("ioreg:IOService: телефон не ответил за 10 с")
+
+    async def ждём_телефон(self):
+        return object()
+
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    monkeypatch.setattr(worker.Pipeline, "_дождаться_телефона", ждём_телефон)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
+                        заново=True)
+    беды, loop = [], QEventLoop()
+    p.failed.connect(lambda t: (беды.append(t), loop.quit()))
+    p.done.connect(lambda r: loop.quit())
+    QTimer.singleShot(20000, loop.quit)
+    начало = time.monotonic()
+    p.start()
+    loop.exec()
+    p.wait(3000)
+    assert беды and "кабель" in беды[0], беды
+    assert len(чтения) == worker.ЧТЕНИЙ, "перечитываний должно быть ровно столько, сколько отведено"
+    assert time.monotonic() - начало < 20, "шаг не кончился за отведённое время"
+
+    # и когда время вышло, четвёртую попытку не начинают вовсе
+    monkeypatch.setattr(worker, "ЖДАТЬ_ЧТЕНИЕ_ВСЕГО", -1.0)
+    чтения.clear()
+    p2 = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
+                         заново=True)
+    беды2, loop2 = [], QEventLoop()
+    p2.failed.connect(lambda t: (беды2.append(t), loop2.quit()))
+    QTimer.singleShot(20000, loop2.quit)
+    p2.start()
+    loop2.exec()
+    p2.wait(3000)
+    assert len(чтения) == 1 and беды2 and "не читается" in беды2[0], (чтения, беды2)

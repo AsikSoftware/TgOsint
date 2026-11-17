@@ -230,7 +230,11 @@ async def _открыть_сбоку(соединить, ждать=ЖДАТЬ_�
     pymobiledevice3 уборка стоит под `except Exception`, а отмена ею не является. Не успело —
     пусть откроется само и само закроется (`_закрыть_когда_откроется`)."""
     задача = asyncio.ensure_future(соединить())
-    готово, _ = await asyncio.wait({задача}, timeout=ждать)
+    try:
+        готово, _ = await asyncio.wait({задача}, timeout=ждать)
+    except BaseException:                                         # отмена снаружи — тоже уборка
+        задача.add_done_callback(_закрыть_когда_откроется)
+        raise
     if not готово:
         задача.add_done_callback(_закрыть_когда_откроется)
         return None, f"соединение не открылось за {ждать:g} с"
@@ -307,6 +311,7 @@ class СборДоменов:
         self._рабочие = []
         self._соединения = set()         # все открытые нами — чтобы закрыть любой ценой
         self._беда_соединения = ""
+        self._спрошено = 0               # сколько вопросов вообще удалось задать
         self._начато = None
         self._отмечено = set()
         self._жалобы = set()             # что мы записали в «не прочиталось»
@@ -329,9 +334,14 @@ class СборДоменов:
         """Домены, по которым ответа ещё нет, а мы ещё не сдались."""
         return [d for d in self._все if d not in self.ответы and d not in self.сдались]
 
-    def без_соединений(self) -> bool:
-        """Второго соединения телефон не дал ни разу — спрашивать нечем."""
-        return bool(self._беда_соединения) and not self.ответы and not self._соединения
+    def беда_соединения(self) -> str:
+        """Почему не вышло со вторым соединением (пусто — выходило)."""
+        return self._беда_соединения
+
+    def спрошено(self) -> int:
+        """Сколько вопросов удалось задать по боковым соединениям. Ноль значит, что
+        спрашивать нечем: соединений не дают или они умирают до вопроса."""
+        return self._спрошено
 
     def забыть(self) -> None:
         """Домены собраны другим путём: эта очередь больше не нужна."""
@@ -352,6 +362,7 @@ class СборДоменов:
         Зовётся сколько угодно раз. → какие домены пришли за этот раз."""
         до = time.monotonic() + max(0.0, float(ждать))
         пришли = []
+        self._поднять()                          # работа есть, а рабочих нет — поднять сразу
         while True:
             пришли += await self._подобрать()
             if snap is not None:
@@ -377,15 +388,20 @@ class СборДоменов:
         кач = snap.setdefault("quality", {})
         не_прочиталось = кач.setdefault("не_прочиталось", {})
         for ключ in self._жалобы:
-            не_прочиталось.pop(ключ, None)
+            не_прочиталось.pop(ключ, None)      # только свои: ключ общий, в нём есть и узлы
         self._жалобы.clear()
-        без_ответа = {}
+        без_ответа = dict(кач.get("домены_без_ответа") or {})
+        for dom in list(без_ответа):
+            if dom in self.ответы:
+                без_ответа.pop(dom)              # поздний ответ снимает прежнюю запись
+        ждём = кач.get("ждём_домены") or {}
         for dom in self._все:
             if dom in self.ответы:
                 continue
             сек = round(time.monotonic() - (self._начато or time.monotonic()))
             почему = self.ошибки.get(dom) or f"{НЕ_ОТВЕТИЛ} {сек} с"
             без_ответа[dom] = почему
+            ждём.pop(dom, None)                  # «не дождались» и «ещё ждём» — не одновременно
             if dom in РЕШАЮЩИЕ_ДОМЕНЫ:
                 не_прочиталось[dom] = почему
                 self._жалобы.add(dom)
@@ -393,11 +409,22 @@ class СборДоменов:
             кач["домены_без_ответа"] = без_ответа
         else:
             кач.pop("домены_без_ответа", None)
-        if not не_прочиталось:
-            кач.pop("не_прочиталось", None)
+        if ждём:
+            кач["ждём_домены"] = ждём
+        else:
+            кач.pop("ждём_домены", None)
 
-    async def закрыть(self) -> None:
-        """Больше не ждём: снимаем вопросы и закрываем все свои соединения."""
+    async def закрыть(self, snap=None) -> None:
+        """Больше не ждём: снимаем вопросы и закрываем все свои соединения.
+
+        Сначала подбираем то, что телефон УЖЕ успел сказать: эти ответы оплачены ожиданием, и
+        выбрасывать их при закрытии — та же потеря, от которой весь этот класс."""
+        try:
+            await self._подобрать()
+            if snap is not None:
+                self._вложить(snap)
+        except Exception:                                         # noqa: BLE001
+            pass
         self._закрыто = True
         задачи = list(self._рабочие) + [з for з, _с, _н in self._парк.values()]
         for задача in задачи:
@@ -457,6 +484,7 @@ class СборДоменов:
                 dom = self._очередь.popleft()
                 начато = time.monotonic()
                 задача = asyncio.ensure_future(соединение.get_value(domain=dom))
+                self._спрошено += 1
                 try:
                     готово, _ = await asyncio.wait({задача}, timeout=ЖДАТЬ_ДОМЕН)
                 except asyncio.CancelledError:
@@ -494,20 +522,32 @@ class СборДоменов:
         await _закрыть_соединение(соединение)
 
     async def _припарковать(self, dom, задача, соединение, начато) -> None:
-        """Отложить обдумываемый вопрос вместе с его соединением."""
-        while len(self._парк) >= ПАРКОВОК:
-            давний = min(self._парк, key=lambda d: self._парк[d][2])
-            await self._снять(давний)
-        self._парк[dom] = (задача, соединение, начато)
+        """Отложить обдумываемый вопрос вместе с его соединением.
 
-    async def _снять(self, dom) -> None:
-        """Мест в парковке нет: самый давний вопрос снимаем и ставим в очередь заново."""
+        Кладём СРАЗУ, а место освобождаем после: иначе отмена, пришедшая пока мы ждём места,
+        уносила бы вопрос, которого нет ни в парке, ни у рабочего, — его никто не отменит и
+        не дождётся, а соединение закрылось бы под живым запросом."""
+        self._парк[dom] = (задача, соединение, начато)
+        while len(self._парк) > ПАРКОВОК:
+            # Вытесняем САМЫЙ СВЕЖИЙ, а не самый давний: давний ближе всех к ответу, и ради
+            # него вся парковка и сделана. И вытеснение не тратит попытку домена — телефон
+            # не виноват, что мест не хватило.
+            свежий = max(self._парк, key=lambda d: self._парк[d][2])
+            await self._снять(свежий, место=True)
+
+    async def _снять(self, dom, *, место=False) -> None:
+        """Снять отложенный вопрос. `место=True` — сняли ради места, попытку не тратим."""
         задача, соединение, начато = self._парк.pop(dom)
         пришёл = задача.done() and self._забрать(dom, задача, начато)
         if not задача.done():
             await _снять_задачу(задача)          # отменить и дождаться — и только потом закрыть
         await self._закрыть(соединение)
-        if not пришёл and not self._ещё_раз(dom):
+        if пришёл:
+            return
+        if место:
+            self._очередь.append(dom)            # спросим заново, когда освободится место
+            self._поднять()
+        elif not self._ещё_раз(dom):
             сек = round(time.monotonic() - начато)
             self._не_вышло(dom, f"{НЕ_ОТВЕТИЛ} {сек} с")
 
@@ -577,8 +617,6 @@ class СборДоменов:
             if сек is not None and сек >= 1.0:
                 # какой именно домен телефон отдавал долго — раньше знали только сумму по всем
                 кач.setdefault("медленные_домены", {})[dom] = round(сек, 1)
-            if self._начато is not None and сек is not None and time.monotonic() - self._начато > сек + 1.0:
-                кач.setdefault("поздние_домены", {})[dom] = round(time.monotonic() - self._начато, 1)
         ждут = {d: round(time.monotonic() - (self._начато or time.monotonic()), 1)
                 for d in self.осталось()}
         if ждут:
@@ -720,223 +758,253 @@ async def collect(ld, diag, log=lambda *a: None, жив=None, память=True,
     что не успело прийти — приходит позже и вкладывается в слепок. `сбор` — уже созданный
     сборщик: касса держит его до конца проверки и дособирает остаток сама.
 
-    Бросает `СвязьПропала`, если соединение оборвалось, и `Остановлено`, если отменили."""
+    Бросает `СвязьПропала`, если соединение оборвалось, и `Остановлено`, если отменили. В
+    исключении лежит `слепок` — всё, что успели прочитать: выбрасывать прочитанное нельзя,
+    из него собирается неполный, но честный отчёт (`worker._прочитать_телефон`)."""
     t0 = time.monotonic()
     quality = {"повторы": {}, "не_прочиталось": {}, "устарело": [], "время_с": {}}
+    # Всё читаемое объявлено здесь, чтобы `слепок()` мог собрать прочитанное в любой момент —
+    # в том числе когда связь оборвалась на середине.
+    root, domains, nodes, names = {}, {}, {}, set()
+    tree, dtree, mg = None, None, {}
+    jb, pan, mdm_info, nand_summary = {}, {}, {}, {}
+    свой_сбор = None
+
+    def слепок():
+        return {
+            "snapshot_version": SNAPSHOT_VERSION,
+            "когда": datetime.now().isoformat(timespec="seconds"),
+            "root": root,
+            "domains": domains,
+            "node_names": sorted(names),
+            "nodes": nodes,
+            "ioreg_planes": {"IOService": tree, "IODeviceTree": dtree},
+            "mobilegestalt": mg,
+            "jailbreak": jb,
+            "panic": pan,
+            "mdm": mdm_info,
+            "nand_summary": nand_summary,
+            "quality": quality,
+        }
 
     async def проба():
         # то же, чем `open_diagnostics` проверяет готовность: узел батареи есть у любого iPhone
         return bool(await diag.ioregistry(name="AppleSmartBattery")) and bool(await ld.get_value(key="ProductType"))
     связь = _Связь(проба, жив)
 
-    log("паспорт…")
-    root = await _retry(lambda: ld.get_value(), "root", quality, связь=связь, ждать=ЖДАТЬ_ОТВЕТА) or {}
-    quality["время_с"]["паспорт"] = round(time.monotonic() - t0, 2)
+    try:
+        log("паспорт…")
+        root = await _retry(lambda: ld.get_value(), "root", quality, связь=связь, ждать=ЖДАТЬ_ОТВЕТА) or {}
+        quality["время_с"]["паспорт"] = round(time.monotonic() - t0, 2)
 
-    log("домены…")
-    t = time.monotonic()
-    # Домены собираются в стороне и все до единого: ни один вопрос не держит чтение, а тот,
-    # что телефон обдумывает, догоняет слепок позже (`СборДоменов`). Перезапрос сорвавшегося
-    # вопроса — там же: прежде одного моргнувшего USB хватало, чтобы «Найти iPhone» стал
-    # «не определился», хотя телефон всё это время лежал на кабеле.
-    свой_сбор = None
-    if сбор is None and соединить is not None:
-        сбор = свой_сбор = СборДоменов(соединить, жив=жив, log=log)
-    if сбор is not None:
-        сбор.начать([d for d in DOMAINS if d != ДОМЕН_ДИСКА])
-        await сбор.собрать(ждать=ЖДАТЬ_ДОМЕНЫ_В_СЛЕПКЕ)
-        domains = сбор.собранное()
-        if not domains and сбор.без_соединений():
-            # второго соединения телефон не даёт вовсе — собираем по общему, с пределом:
-            # данные нужны все, а не «сколько получилось»
-            log("домены по общему соединению…")
-            quality["боковое_соединение_нет"] = True
-            domains = await _читать_домены_подряд(ld, quality, связь, ждать=ЖДАТЬ_ДОМЕН)
-            сбор.забыть()
-    else:
-        domains = await _читать_домены_подряд(ld, quality, связь)
-    quality["время_с"]["домены"] = round(time.monotonic() - t, 2)
+        log("домены…")
+        t = time.monotonic()
+        # Домены собираются в стороне и все до единого: ни один вопрос не держит чтение, а тот,
+        # что телефон обдумывает, догоняет слепок позже (`СборДоменов`). Перезапрос сорвавшегося
+        # вопроса — там же: прежде одного моргнувшего USB хватало, чтобы «Найти iPhone» стал
+        # «не определился», хотя телефон всё это время лежал на кабеле.
+        if сбор is None and соединить is not None:
+            сбор = свой_сбор = СборДоменов(соединить, жив=жив, log=log)
+        if сбор is not None:
+            сбор.начать([d for d in DOMAINS if d != ДОМЕН_ДИСКА])
+            await сбор.собрать(ждать=ЖДАТЬ_ДОМЕНЫ_В_СЛЕПКЕ)
+            domains = сбор.собранное()
+            if not сбор.спрошено():
+                # Ни одного вопроса задать не удалось: боковых соединений не дают или они
+                # умирают до вопроса. Тогда спрашиваем по общему, с пределом — данные нужны
+                # все, а не «сколько получилось». Телефон, который просто думает, сюда не
+                # попадает: он спрошен, и его ответы ждут на своих соединениях.
+                log("домены по общему соединению…")
+                quality["боковое_соединение_нет"] = сбор.беда_соединения() or "вопросы не прошли"
+                domains = await _читать_домены_подряд(ld, quality, связь, ждать=ЖДАТЬ_ДОМЕН)
+                сбор.забыть()
+        else:
+            domains = await _читать_домены_подряд(ld, quality, связь)
+        quality["время_с"]["домены"] = round(time.monotonic() - t, 2)
 
-    log("карта узлов…")
-    t = time.monotonic()
-    tree = await _retry(lambda: diag.ioregistry(plane="IOService"), "ioreg:IOService", quality, связь=связь,
-                        ждать=ЖДАТЬ_ОТВЕТА)
-    names = collect_entry_names(tree) if tree else set()
-    quality["время_с"]["карта"] = round(time.monotonic() - t, 2)
-    quality["узлов_в_карте"] = len(names)
+        log("карта узлов…")
+        t = time.monotonic()
+        tree = await _retry(lambda: diag.ioregistry(plane="IOService"), "ioreg:IOService", quality, связь=связь,
+                            ждать=ЖДАТЬ_ОТВЕТА)
+        names = collect_entry_names(tree) if tree else set()
+        quality["время_с"]["карта"] = round(time.monotonic() - t, 2)
+        quality["узлов_в_карте"] = len(names)
 
-    # Дерево устройств целиком: все *-serial-num, device-colors, wifi-module-sn
-    # любой модели попадают в слепок, даже если мы о них ещё не знаем.
-    log("дерево устройств…")
-    t = time.monotonic()
-    dtree = await _retry(lambda: diag.ioregistry(plane="IODeviceTree"), "ioreg:IODeviceTree", quality, tries=2,
-                         ждать=ЖДАТЬ_ОТВЕТА,
-                         связь=связь)
-    quality["время_с"]["дерево"] = round(time.monotonic() - t, 2)
-    names_all = set(names) | (collect_entry_names(dtree) if dtree else set())
+        # Дерево устройств целиком: все *-serial-num, device-colors, wifi-module-sn
+        # любой модели попадают в слепок, даже если мы о них ещё не знаем.
+        log("дерево устройств…")
+        t = time.monotonic()
+        dtree = await _retry(lambda: diag.ioregistry(plane="IODeviceTree"), "ioreg:IODeviceTree", quality, tries=2,
+                             ждать=ЖДАТЬ_ОТВЕТА,
+                             связь=связь)
+        quality["время_с"]["дерево"] = round(time.monotonic() - t, 2)
+        names_all = set(names) | (collect_entry_names(dtree) if dtree else set())
 
-    cam_names = pick_names(names, CAMERA_RE, CAMERA_FALLBACK)
-    nvme_names = pick_names(names, NVME_RE, NVME_FALLBACK)
+        cam_names = pick_names(names, CAMERA_RE, CAMERA_FALLBACK)
+        nvme_names = pick_names(names, NVME_RE, NVME_FALLBACK)
 
-    log("узлы…")
-    t = time.monotonic()
-    nodes = {}
-    quality["нет_в_карте"] = []
-    for name in FIXED_NODES:
-        # Драйверных узлов, которых нет в карте телефона, не ждём по 5 секунд:
-        # у iPhone 17 Pro нет AIDBus (USB-C) — это не сбой чтения, а устройство другое.
-        if names_all and name[0].isupper() and name not in names_all:
-            nodes[name] = None
-            quality["нет_в_карте"].append(name)
-            continue
-        nodes[name] = await _retry(lambda n=name: diag.ioregistry(name=n), name, quality, связь=связь,
-                                   ждать=ЖДАТЬ_ОТВЕТА)
-    nodes["prox"] = None
-    for n in pick_names(names_all, PROX_RE, PROX_FALLBACK):
-        if names_all and n not in names_all:
-            continue
-        v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2, связь=связь,
-                         ждать=ЖДАТЬ_ОТВЕТА)
-        if v:
-            nodes["prox"] = v
-            quality["prox_узел"] = n
-            break
-    for key, cands in (("camera", cam_names), ("nvme", nvme_names)):
-        nodes[key] = None
-        for n in cands:
-            v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2, связь=связь,
-                         ждать=ЖДАТЬ_ОТВЕТА)
-            if v:
-                nodes[key] = v
-                quality[f"{key}_узел"] = n
-                break
-    async def узел_по_возможности(что):
-        """Узел, которого у модели может не быть: нет — не беда. А вот молчание телефона —
-        беда: ответ брошен, соединение диагностики библиотека закрыла, и дальше по нему
-        прочитается только пустота. Поэтому `СвязьПропала` и чтение заново."""
-        try:
-            return await asyncio.wait_for(что, ЖДАТЬ_ОТВЕТА)
-        except asyncio.TimeoutError:
-            raise СвязьПропала(f"узел: {НЕ_ОТВЕТИЛ} {ЖДАТЬ_ОТВЕТА:g} с") from None
-        except Exception:                                         # noqa: BLE001
-            return None
-
-    # узлы «по возможности» — одна попытка, отсутствие не считается ошибкой чтения
-    for key, (rx, fallback) in OPTIONAL_NODES.items():
-        nodes[key] = None
-        for n in pick_names(names_all, rx, fallback):
+        log("узлы…")
+        t = time.monotonic()
+        nodes = {}
+        quality["нет_в_карте"] = []
+        for name in FIXED_NODES:
+            # Драйверных узлов, которых нет в карте телефона, не ждём по 5 секунд:
+            # у iPhone 17 Pro нет AIDBus (USB-C) — это не сбой чтения, а устройство другое.
+            if names_all and name[0].isupper() and name not in names_all:
+                nodes[name] = None
+                quality["нет_в_карте"].append(name)
+                continue
+            nodes[name] = await _retry(lambda n=name: diag.ioregistry(name=n), name, quality, связь=связь,
+                                       ждать=ЖДАТЬ_ОТВЕТА)
+        nodes["prox"] = None
+        for n in pick_names(names_all, PROX_RE, PROX_FALLBACK):
             if names_all and n not in names_all:
                 continue
-            v = await узел_по_возможности(diag.ioregistry(name=n))
+            v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2, связь=связь,
+                             ждать=ЖДАТЬ_ОТВЕТА)
             if v:
-                nodes[key] = v
-                quality[f"{key}_узел"] = n
+                nodes["prox"] = v
+                quality["prox_узел"] = n
                 break
-    for key, cls in OPTIONAL_CLASSES.items():
-        nodes[key] = await узел_по_возможности(diag.ioregistry(ioclass=cls)) or None
-    quality["время_с"]["узлы"] = round(time.monotonic() - t, 2)
+        for key, cands in (("camera", cam_names), ("nvme", nvme_names)):
+            nodes[key] = None
+            for n in cands:
+                v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2, связь=связь,
+                             ждать=ЖДАТЬ_ОТВЕТА)
+                if v:
+                    nodes[key] = v
+                    quality[f"{key}_узел"] = n
+                    break
+        async def узел_по_возможности(имя, что):
+            """Узел, которого у модели может не быть: нет — не беда.
 
-    # MobileGestalt — лучшим доступным каналом: diagnostics до iOS 17.4, а на 17.4+
-    # через userspace-туннель CoreDevice (без прав администратора; тот же канал, что у
-    # 3uTools). Печать деталей, серийники модулей, цвета корпуса — без действий клиента.
-    связь.проверить()
-    log("MobileGestalt…")
-    t = time.monotonic()
-    serial = txt((root or {}).get("UniqueDeviceID")) or None
-    try:
-        mg_res = await mg_mod.read(diag, serial=serial)
-    except Exception as e:                                        # noqa: BLE001
-        mg_res = {"значения": {}, "канал": "нет", "ошибка": f"{type(e).__name__}: {str(e)[:160]}"}
-    mg = dict(mg_res.get("значения") or {})
-    if not mg:
-        mg = {"недоступен": mg_res.get("ошибка") or "пусто"}
-    mg["_канал"] = mg_res.get("канал")
-    if mg_res.get("device_info"):
-        mg["_device_info"] = mg_res["device_info"]
-    if mg_res.get("диагностика"):
-        # туннель поднялся, а службы нет: кладём в слепок, что телефон предлагает вместо неё
-        mg["_диагностика"] = mg_res["диагностика"]
-    quality["mobilegestalt_канал"] = mg_res.get("канал")
-    quality["время_с"]["mobilegestalt"] = round(time.monotonic() - t, 2)
-
-    связь.проверить()
-    # Джейлбрейк, panic full и профили — на СВОЁМ соединении, если его дают. У каждой пробы
-    # свой предел (20, 25 и 12 с), но истёкший предел означает брошенный запрос, а после него
-    # соединение непригодно: библиотека закрывает его, а по основному соединению ещё работает
-    # слушатель журнала — там бы молча потерялись записи Apple и процент батареи.
-    пробное, почему_нет = (await _открыть_сбоку(соединить)) if соединить is not None else (None, "")
-    if пробное is None and почему_нет:
-        quality["пробное_соединение"] = почему_нет
-    на_пробы = пробное or ld
-    try:
-        связь.проверить()
-        log("джейлбрейк…")
-        t = time.monotonic()
-        jb = await jailbreak.probe(на_пробы)
-        quality["время_с"]["джейлбрейк"] = round(time.monotonic() - t, 2)
-
-        связь.проверить()
-        log("panic full…")
-        t = time.monotonic()
-        pan = await panic.probe(на_пробы)
-        quality["время_с"]["паника"] = round(time.monotonic() - t, 2)
-
-        связь.проверить()
-        log("профили и надзор…")
-        t = time.monotonic()
-        mdm_info = await mdm.probe(на_пробы)
-        quality["время_с"]["mdm"] = round(time.monotonic() - t, 2)
-    finally:
-        if пробное is not None:
-            await _закрыть_соединение(пробное)
-
-    связь.проверить()
-    nand_summary = {}
-    if память:
-        log("память…")
-        t = time.monotonic()
-        if соединить is not None:
-            # своё соединение и предел: память телефон считает когда как (до минут)
-            диск = ЧтениеДиска(соединить)
+            А вот обрыв связи — беда, и выглядеть как «такой детали у модели нет» он не
+            должен: по этому признаку строится вердикт о подлинности деталей, то есть цена.
+            Молчание телефона тоже беда: ответ брошен, соединение диагностики библиотека
+            закрыла, и дальше по нему прочитается только пустота."""
             try:
-                частично = {"domains": domains, "nodes": nodes, "quality": quality}
-                if await диск.вложить(частично, ждать=ЖДАТЬ_ПАМЯТЬ_ЗДЕСЬ):
-                    nand_summary = частично.get("nand_summary") or {}
-            finally:
-                await диск.закрыть()
-        else:
-            disk = await _retry(lambda: ld.get_value(domain=ДОМЕН_ДИСКА), ДОМЕН_ДИСКА, quality, tries=2,
-                                ждать=ЖДАТЬ_ПАМЯТЬ_ЗДЕСЬ,
-                                delays=(0.8, 2.0), связь=связь) or {}
-            if disk:
-                domains[ДОМЕН_ДИСКА] = disk
-            quality["время_с"]["диск"] = round(time.monotonic() - t, 2)
-            # NANDInfo: разбор и сверка прошивки с NVMe-контроллером
-            if disk.get("NANDInfo"):
-                nand_summary = nand.summarize(disk["NANDInfo"], txt(deep(nodes.get("nvme") or {}, "Firmware Revision")))
+                return await asyncio.wait_for(что, ЖДАТЬ_ОТВЕТА)
+            except asyncio.TimeoutError:
+                raise СвязьПропала(f"{имя}: {НЕ_ОТВЕТИЛ} {ЖДАТЬ_ОТВЕТА:g} с") from None
+            except (СвязьПропала, Остановлено):
+                raise
+            except Exception as e:                                    # noqa: BLE001
+                почему = f"{type(e).__name__}: {str(e)[:120]}"
+                if _обрыв(почему):
+                    raise СвязьПропала(f"{имя}: {почему}") from None
+                quality["не_прочиталось"][имя] = почему
+                return None
 
-    quality["время_с"]["всего"] = round(time.monotonic() - t0, 2)
-    snap = {
-        "snapshot_version": SNAPSHOT_VERSION,
-        "когда": datetime.now().isoformat(timespec="seconds"),
-        "root": root,
-        "domains": domains,
-        "node_names": sorted(names),
-        "nodes": nodes,
-        "ioreg_planes": {"IOService": tree, "IODeviceTree": dtree},
-        "mobilegestalt": mg,
-        "jailbreak": jb,
-        "panic": pan,
-        "mdm": mdm_info,
-        "nand_summary": nand_summary,
-        "quality": quality,
-    }
-    if сбор is not None:
-        # то, что уже пришло, — в слепок; остальное догонит позже
-        await сбор.собрать(snap)
+        # узлы «по возможности» — одна попытка, отсутствие не считается ошибкой чтения
+        for key, (rx, fallback) in OPTIONAL_NODES.items():
+            nodes[key] = None
+            for n in pick_names(names_all, rx, fallback):
+                if names_all and n not in names_all:
+                    continue
+                v = await узел_по_возможности(n, diag.ioregistry(name=n))
+                if v:
+                    nodes[key] = v
+                    quality[f"{key}_узел"] = n
+                    break
+        for key, cls in OPTIONAL_CLASSES.items():
+            nodes[key] = await узел_по_возможности(cls, diag.ioregistry(ioclass=cls)) or None
+        quality["время_с"]["узлы"] = round(time.monotonic() - t, 2)
+
+        # MobileGestalt — лучшим доступным каналом: diagnostics до iOS 17.4, а на 17.4+
+        # через userspace-туннель CoreDevice (без прав администратора; тот же канал, что у
+        # 3uTools). Печать деталей, серийники модулей, цвета корпуса — без действий клиента.
+        связь.проверить()
+        log("MobileGestalt…")
+        t = time.monotonic()
+        serial = txt((root or {}).get("UniqueDeviceID")) or None
+        try:
+            mg_res = await mg_mod.read(diag, serial=serial)
+        except Exception as e:                                        # noqa: BLE001
+            mg_res = {"значения": {}, "канал": "нет", "ошибка": f"{type(e).__name__}: {str(e)[:160]}"}
+        mg = dict(mg_res.get("значения") or {})
+        if not mg:
+            mg = {"недоступен": mg_res.get("ошибка") or "пусто"}
+        mg["_канал"] = mg_res.get("канал")
+        if mg_res.get("device_info"):
+            mg["_device_info"] = mg_res["device_info"]
+        if mg_res.get("диагностика"):
+            # туннель поднялся, а службы нет: кладём в слепок, что телефон предлагает вместо неё
+            mg["_диагностика"] = mg_res["диагностика"]
+        quality["mobilegestalt_канал"] = mg_res.get("канал")
+        quality["время_с"]["mobilegestalt"] = round(time.monotonic() - t, 2)
+
+        связь.проверить()
+        # Джейлбрейк, panic full и профили — на СВОЁМ соединении, если его дают. У каждой пробы
+        # свой предел (20, 25 и 12 с), но истёкший предел означает брошенный запрос, а после него
+        # соединение непригодно: библиотека закрывает его, а по основному соединению ещё работает
+        # слушатель журнала — там бы молча потерялись записи Apple и процент батареи.
+        пробное, почему_нет = (await _открыть_сбоку(соединить)) if соединить is not None else (None, "")
+        if пробное is None and почему_нет:
+            quality["пробное_соединение"] = почему_нет
+        на_пробы = пробное or ld
+        try:
+            связь.проверить()
+            log("джейлбрейк…")
+            t = time.monotonic()
+            jb = await jailbreak.probe(на_пробы)
+            quality["время_с"]["джейлбрейк"] = round(time.monotonic() - t, 2)
+
+            связь.проверить()
+            log("panic full…")
+            t = time.monotonic()
+            pan = await panic.probe(на_пробы)
+            quality["время_с"]["паника"] = round(time.monotonic() - t, 2)
+
+            связь.проверить()
+            log("профили и надзор…")
+            t = time.monotonic()
+            mdm_info = await mdm.probe(на_пробы)
+            quality["время_с"]["mdm"] = round(time.monotonic() - t, 2)
+        finally:
+            if пробное is not None:
+                await _закрыть_соединение(пробное)
+
+        связь.проверить()
+        nand_summary = {}
+        if память:
+            log("память…")
+            t = time.monotonic()
+            if соединить is not None:
+                # своё соединение и предел: память телефон считает когда как (до минут)
+                диск = ЧтениеДиска(соединить)
+                try:
+                    частично = {"domains": domains, "nodes": nodes, "quality": quality}
+                    if await диск.вложить(частично, ждать=ЖДАТЬ_ПАМЯТЬ_ЗДЕСЬ):
+                        nand_summary = частично.get("nand_summary") or {}
+                finally:
+                    await диск.закрыть()
+            else:
+                disk = await _retry(lambda: ld.get_value(domain=ДОМЕН_ДИСКА), ДОМЕН_ДИСКА, quality, tries=2,
+                                    ждать=ЖДАТЬ_ПАМЯТЬ_ЗДЕСЬ,
+                                    delays=(0.8, 2.0), связь=связь) or {}
+                if disk:
+                    domains[ДОМЕН_ДИСКА] = disk
+                quality["время_с"]["диск"] = round(time.monotonic() - t, 2)
+                # NANDInfo: разбор и сверка прошивки с NVMe-контроллером
+                if disk.get("NANDInfo"):
+                    nand_summary = nand.summarize(disk["NANDInfo"], txt(deep(nodes.get("nvme") or {}, "Firmware Revision")))
+
+        quality["время_с"]["всего"] = round(time.monotonic() - t0, 2)
+        snap = слепок()
+        if сбор is not None:
+            # то, что уже пришло, — в слепок; остальное догонит позже
+            await сбор.собрать(snap)
+            if свой_сбор is not None:
+                # сборщик наш (доктор, тесты): никто за нас остаток не доберёт
+                await сбор.собрать(snap, ждать=ЖДАТЬ_ОСТАТОК)
+                сбор.итог(snap)                  # закроет `finally` — он отработает всегда
+        return snap
+    except (СвязьПропала, Остановлено) as беда:
+        # Прочитанное не выбрасываем: из него собирается неполный, но честный отчёт.
+        # Раньше обрыв на последнем узле обнулял всю попытку, и после трёх попыток не
+        # оставалось ни слепка, ни отчёта, ни сделки — телефон считался непрочитанным.
+        беда.слепок = слепок()
+        raise
+    finally:
         if свой_сбор is not None:
-            # сборщик наш (доктор, тесты): никто за нас остаток не доберёт
-            await сбор.собрать(snap, ждать=ЖДАТЬ_ОСТАТОК)
-            сбор.итог(snap)
-            await сбор.закрыть()
-    return snap
+            await свой_сбор.закрыть()

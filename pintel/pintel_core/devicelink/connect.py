@@ -67,10 +67,58 @@ class LinkStatus:
     lockdown: object = None
     attempts: int = 0
     timings: dict = field(default_factory=dict)
+    # что телефон говорит о себе ДО «Доверять»: модель, iOS, серийник. Так 3uTools показывает
+    # карточку аппарата, пока клиент ещё не нажал «Доверять»
+    сведения: dict = field(default_factory=dict)
 
     @property
     def human(self):
-        return HUMAN.get(self.state, self.state) + (f" ({self.detail})" if self.detail and self.state == ERROR else "")
+        строка = HUMAN.get(self.state, self.state) + (f" ({self.detail})" if self.detail and self.state == ERROR else "")
+        подпись = self.подпись_телефона
+        return f"{подпись} — {строка}" if подпись else строка
+
+    @property
+    def подпись_телефона(self) -> str:
+        """«iPhone 14 Pro · iOS 18.7.8» — то, что известно и без сопряжения."""
+        с = self.сведения or {}
+        модель = с.get("модель") or с.get("ProductType") or ""
+        ios = с.get("ios") or с.get("ProductVersion") or ""
+        return " · ".join(x for x in (модель, f"iOS {ios}" if ios else "") if x)
+
+
+async def сведения_без_доверия(serial=None, ждать=8.0) -> dict:
+    """Что телефон отдаёт БЕЗ сопряжения: модель, iOS, сборка, серийник.
+
+    lockdown отвечает на эти ключи до «Доверять» — pymobiledevice3 читает их в
+    `_initialize()`, ещё до проверки пары. Ради них и открываем соединение с `autopair=False`:
+    пусть сотрудник видит, какой аппарат на кабеле, даже если клиент ещё не нажал «Доверять»
+    или телефон вообще не даёт себя прочитать. Ничего не вышло — пустой словарь."""
+    ld = None
+    try:
+        ld = await asyncio.wait_for(create_using_usbmux(
+            serial=serial, autopair=False, label="PintelKiosk",
+            pairing_records_cache_folder=pair_records_dir()), ждать)
+        все = dict(getattr(ld, "all_values", None) or {})
+        from ..analysis.passport import MODELS
+        pt = str(все.get("ProductType") or "")
+        return {k: v for k, v in {
+            "модель": MODELS.get(pt) or (pt or None),
+            "код_модели": pt or None,
+            "ios": все.get("ProductVersion") or None,
+            "сборка": все.get("BuildVersion") or None,
+            "серийник": все.get("SerialNumber") or None,
+            "класс": все.get("DeviceClass") or None,
+        }.items() if v}
+    except Exception:                                            # noqa: BLE001 — это подсказка, не чтение
+        return {}
+    finally:
+        if ld is not None:
+            try:
+                итог = ld.close()
+                if asyncio.iscoroutine(итог):
+                    await asyncio.wait_for(итог, 3)
+            except Exception:                                    # noqa: BLE001
+                pass
 
 
 async def list_usb():
@@ -94,13 +142,17 @@ async def connect(serial=None, trust_timeout=0.0):
             serial=serial, autopair=True, pair_timeout=trust_timeout,
             label="PintelKiosk", pairing_records_cache_folder=pair_records_dir())
     except PairingDialogResponsePendingError:
-        return LinkStatus(TRUST_PENDING, serial=serial or "")
+        return LinkStatus(TRUST_PENDING, serial=serial or "",
+                          сведения=await сведения_без_доверия(serial))
     except (UserDeniedPairingError,):
-        return LinkStatus(TRUST_DENIED, serial=serial or "")
+        return LinkStatus(TRUST_DENIED, serial=serial or "",
+                          сведения=await сведения_без_доверия(serial))
     except (PasswordRequiredError, PasscodeRequiredError):
-        return LinkStatus(LOCKED, serial=serial or "")
+        return LinkStatus(LOCKED, serial=serial or "",
+                          сведения=await сведения_без_доверия(serial))
     except (NotTrustedError, NotPairedError):
-        return LinkStatus(TRUST_PENDING, serial=serial or "")
+        return LinkStatus(TRUST_PENDING, serial=serial or "",
+                          сведения=await сведения_без_доверия(serial))
     except (NoDeviceConnectedError, DeviceNotFoundError):
         return LinkStatus(NO_DEVICE)
     except (ConnectionFailedToUsbmuxdError, MuxException):

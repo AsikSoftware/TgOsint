@@ -720,3 +720,47 @@ def test_the_reading_step_always_ends_with_an_answer_or_a_refusal(fake_core, mon
     loop2.exec()
     p2.wait(3000)
     assert len(чтения) == 1 and беды2 and "не читается" in беды2[0], (чтения, беды2)
+
+
+def test_a_phone_that_reads_badly_still_gives_a_check_and_a_deal(fake_core, monkeypatch):
+    """Телефон, который дочитать не удалось, обязан дать проверку из того, что прочитали.
+
+    Отказать в оценке из-за того, что телефон плохо читается, нельзя: клиент стоит у кассы.
+    Раньше три оборванные попытки кончались `failed` и НИЧЕМ — ни слепка, ни отчёта, ни
+    эталона, ни сделки. Теперь уезжает то, что прочитано, и проверка честно помечена
+    неполной: автоцены нет, сделка идёт на оценку администратора."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    чтения = []
+
+    async def collect(ld, diag, log=None, **kw):
+        чтения.append(1)
+        частичный = _без_диска(snap)
+        частичный["nodes"] = {k: v for k, v in list((snap.get("nodes") or {}).items())[:3]}
+        планы = snap.get("ioreg_planes") or {}
+        частичный["ioreg_planes"] = {"IOService": планы.get("IOService"), "IODeviceTree": None}
+        беда = snapshot.СвязьПропала("AIDBus: ConnectionTerminatedError")
+        беда.слепок = частичный
+        raise беда
+
+    async def ждём_телефон(self):
+        return object()
+
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    monkeypatch.setattr(worker.Pipeline, "_дождаться_телефона", ждём_телефон)
+    client = FakeClient()
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, client, None,
+                        заново=True)
+    события, итоги = _прогнать(p)
+    assert not [с for с in события if с[0] == "failed"], события
+    assert итоги, "проверка кончилась ничем, хотя телефон частично прочитан"
+    assert len(чтения) == worker.ЧТЕНИЙ, "перечитать должны были все отведённые разы"
+    rep = итоги[0]["report"]
+    assert rep["паспорт"]["модель"] == "iPhone 12", "паспорт из частичного чтения потерян"
+    assert any("чтение телефона" in str(k) for k in (rep["не_прочиталось"] or [])) or rep["не_прочиталось"], \
+        "неполная проверка обязана быть видна в отчёте"
+    # и оценка ушла на сервер — сделку по ней создать можно
+    assert [c for c in client.calls if c[0] == "upload"], client.calls
+    assert os.path.isfile(os.path.join(итоги[0]["out"], "snapshot.json")), "слепок не сохранён"
+    p.cancel.set()
+    p.wait(3000)

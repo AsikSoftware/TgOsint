@@ -303,7 +303,10 @@ def test_a_question_the_phone_never_answers_does_not_stop_the_others(тихо, �
     собрано = set(сбор.ответы)
     assert собрано == set(БЕЗ_ДИСКА) - {ЗАВИСАЕТ}, "часть доменов потеряна"
     assert сбор.осталось() == [ЗАВИСАЕТ] and not сбор.сдались, "вопрос не должен быть брошен"
-    assert ЗАВИСАЕТ in snap["quality"]["ждём_домены"]
+    # после «итога» это уже «не дождались», а не «ещё ждём» — но вопрос всё ещё в работе,
+    # и поздний ответ снимет запись (см. test_a_late_answer_is_folded_in_whenever_it_arrives)
+    assert ЗАВИСАЕТ in snap["quality"]["домены_без_ответа"]
+    assert ЗАВИСАЕТ not in (snap["quality"].get("ждём_домены") or {}), "две записи об одном домене"
     assert т.домены == [], "после зависшего вопроса на общее соединение не перешли"
     # вопрос остался ждать на СВОЁМ соединении, и по нему больше ничего не спрашивали
     молчащие = [с for с in выданы if ЗАВИСАЕТ in с.спрошено]
@@ -333,7 +336,8 @@ def test_a_domain_that_failed_is_asked_again_until_it_answers(тихо, скор
 def test_a_phone_that_answers_nothing_is_still_asked_about_everything(тихо, скоро):
     """Телефон не отвечает ни на один вопрос о себе. Проверка всё равно не висит, но и ни
     один вопрос не пропущен молча: каждый домен спрошен, а чего телефон так и не сказал —
-    записано в слепке по имени."""
+    записано в слепке по имени. На общее соединение при этом НЕ переходим: телефон спрошен и
+    думает, а брошенный там вопрос испортил бы всё остальное чтение."""
     т = Телефон()
     соединить, выданы, журнал = _боковые(т, молчит=БЕЗ_ДИСКА)
     # ждём, пока сбор переберёт все домены: 22 вопроса по три попытки на двух соединениях
@@ -341,6 +345,7 @@ def test_a_phone_that_answers_nothing_is_still_asked_about_everything(тихо, 
     assert sorted(set(журнал)) == sorted(БЕЗ_ДИСКА), "спрошены не все домены"
     без_ответа = snap["quality"]["домены_без_ответа"]
     assert sorted(без_ответа) == sorted(БЕЗ_ДИСКА) and not snap["domains"]
+    assert т.домены == [] and "боковое_соединение_нет" not in snap["quality"]
     assert all(snapshot.НЕ_ОТВЕТИЛ in п or "ответа нет" in п for п in без_ответа.values())
     # ни один из них не делает проверку неполной: их не читает ни Оценка, ни чек, ни экран
     rep = report_mod.build(snap)
@@ -434,7 +439,7 @@ def test_without_a_second_connection_the_domains_are_read_on_the_main_one(тих
     snap, сбор = _собрать(т, соединить)
     assert выданы == [] and журнал == []
     assert sorted(т.домены) == sorted(БЕЗ_ДИСКА), "по общему соединению спрошены не все домены"
-    assert snap["quality"]["боковое_соединение_нет"] is True
+    assert "ConnectionRefusedError" in snap["quality"]["боковое_соединение_нет"]
     assert snap["domains"][ПОЗДНИЙ] == _слепок()["domains"][ПОЗДНИЙ]
     assert any("второго соединения" in x for x in report_mod.build(snap)["служебное"])
 
@@ -553,3 +558,104 @@ def test_connecting_and_opening_diagnostics_cannot_hang(monkeypatch):
             asyncio.run(c.open_diagnostics(object(), attempts=2, delays=(0, 0)))
         assert "не ответила" in str(e.value), тихо_на
         assert открытые and all(д.закрыта for д in открытые), "служба не закрыта после предела"
+
+
+def test_what_was_read_is_never_thrown_away_when_the_link_breaks(тихо, скоро):
+    """Связь оборвалась на середине — прочитанное уезжает вместе с исключением.
+
+    Прежде `collect` держал всё в локальных переменных и собирал слепок только в самом
+    конце: обрыв на последнем узле обнулял попытку целиком, а после трёх попыток у кассы не
+    оставалось ни слепка, ни отчёта, ни сделки — телефон считался непрочитанным вовсе."""
+    # чем позже оборвалась связь, тем больше должно остаться — но паспорт и домены есть всегда
+    полнота = []
+    for после in (6, 14, 25):   # всего чтений по основному соединению — 30
+        т = Телефон(оборвать_после=после)
+        соединить, _выданы, _ж = _боковые(т)
+        with pytest.raises(snapshot.СвязьПропала) as e:
+            _собрать(т, соединить)
+        частичный = getattr(e.value, "слепок", None)
+        assert частичный, f"прочитанное не уехало с исключением (обрыв после {после})"
+        assert (частичный["root"] or {}).get("SerialNumber"), "паспорт потерян"
+        assert частичный["domains"], "домены потеряны — их читали на своих соединениях"
+        rep = report_mod.build(частичный)
+        assert rep["паспорт"]["модель"] == "iPhone 12", "из частичного слепка отчёт не собрался"
+        полнота.append(len([v for v in (частичный["nodes"] or {}).values() if v])
+                       + len([v for v in частичный["ioreg_planes"].values() if v]))
+    assert полнота[-1] > полнота[0], f"позднее чтение должно дать больше данных: {полнота}"
+
+
+def test_the_longest_thinking_question_is_the_one_we_keep(тихо, скоро, monkeypatch):
+    """Мест в парковке меньше, чем задумчивых доменов. Вытесняем САМЫЙ СВЕЖИЙ вопрос, а не
+    самый давний: давний ближе всех к ответу, ради него парковка и сделана. И вытеснение не
+    тратит попытку — телефон не виноват, что мест не хватило."""
+    monkeypatch.setattr(snapshot, "ПАРКОВОК", 2)
+    молчат = ["com.apple.fmip", "com.apple.mobile.restriction", "com.apple.purplebuddy",
+              "com.apple.international"]
+    т = Телефон()
+    соединить, выданы, журнал = _боковые(т, молчит=молчат)
+    snap, сбор = _собрать(т, соединить)
+    # первый задумавшийся домен всё ещё ждёт ответа на своём соединении
+    первый = молчат[0]
+    держат = [с for с in выданы if с.спрошено and с.спрошено[-1] == первый and not с.закрыто]
+    assert держат, "самый давний вопрос вытеснили, хотя он ближе всех к ответу"
+    assert first_asked_more_than_once(журнал, молчат[1:]), "вытесненные домены не переспросили"
+    assert not сбор.сдались, "вытеснение потратило попытки домена"
+    asyncio.run(сбор.закрыть())
+
+
+def first_asked_more_than_once(журнал, домены) -> bool:
+    return any(журнал.count(d) > 1 for d in домены)
+
+
+def test_closing_does_not_throw_away_an_answer_that_already_arrived(тихо, скоро):
+    """Ответ, который телефон уже дал, оплачен ожиданием. Закрытие сбора складывает его в
+    слепок, а не выбрасывает вместе с парковкой."""
+    async def прогон():
+        т = Телефон()
+        отпустить = asyncio.Event()
+        соединить, выданы, _ж = _боковые(т, молчит=[ПОЗДНИЙ], отпустить=отпустить)
+        сбор = snapshot.СборДоменов(соединить, log=lambda *a: None)
+        snap = await snapshot.collect(т, т, память=False, соединить=соединить, сбор=сбор)
+        assert ПОЗДНИЙ not in snap["domains"]
+        ждут = [з for з, _с, _н in сбор._парк.values()]
+        assert ждут, "вопрос должен был остаться на своём соединении"
+        отпустить.set()                              # телефон ответил...
+        await asyncio.wait(ждут, timeout=1)
+        await сбор.закрыть(snap)                     # ...и ровно в этот момент всё закрывают
+        return snap, выданы
+    snap, выданы = asyncio.run(прогон())
+    assert snap["domains"].get(ПОЗДНИЙ) == _слепок()["domains"][ПОЗДНИЙ], "ответ выброшен при закрытии"
+    assert all(с.закрыто for с in выданы)
+
+
+def test_the_phone_says_what_it_is_even_before_trust(monkeypatch):
+    """Как в 3uTools: пока клиент не нажал «Доверять», сотрудник всё равно видит, какой аппарат
+    на кабеле. lockdown отдаёт модель, iOS и серийник до сопряжения."""
+    from pintel_core.devicelink import connect as c
+
+    class Доверия_нет:
+        all_values = {"ProductType": "iPhone14,5", "ProductVersion": "18.7.8",
+                      "BuildVersion": "22H123", "SerialNumber": "F2LW104QPN", "DeviceClass": "iPhone"}
+
+        async def close(self):
+            self.закрыт = True
+
+    клиенты = []
+
+    async def без_пары(serial=None, autopair=True, **k):
+        assert autopair is False, "карточку до «Доверять» читаем без сопряжения"
+        клиенты.append(Доверия_нет())
+        return клиенты[-1]
+    monkeypatch.setattr(c, "create_using_usbmux", без_пары)
+    сведения = asyncio.run(c.сведения_без_доверия("UDID"))
+    assert сведения["модель"] == "iPhone 13" and сведения["ios"] == "18.7.8"
+    assert сведения["серийник"] == "F2LW104QPN" and сведения["код_модели"] == "iPhone14,5"
+    assert getattr(клиенты[0], "закрыт", False), "соединение карточки не закрыли"
+    st = c.LinkStatus(c.TRUST_PENDING, сведения=сведения)
+    assert st.подпись_телефона == "iPhone 13 · iOS 18.7.8"
+    assert "Доверять" in st.human and "iPhone 13" in st.human
+
+    async def не_вышло(**k):
+        raise ConnectionRefusedError("нет телефона")
+    monkeypatch.setattr(c, "create_using_usbmux", не_вышло)
+    assert asyncio.run(c.сведения_без_доверия("UDID")) == {}, "подсказка не должна ронять подключение"

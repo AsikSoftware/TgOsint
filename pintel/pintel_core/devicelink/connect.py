@@ -127,15 +127,27 @@ async def второе_соединение(ld):
         pairing_records_cache_folder=pair_records_dir())
 
 
+ЖДАТЬ_ПОДКЛЮЧЕНИЕ = 12.0        # сколько ждём ответа lockdown при подключении
+ЖДАТЬ_ДИАГНОСТИКУ = 6.0         # ...и на одну попытку открыть службу диагностики
+
+
 async def wait_ready(poll=1.5, on_status=None, deadline=None):
-    """Цикл ожидания до READY. on_status(LinkStatus) зовётся при смене состояния."""
+    """Цикл ожидания до READY. on_status(LinkStatus) зовётся при смене состояния.
+
+    Предел на само подключение обязателен: без него цикл зависает ВНУТРИ connect(), а не
+    между опросами, и свой `deadline` соблюсти не может — окно кассы остаётся «подключаем»
+    навсегда."""
     last = None
     while True:
         st_name, detail, devs = await list_usb()
         if st_name != READY:
             st = LinkStatus(st_name, detail)
         else:
-            st = await connect(serial=devs[0].serial, trust_timeout=0.0)
+            try:
+                st = await asyncio.wait_for(connect(serial=devs[0].serial, trust_timeout=0.0),
+                                            ЖДАТЬ_ПОДКЛЮЧЕНИЕ)
+            except asyncio.TimeoutError:
+                st = LinkStatus(ERROR, detail=f"lockdown не ответил за {ЖДАТЬ_ПОДКЛЮЧЕНИЕ:g} с")
         if on_status and (last is None or st.state != last.state):
             on_status(st)
         last = st
@@ -152,11 +164,14 @@ async def open_diagnostics(ld, attempts=6, delays=(0.5, 1.0, 1.5, 2.0, 3.0, 3.0)
     for i in range(attempts):
         svc = DiagnosticsService(ld)
         try:
-            await svc.connect()
-            probe = await svc.ioregistry(name="AppleSmartBattery")
+            await asyncio.wait_for(svc.connect(), ЖДАТЬ_ДИАГНОСТИКУ)
+            probe = await asyncio.wait_for(svc.ioregistry(name="AppleSmartBattery"),
+                                           ЖДАТЬ_ДИАГНОСТИКУ)
             if probe:
                 return svc, i + 1
             last = RuntimeError("диагностика ответила пустым")
+        except asyncio.TimeoutError:
+            last = RuntimeError(f"диагностика не ответила за {ЖДАТЬ_ДИАГНОСТИКУ:g} с")
         except Exception as e:
             last = e
         try:

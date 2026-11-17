@@ -55,11 +55,16 @@ def _clean(d):
     return {k: v for k, v in (d or {}).items() if k not in _DROP and v is not None}
 
 
-async def _via_diagnostics(diag, keys):
-    """iOS < 17.4: классический diagnostics-канал (мы и так его открыли для IORegistry)."""
+async def _via_diagnostics(diag, keys, timeout=25):
+    """iOS < 17.4: классический diagnostics-канал (мы и так его открыли для IORegistry).
+
+    Предел нужен так же, как и туннелю: своего таймаута у запроса в pymobiledevice3 нет, и
+    на части телефонов этот вопрос обдумывается минутами."""
     try:
-        res = await diag.mobilegestalt(keys)
+        res = await asyncio.wait_for(diag.mobilegestalt(keys), timeout)
         return _clean(res), None
+    except asyncio.TimeoutError:
+        return {}, f"телефон не ответил за {timeout:g} с"
     except Exception as e:                                   # noqa: BLE001
         name = type(e).__name__
         if "Deprecat" in name or "Deprecated" in str(e):
@@ -121,7 +126,8 @@ async def _via_coredevice(serial, keys, timeout):
         return {}, f"{type(e).__name__}: {str(e)[:150]}", None, диагностика
 
 
-async def read(diag, serial=None, keys=None, prefer_tunnel=None, tunnel_timeout=25):
+async def read(diag, serial=None, keys=None, prefer_tunnel=None, tunnel_timeout=25,
+               diag_timeout=25):
     """Прочитать ключи лучшим доступным каналом.
 
     prefer_tunnel: None — авто (сначала классика; если deprecated — туннель),
@@ -134,7 +140,7 @@ async def read(diag, serial=None, keys=None, prefer_tunnel=None, tunnel_timeout=
     out = {"значения": {}, "канал": "нет", "ошибка": None, "device_info": None}
 
     if prefer_tunnel is not True and diag is not None:
-        vals, err = await _via_diagnostics(diag, keys)
+        vals, err = await _via_diagnostics(diag, keys, diag_timeout)
         if vals:
             out.update(значения=vals, канал="diagnostics")
             return out

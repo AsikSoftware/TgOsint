@@ -518,8 +518,10 @@ class KioskWindow(QMainWindow):
                 "Оценок в очереди": self.client.queued(),
                 "Не принято сервером": self.client.rejected(),
                 "Бот Оценки": self.cfg.get("ocenka_bot") or "не задан",
-                **({"Режим модема iPhone": {tether.НЕТ: "драйвера нет", tether.ВКЛЮЧЁН: "включён — отключите",
-                                            tether.ОТКЛЮЧЁН: "отключён"}[tether.драйвер()]}
+                **({"Режим модема iPhone": {tether.НЕТ: "драйвера нет",
+                                            tether.ВКЛЮЧЁН: "включён — отключите",
+                                            tether.ОТКЛЮЧЁН: "отключён"}.get(tether.драйвер(),
+                                                                             "не прочитан")}
                    if sys.platform == "win32" else {})}
 
     def открыть_меню(self):
@@ -666,7 +668,7 @@ class KioskWindow(QMainWindow):
     def _модем_работа(self, сам):
         """В потоке: посмотреть на драйвер и, если он включён, отключить. → (итог, текст)."""
         что = tether.драйвер()
-        if что != tether.ВКЛЮЧЁН:
+        if что not in (tether.ВКЛЮЧЁН, tether.НЕ_ЗНАЕМ):
             return "тихо", что
         if сам:
             try:
@@ -691,7 +693,8 @@ class KioskWindow(QMainWindow):
         if итог == "тихо":
             log_line(f"режим модема: драйвер {текст}")
             текст = {tether.НЕТ: "Драйвера режима модема на этом компьютере нет — отключать нечего.",
-                     tether.ОТКЛЮЧЁН: tether.ЧЕЛОВЕКУ[tether.ГОТОВО]}.get(текст, "")
+                     tether.ОТКЛЮЧЁН: tether.ЧЕЛОВЕКУ[tether.ГОТОВО],
+                     tether.НЕ_ЗНАЕМ: tether.ЧЕЛОВЕКУ[tether.НЕ_ЗНАЕМ]}.get(текст, "")
         else:
             self._модем_спрашивали = True
             log_line(f"режим модема: {итог} — {текст}")

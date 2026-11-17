@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Киоск без телефона: поток проверки на подменённом ядре. Проверяем порядок шагов,
 `done` без истории, затем `history` когда клиент открыл раздел позже, и уход на сервер."""
-import asyncio, json, os, tempfile, time
+import asyncio, json, os, tempfile, threading, time
 import pytest
 
 pytest.importorskip("PySide6")
@@ -578,54 +578,99 @@ def test_a_cancelled_reading_draws_nothing_and_gives_no_result(fake_core, monkey
     assert not [с for с in события if с[0] in ("battery", "locks", "apple", "upload")], события
 
 
-def test_a_question_the_phone_answered_late_reaches_the_report(fake_core, monkeypatch):
-    """Телефон не ответил на вопрос вовремя — чтение пошло дальше, вопрос остался ждать на
-    своём соединении. К концу проверки ответ пришёл: касса кладёт его в слепок, и оценка
-    уезжает уже с ним. Не пришёл — в слепке сказано, какой домен молчал."""
+def test_an_answer_the_phone_thought_up_late_reaches_the_report_and_the_deal(fake_core, monkeypatch):
+    """Телефон додумал ответ уже после того, как отчёт показан, — и ответ не выбрасывается.
+
+    Пока сотрудник снимает фото и видео, телефон лежит на кабеле: там есть минуты. Касса
+    дособирает остаток, перезаписывает слепок, отчёт и эталон и досылает оценку на сервер —
+    тем же путём, которым догоняет поздний вердикт Apple."""
     QCoreApplication.instance() or QCoreApplication([])
     snap = _слепок_из_файла()
     ДОМЕН = "com.apple.mobile.battery"
+    monkeypatch.setattr(worker.snapshot, "ЖДАТЬ_ДОМЕН", 0.05)
+    monkeypatch.setattr(worker.snapshot, "ЖДАТЬ_ОСТАТОК", 0.1)
+    monkeypatch.setattr(worker, "ЖДАТЬ_ПАМЯТЬ", 0.5)
+    отпустить = threading.Event()
     соединения = []
 
-    def подставить(ответит):
-        async def collect(ld, diag, log=None, **kw):
-            assert callable(kw.get("соединить")), "касса обязана дать слепку боковое соединение"
-            усечённый = _без_диска(snap)
-            усечённый["domains"].pop(ДОМЕН, None)
-            усечённый["quality"]["не_прочиталось"] = {ДОМЕН: "телефон не ответил за 4 с"}
-            усечённый["quality"]["зависшие_домены"] = {ДОМЕН: 4.0}
-            соединение = ФейкСоединение(None)
-            соединения.append(соединение)
+    class Думает:
+        """Боковое соединение: про память отвечает сразу, а про домен — когда разрешат."""
 
-            async def вопрос():
-                if not ответит:
-                    await asyncio.Event().wait()
-                await asyncio.sleep(0.2)
-                return snap["domains"][ДОМЕН]
-            kw["поздние"].оставить(ДОМЕН, asyncio.ensure_future(вопрос()), соединение, time.monotonic())
-            return усечённый
-        monkeypatch.setattr(worker.snapshot, "collect", collect)
+        def __init__(self):
+            self.спрошено, self.закрыто = [], False
 
-    подставить(True)
-    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
-                        заново=True)                       # не брать прошлую проверку из соседних тестов
+        async def get_value(self, domain=None, key=None):
+            self.спрошено.append(domain)
+            if domain == ДОМЕН:
+                while not отпустить.is_set():
+                    await asyncio.sleep(0.02)
+            return snap["domains"].get(domain)
+
+        async def close(self):
+            self.закрыто = True
+
+    async def второе(ld):
+        соединения.append(Думает())
+        return соединения[-1]
+
+    async def collect(ld, diag, log=None, **kw):
+        сбор = kw["сбор"]
+        assert сбор is not None, "касса обязана дать слепку сборщик доменов"
+        сбор.начать([ДОМЕН])
+        await сбор.собрать(ждать=0.05)                 # не дождались — вопрос остаётся в работе
+        усечённый = _без_диска(snap)
+        усечённый["domains"].pop(ДОМЕН, None)
+        await сбор.собрать(усечённый)
+        return усечённый
+
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    monkeypatch.setattr(worker.connect, "второе_соединение", второе)
+    client = FakeClient()
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, client, None,
+                        заново=True)
+    поздние = []
+    p.history.connect(lambda r: поздние.append(r))
     события, итоги = _прогнать(p)
     assert итоги and not [с for с in события if с[0] == "failed"], события
     слепок = snapshot.loads(open(os.path.join(итоги[0]["out"], "snapshot.json"), encoding="utf-8").read())
-    assert слепок["domains"][ДОМЕН] == snap["domains"][ДОМЕН], "поздний ответ не дошёл до слепка"
-    assert ДОМЕН not in слепок["quality"]["не_прочиталось"] and "зависшие_домены" not in слепок["quality"]
-    assert соединения[-1].закрыто
+    assert ДОМЕН not in слепок["domains"], "вопрос должен был остаться в работе"
+    assert ДОМЕН in (слепок["quality"].get("домены_без_ответа") or {})
+
+    отпустить.set()                                   # телефон додумал
+    ждём = QEventLoop()
+    p.history.connect(lambda r: ждём.quit())
+    QTimer.singleShot(6000, ждём.quit)
+    ждём.exec()
+
+    слепок = snapshot.loads(open(os.path.join(итоги[0]["out"], "snapshot.json"), encoding="utf-8").read())
+    assert слепок["domains"].get(ДОМЕН) == snap["domains"][ДОМЕН], "поздний ответ не дошёл до слепка"
+    assert "домены_без_ответа" not in слепок["quality"], "пометка «не ответил» не снята"
+    assert поздние and поздние[-1]["report"], "экран кассы о позднем ответе не узнал"
+    assert [c for c in client.calls if c[0] == "update"], "оценку на сервере не дописали"
     p.cancel.set()
     p.wait(3000)
+    assert all(с.закрыто for с in соединения), "боковые соединения не закрыты"
 
-    подставить(False)
+
+def test_the_collector_is_not_restarted_when_the_reading_restarts(fake_core, monkeypatch):
+    """Связь оборвалась, и слепок читается заново. Сборщик доменов при этом ТОТ ЖЕ: собранное
+    не выбрасывается, а вопросы, которые телефон ещё обдумывает, остаются в работе."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    сборщики, чтения = [], []
+
+    async def collect(ld, diag, log=None, **kw):
+        сборщики.append(kw.get("сбор"))
+        чтения.append(1)
+        if len(чтения) == 1:
+            raise snapshot.СвязьПропала("ioreg:IOService: ConnectionTerminatedError")
+        return _без_диска(snap)
+
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
     p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
                         заново=True)
-    начало = time.monotonic()
     события, итоги = _прогнать(p)
-    assert итоги and time.monotonic() - начало < 8, "проверка ждала молчащий телефон"
-    слепок = snapshot.loads(open(os.path.join(итоги[0]["out"], "snapshot.json"), encoding="utf-8").read())
-    assert ДОМЕН not in слепок["domains"] and ДОМЕН in слепок["quality"]["зависшие_домены"]
-    assert соединения[-1].закрыто, "брошенный вопрос закрыл своё соединение"
+    assert итоги and len(сборщики) == 2, события
+    assert сборщики[0] is not None and сборщики[0] is сборщики[1], "сборщик пересоздали на второй попытке"
     p.cancel.set()
     p.wait(3000)

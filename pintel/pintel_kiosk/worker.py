@@ -152,9 +152,6 @@ def проверить_рфс(cfg, имеи, step):
 # Связь оборвалась посреди чтения: сколько раз начинать слепок заново и сколько секунд ждать,
 # пока телефон вернётся на кабель.
 ЧТЕНИЙ = 3
-# Вопрос, на который телефон не ответил вовремя, ждёт в стороне всю проверку (это десятки
-# секунд). Если к её концу ответа всё ещё нет, а домен нужен отчёту — ждём ещё столько, не дольше.
-ЖДАТЬ_ПОЗДНИЕ = 2.0
 ЖДАТЬ_ТЕЛЕФОН_С = 25
 
 
@@ -182,7 +179,9 @@ class Pipeline(QThread):
         self._loop = None
         self._слепок_готов_в = None                   # от этого момента ждём процент батареи
         self._ld = None                               # соединение, которым дочитали слепок
-        self._поздние = snapshot.ПоздниеДомены()      # вопросы, на которые телефон ещё не ответил
+        self._сбор = None                             # сбор доменов телефона (идёт в фоне)
+        self._ld_жив = None                           # соединение, через которое открываем боковые
+        self._диск = None                             # вопрос про память (телефон считает его долго)
 
     def run(self):
         try:
@@ -198,7 +197,15 @@ class Pipeline(QThread):
         Пока он там сидит, его слушатель журнала держит и переоткрывает канал к тому же
         телефону — а новая проверка уже открыла свой. Два слушателя на одном аппарате
         дерутся за usbmux, и в журнале точки это видно как обрывы раз в секунду."""
-        слушатель, loop = self._listener, self._loop
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            # Отложенные вопросы держат свои соединения lockdown к тому же телефону. Новая
+            # проверка начинается через три секунды — и обе читали бы один аппарат.
+            try:
+                loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._закрыть_добор()))
+            except RuntimeError:
+                pass
+        слушатель = self._listener
         if слушатель is None or loop is None or loop.is_closed():
             return
         слушатель._stop = True
@@ -257,7 +264,7 @@ class Pipeline(QThread):
         try:
             await self._flow(ld, st, listener)
         finally:
-            await self._поздние.закрыть()
+            await self._закрыть_добор()
             await listener.stop()
 
     async def _дождаться_батареи(self, listener):
@@ -388,6 +395,10 @@ class Pipeline(QThread):
             return False, "пароль на телефоне изменился"
         return True, ""
 
+    async def _боковое(self):
+        """Ещё одно соединение с тем же телефоном — через то, которое живо сейчас."""
+        return await connect.второе_соединение(self._ld_жив)
+
     async def _дождаться_телефона(self):
         """Связь оборвалась посреди чтения — ждём, пока телефон вернётся на кабель.
         → новое соединение; None — отменили или не дождались (тогда `failed` уже сказан)."""
@@ -409,8 +420,17 @@ class Pipeline(QThread):
         мёртвое соединение за каждым из двадцати узлов. Шаг «Модель и память» крутился
         1,5–3,5 минуты и кончался отчётом с «? ГБ» — на точке 16/38 так кончалось каждое
         третье чтение. → (слепок, попыток диагностики) или (None, 0), если отменили."""
+        # Сбор доменов — один на весь телефон, а не на попытку чтения: аппарат тот же, и
+        # перечитывание после обрыва не должно выбрасывать ни уже собранное, ни то, что
+        # телефон ещё обдумывает. Соединения он открывает через `_боковое`, то есть всегда
+        # через живое соединение, а не через то, которое оборвалось.
+        self._ld_жив = ld
+        if self._сбор is None:
+            self._сбор = snapshot.СборДоменов(
+                self._боковое, жив=lambda: not self.cancel.is_set(), log=log_line)
         for попытка in range(1, ЧТЕНИЙ + 1):
             diag = None
+            self._ld_жив = ld
             try:
                 diag, tries = await connect.open_diagnostics(ld)
                 if self.cancel.is_set():
@@ -418,19 +438,19 @@ class Pipeline(QThread):
                 self._step("passport", "run", "" if попытка == 1 else f"читаем заново · попытка {попытка}")
                 # про память здесь не спрашиваем: телефон отвечает на это когда как, а объём
                 # и так есть с контроллера — спросим в самом конце (`_добрать_память`)
-                # вопросы о доменах — на боковом соединении и с пределом: зависший остаётся
-                # ждать в `поздние`, чтение идёт дальше (`_добрать_поздние` заберёт ответ в конце)
-                await self._поздние.закрыть()
-                self._поздние = snapshot.ПоздниеДомены()
+                # Домены телефона собираются в стороне и ВСЕ до единого: ни один вопрос не
+                # держит чтение, а тот, что телефон обдумывает, догоняет слепок позже
+                # (`_добрать_остаток`, а после отчёта — `_дособрать`).
                 snap = await snapshot.collect(
-                    ld, diag, жив=lambda: not self.cancel.is_set(), память=False,
-                    соединить=lambda ld=ld: connect.второе_соединение(ld), поздние=self._поздние)
+                    ld, diag, log=lambda что: log_line(f"чтение телефона: {что}"),
+                    жив=lambda: not self.cancel.is_set(), память=False,
+                    соединить=self._боковое, сбор=self._сбор)
                 snap["quality"]["диагностика_попыток"] = tries
-                if snap["quality"].get("зависшие_домены"):
-                    log_line("телефон не ответил вовремя на: "
-                             + ", ".join(f"{д.replace('com.apple.', '')} ({с:g} с)"
-                                         for д, с in snap["quality"]["зависшие_домены"].items())
-                             + " — идём дальше, ответ заберём в конце")
+                ждём = snap["quality"].get("ждём_домены") or {}
+                if ждём:
+                    log_line("телефон ещё обдумывает ответ про: "
+                             + ", ".join(д.replace("com.apple.", "") for д in ждём)
+                             + " — идём дальше, ответ заберём позже")
                 if попытка > 1:
                     snap["quality"]["чтений_из_за_обрыва"] = попытка
                 self._ld = ld
@@ -471,23 +491,84 @@ class Pipeline(QThread):
         log_line(f"режим модема: телефон раздаёт интернет этой кассе по кабелю (адрес кассы в его сети {адрес})")
         self.модем.emit(адрес)
 
-    async def _добрать_поздние(self, snap) -> list:
-        """Ответы на вопросы, которые телефон обдумывал дольше срока: что успело прийти к
-        концу проверки — в слепок, остальное бросаем. → какие домены пришли."""
-        пришли = []
-        try:
-            if len(self._поздние):
-                нужен = any(д in snapshot.ВАЖНЫЕ_ДОМЕНЫ for д in self._поздние.ждут())
-                пришли = await self._поздние.вложить(snap, ждать=ЖДАТЬ_ПОЗДНИЕ if нужен else 0.0)
-                ждут = (snap.get("quality") or {}).get("зависшие_домены") or {}
-                log_line("поздние ответы телефона: пришли — "
-                         + (", ".join(д.replace("com.apple.", "") for д in пришли) or "ни один")
-                         + ("; так и не ответил на: "
-                            + ", ".join(f"{д.replace('com.apple.', '')} ({с:g} с)" for д, с in ждут.items())
-                            if ждут else ""))
-        finally:
-            await self._поздние.закрыть()
+    async def _добрать_остаток(self, snap) -> list:
+        """Дособрать то, что телефон обдумывает, — перед тем как показать отчёт.
+
+        Ничего не бросаем: вопросы без ответа остаются в работе и после отчёта
+        (`_дособрать`), пока телефон на кабеле. → какие домены пришли."""
+        if self._сбор is None:
+            return []
+        пришли = await self._сбор.собрать(snap, ждать=snapshot.ЖДАТЬ_ОСТАТОК)
+        self._сбор.итог(snap)
+        осталось = self._сбор.осталось()
+        if пришли or осталось:
+            log_line("дособрали: " + (", ".join(д.replace("com.apple.", "") for д in пришли) or "ничего")
+                     + ("; ещё обдумывает: " + ", ".join(д.replace("com.apple.", "") for д in осталось)
+                        if осталось else "; телефон ответил на всё"))
         return пришли
+
+    def _ждём_память(self) -> bool:
+        """Телефон ещё не ответил про память (и не отказал). `готово_за` бывает 0.0 —
+        поэтому сравниваем с None, а не «есть ли значение»."""
+        return self._диск is not None and self._диск.готово_за is None and not self._диск.беда
+
+    def _ещё_ждём(self) -> bool:
+        """Есть ли ещё чего ждать от телефона."""
+        домены = self._сбор is not None and bool(self._сбор.осталось())
+        return bool(домены or self._ждём_память())
+
+    async def _дособрать(self, snap, out, server, result) -> None:
+        """Остаток данных — уже после того, как отчёт показан.
+
+        Телефон всё это время лежит на кабеле: сотрудник снимает фото и видео. Бросать
+        ответ, который телефон вот-вот додумает, незачем — он дописывается в слепок, в отчёт
+        и в оценку на сервере, как это делает и поздний вердикт Apple. Ждём короткими
+        отрезками: сделку могут закрыть в любую секунду, и держать поток нельзя."""
+        до = time.monotonic() + snapshot.ЖДАТЬ_ОСТАТОК_ДОЛГО
+        try:
+            while self._ещё_ждём() and not self.cancel.is_set() and time.monotonic() < до:
+                пришло = []
+                if self._сбор is not None and self._сбор.осталось():
+                    пришло += await self._сбор.собрать(snap, ждать=1.0)
+                    self._сбор.итог(snap)
+                if self._ждём_память() and await self._диск.вложить(snap, ждать=1.0):
+                    пришло.append("память")
+                if self.cancel.is_set():
+                    return
+                if пришло:
+                    log_line("телефон додумал уже после отчёта: "
+                             + ", ".join(str(д).replace("com.apple.", "") for д in пришло))
+                    await self._дописать(snap, out, server, result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:                                        # noqa: BLE001
+            log_line("добор остатка: " + traceback.format_exc())
+
+    async def _дописать(self, snap, out, server, result) -> None:
+        """Слепок изменился после отчёта — пересобрать отчёт, сохранить и дослать на сервер.
+
+        Запрос к серверу — в отдельном потоке: он может идти до минуты, а в это время по
+        этому же циклу событий читается журнал телефона, и там ждут записи Apple."""
+        rep = report_mod.build(snap)
+        self._save(out, snap, rep)
+        self._reference(snap, rep)
+        if server and server.get("id") and not server.get("локально") and self.client.enabled:
+            try:
+                await asyncio.to_thread(
+                    self.client.update_evaluation, server["id"], json.loads(snapshot.dumps(rep)),
+                    {"domains": snap.get("domains"), "quality": snap.get("quality")})
+            except ServerError as e:
+                log_line(f"обновление оценки не ушло: {e}")
+        self.history.emit({**result, "report": rep})
+
+    async def _закрыть_добор(self) -> None:
+        """Снять все отложенные вопросы и закрыть их соединения."""
+        if self._сбор is not None:
+            await self._сбор.закрыть()
+            self._сбор = None
+        if self._диск is not None:
+            await self._диск.закрыть()
+            self._диск = None
 
     async def _добрать_память(self, snap) -> None:
         """Спросить телефон про память — один раз, в самом конце и недолго.
@@ -499,13 +580,12 @@ class Pipeline(QThread):
         if self.cancel.is_set() or self._ld is None:
             return
         ld = self._ld
-        диск = snapshot.ЧтениеДиска(lambda: connect.второе_соединение(ld))
-        try:
-            if not await диск.вложить(snap, ждать=ЖДАТЬ_ПАМЯТЬ):
-                log_line(f"память: телефон не ответил за {ЖДАТЬ_ПАМЯТЬ} с — объём с контроллера, "
-                         f"с диском не сверен" + (f" ({диск.беда})" if диск.беда else ""))
-        finally:
-            await диск.закрыть()
+        self._диск = snapshot.ЧтениеДиска(lambda: connect.второе_соединение(ld))
+        if not await self._диск.вложить(snap, ждать=ЖДАТЬ_ПАМЯТЬ):
+            # не бросаем: телефон досчитает — ответ допишется в отчёт (`_дособрать`)
+            почему = (f"не вышло спросить: {self._диск.беда}" if self._диск.беда
+                      else f"телефон не ответил за {ЖДАТЬ_ПАМЯТЬ} с")
+            log_line(f"память: {почему} — объём с контроллера, с диском пока не сверен")
 
     async def _flow(self, ld, st, listener):
         snap, tries = await self._прочитать_телефон(ld)
@@ -604,7 +684,7 @@ class Pipeline(QThread):
         self._донести_батарею(snap, listener)
         было_гб = rep["память"].get("объём_гб")
         await self._добрать_память(snap)
-        поздние = await self._добрать_поздние(snap)
+        поздние = await self._добрать_остаток(snap)
         await self._заметить_режим_модема(snap)
         rep = report_mod.build(snap)
         if rep["память"].get("объём_гб") != было_гб:
@@ -642,12 +722,29 @@ class Pipeline(QThread):
             return
         self.done.emit(result)
         self._reference(snap, rep)                    # эталон с каждого телефона, уже после результата
-        if self.cancel.is_set() or not hist_ok:
+        if self.cancel.is_set():
             return
 
-        # Слушаем дальше, пока телефон на кабеле: вердикт мог прийти позже (клиент открыл
-        # раздел после результата) или ИЗМЕНИТЬСЯ — iOS печатает записи повторно, когда
-        # подгрузит список ремонтов Apple, и только тогда в них появляются замены.
+        # Пока телефон на кабеле (сотрудник снимает фото и видео), догоняем две вещи сразу:
+        # вердикт Apple, который мог прийти позже, и ответы, которые телефон ещё обдумывает.
+        # Обе дописывают слепок, отчёт и оценку на сервере; ни одна не держит другую.
+        задачи = [asyncio.ensure_future(self._дособрать(snap, out, server, result))]
+        if hist_ok:
+            задачи.append(asyncio.ensure_future(
+                self._дослушать_apple(snap, out, server, result, listener, items)))
+        try:
+            # ждём обе: вердикт Apple мог прийти позже, а телефон — додумать ответ. Одна
+            # закончилась — вторая продолжает: бросать её из-за этого незачем.
+            await asyncio.gather(*задачи)
+        finally:
+            for задача in задачи:
+                задача.cancel()
+            await asyncio.gather(*задачи, return_exceptions=True)
+
+    async def _дослушать_apple(self, snap, out, server, result, listener, items) -> None:
+        """Слушаем дальше, пока телефон на кабеле: вердикт мог прийти позже (клиент открыл
+        раздел после результата) или ИЗМЕНИТЬСЯ — iOS печатает записи повторно, когда
+        подгрузит список ремонтов Apple, и только тогда в них появляются замены."""
         if not items:
             self._step("apple", "run", "ждём историю Apple")
         seen = repair_history.signature(items)
@@ -671,7 +768,6 @@ class Pipeline(QThread):
                     log_line(f"обновление оценки не ушло: {e}")
             self._step("apple", "done", "получена")
             self.history.emit({**result, "report": rep})
-
 
     def _reference(self, snap, rep):
         """Эталон с КАЖДОГО телефона: обезличенный слепок, сырой журнал Apple и наш вердикт.

@@ -2186,6 +2186,16 @@ def test_the_tether_driver_is_dealt_with_quietly_and_only_when_needed(окно, 
     окно._модем_итог(итог)
     assert not os.path.isfile(окно._модем_отметка())
 
+    # «не прочитан» — состояние, которого раньше не было: по кнопке касса честно говорит, что
+    # не проверила, а меню администратора от незнакомого состояния не падает
+    состояние["драйвер"] = kapp.tether.НЕ_ЗНАЕМ
+    состояние["ответ"] = (kapp.tether.НЕ_ВЫШЛО, kapp.tether.ЧЕЛОВЕКУ[kapp.tether.НЕ_ЗНАЕМ])
+    итог = окно._модем_работа(сам=False)
+    assert итог[0] == kapp.tether.НЕ_ВЫШЛО and "не сказала" in итог[1]
+    monkeypatch.setattr(kapp.sys, "platform", "win32")
+    assert окно._сведения()["Режим модема iPhone"] == "не прочитан"
+    окно.открыть_меню()
+
 
 def test_a_phone_seen_as_a_network_makes_the_kiosk_ask_again_after_the_deal(окно, monkeypatch):
     """На новом компьютере драйвера режима модема ещё нет — он появляется с первым таким

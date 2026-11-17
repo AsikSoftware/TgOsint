@@ -35,6 +35,32 @@ def ядро():
     return m
 
 
+def test_the_model_number_is_the_one_on_the_back_cover_not_apples_factory_code():
+    """`devices.code_name` в Оценке — «A2890». Заводской код «iPhone15,2» туда не шлём
+    никогда: нет номера — пусто, обработчик бота подставит его сам по своему справочнику."""
+    assert ocenka.посылка(ДАННЫЕ, "7KQ4M")["сделка"]["code_name"] is None
+    assert ocenka.посылка({**ДАННЫЕ, "номер_a": "A2890"}, "7KQ4M")["сделка"]["code_name"] == "A2890"
+
+    # откуда касса знает номер: MobileGestalt (старые iOS) и поле «Model» базы IMEI
+    assert ocenka.номер_модели({"паспорт": {"номер_a": "A2633"}}) == "A2633"
+    for строка, ждём in (("iPhone 12 64GB Black [A2403] [iPhone13,2]", "A2403"),
+                         ("IPHONE 14 PRO A2891", "A2891"),
+                         ("iPhone 14 Pro 256GB Gold", None),
+                         ("IPHONE 17 PRO,NAJP,256GB,ORN", None),
+                         ("MPXV3RU/A", None), ("BA12345", None), ("A28911", None)):
+        rep = {"паспорт": {"код_модели": "iPhone15,2"}, "sickw": {"все_поля": {"Model": строка}}}
+        assert ocenka.номер_модели(rep) == ждём, строка
+    assert ocenka.номер_модели({"sickw": {"модель_строка": "IPHONE 13 A2633"}}) == "A2633"
+    assert ocenka.номер_модели({}) is None and ocenka.номер_модели(None) is None
+
+    # запечатанный: кабеля нет, номер только из базы IMEI
+    д = ocenka.данные_запечатанного(
+        {"модель": "iPhone 17 Pro", "объём_гб": 256, "цвет": "ORANGE",
+         "все_поля": {"Model": "IPHONE 17 PRO A3523"}},
+        ["350585886690250"], {"имя": "Зама", "телефон": "+77058837953"})
+    assert д["номер_a"] == "A3523"
+
+
 def test_payload_speaks_in_her_column_names():
     """Бот кладёт «сделку» в devices как есть — значит имена здесь её, а не наши."""
     п = ocenka.посылка(ДАННЫЕ, "7KQ4M", точка="16/38 Pintel")

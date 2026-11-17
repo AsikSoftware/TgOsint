@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Слепок → отчёт. Главный принцип: отсутствие данных НЕ превращается в вердикт."""
+import re
+
 from . import battery, legal, pairing, parts as parts_mod, passport, serials, storage
 from .. import colours
 from ..devicelink import jailbreak, nand
@@ -71,6 +73,9 @@ def build(snap):
     raw_code = mg.get("DeviceEnclosureColor") if "недоступен" not in mg else None
     code = num(raw_code) if raw_code is not None else None
     pas["код_цвета_корпуса"] = int(code) if code is not None else None
+    # номер модели с задней крышки («A2890») — именно его Оценка хранит в devices.code_name
+    a = str(mg.get("RegulatoryModelNumber") or "").strip() if "недоступен" not in mg else ""
+    pas["номер_a"] = a if re.fullmatch(r"A\d{4}", a) else None
     pas["цвет_по_коду"] = ENCLOSURE_COLOURS.get(pas["код_цвета_корпуса"]) if code is not None else None
     # Цвет — одним словарём (pintel_core.colours): английское слово заглавными. Ответ базы
     # IMEI проводим через словарь ещё раз: в слепках и кэше до 13.11.2026 он лежит по-русски.

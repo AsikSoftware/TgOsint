@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import httpx
 from pintel_core import colours
@@ -136,6 +137,31 @@ def _imeis(ev: Evaluation) -> list[tuple[str, bool, bool]]:
     return out
 
 
+def _номер_модели(eng, ev: Evaluation) -> str | None:
+    """Номер модели («A2890») для `devices.code_name` — как у сделки, заведённой в боте:
+    из справочника самой Оценки по началу IMEI (phone_tac → phone_codenames).
+
+    Заводской код Apple («iPhone13,2», наш `model_code`) туда не идёт: до 17.11.2026 он
+    попадал в колонку, и сделки с кассы назывались иначе, чем сделки из бота. Справочник
+    не ответил или начала в нём нет — номер из базы IMEI, а нет и его — пусто."""
+    from pintel_core.external import ocenka
+    try:
+        with eng.connect() as conn:
+            for imei, _verifi, _first in _imeis(ev):
+                цифры = re.sub(r"\D", "", imei)
+                if len(цифры) != 15:
+                    continue
+                номер = conn.scalar(text(
+                    "SELECT c.code_name FROM phone_tac t "
+                    "JOIN phone_codenames c ON c.id = t.code_name_id "
+                    "WHERE t.tac = :t LIMIT 1"), {"t": цифры[:8]})
+                if номер and str(номер).strip():
+                    return str(номер).strip()[:50]
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("ocenka: справочник моделей не ответил: %s", exc)
+    return ocenka.номер_модели(ev.report or {})
+
+
 # ---------------------------------------------------------------- импорт
 
 def staff_list() -> list[dict]:
@@ -180,6 +206,7 @@ def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> d
 
     photos, videos = _media_file_ids(db, ev)
     eng = _ocenka_engine()
+    номер_модели = _номер_модели(eng, ev)
 
     with eng.begin() as conn:
         shop_id = None
@@ -213,7 +240,7 @@ def import_evaluation(db, ev: Evaluation, user_grade_id: int | None = None) -> d
         """), {
             "producer": "Apple",
             "model": ev.model_name[:50],
-            "code_name": (ev.model_code or None),
+            "code_name": номер_модели,
             "ddr": int(ev.capacity_gb),
             "akb": (f"{ev.battery_health}%" if ev.battery_health is not None else None),
             "akb_exact": ev.battery_health,

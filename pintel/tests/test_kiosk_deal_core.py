@@ -129,6 +129,31 @@ def test_only_known_columns_reach_the_table(ядро):
         assert f":{k}" in sql                          # значения — только через bind
 
 
+def test_apples_factory_code_never_reaches_the_model_number_column(ядро):
+    """`code_name` в Оценке — номер модели с крышки («A2890»): так его пишет сам бот. Касса
+    до 0.8.0 слала туда заводской код «iPhone15,2», и все сделки с кассы назывались иначе,
+    чем сделки из бота. Такой код в колонку не идёт; настоящий номер — проходит."""
+    assert ядро.колонки(посылка())["code_name"] is None
+    for код in ("iPhone18,1", "iPad13,4", "iphone12,5"):
+        п = посылка()
+        п["сделка"]["code_name"] = код
+        assert ядро.колонки(п)["code_name"] is None, код
+    for номер in ("A2890", "SM-A175F", "iPhone 14 Pro"):
+        п = посылка()
+        п["сделка"]["code_name"] = номер
+        assert ядро.колонки(п)["code_name"] == номер
+
+
+def test_the_model_number_is_looked_up_by_the_start_of_the_imei(ядро):
+    """Справочник бота знает модель по первым восьми цифрам IMEI. Основной IMEI — первым,
+    повтор начала не спрашиваем дважды, а не-IMEI в поиск не идёт вовсе."""
+    assert ядро.начала_imei(посылка()) == ["35058588"]
+    assert ядро.начала_imei(посылка(imei=["350585886690250", "356789012345678"])) == [
+        "35058588", "35678901"]
+    assert ядро.начала_imei(посылка(imei=["F2LW104QPN", "12345", ""])) == []
+    assert ядро.начала_imei(посылка(imei=[])) == []
+
+
 def test_sql_refuses_a_column_we_do_not_know(ядро):
     with pytest.raises(ядро.ОшибкаПосылки) as e:
         ядро.sql_devices({"model": "x", "наше_поле": 1})

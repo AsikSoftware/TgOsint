@@ -825,3 +825,93 @@ def test_the_update_link_binds_the_employee_with_its_own_words(бот_модул
     assert core.запрос_мойсклада("не json") is None
     пусто = core.текст_обновления_мойсклада({"товар": {"код": "40117", "название": "Ip 13"}, "изменения": []})
     assert "Менять было нечего" in пусто
+
+
+# ---------------------------------------------------------------- номер модели в сделке
+
+def _справочник(м, monkeypatch, ответы, журнал=None):
+    """База бота, в которой справочник моделей отвечает так, как задано."""
+    журнал = [] if журнал is None else журнал
+    monkeypatch.setattr(м, "async_session_factory", lambda: Сессия(журнал, ответы))
+    return журнал
+
+
+def test_the_model_number_comes_from_her_own_reference_by_imei(бот_модуль, monkeypatch):
+    """В сделке из бота `code_name` — номер модели из её справочника по началу IMEI.
+    Сделка с кассы обязана получить тот же номер тем же путём, а не то, что прислала
+    программа: до 17.11.2026 там лежал заводской код «iPhone15,2»."""
+    п = {"imei": ["350585886690250", "356789012345678"]}
+    журнал = _справочник(бот_модуль, monkeypatch,
+                         lambda текст, пар: "A2890" if пар.get("t") == "35058588" else None)
+    assert asyncio.run(бот_модуль._номер_модели(п)) == "A2890"
+    assert len(журнал) == 1, "основной IMEI ответил — второй спрашивать незачем"
+    запрос, параметры = журнал[0]
+    assert "phone_tac" in запрос and "phone_codenames" in запрос
+    assert параметры == {"t": "35058588"}, "в запрос идут восемь цифр и только через bind"
+    assert not запрос.upper().startswith(("INSERT", "UPDATE", "DELETE")), "справочник только читаем"
+
+    # основного в справочнике нет — спрашиваем второй
+    журнал = _справочник(бот_модуль, monkeypatch,
+                         lambda текст, пар: "A2892" if пар.get("t") == "35678901" else None)
+    assert asyncio.run(бот_модуль._номер_модели(п)) == "A2892" and len(журнал) == 2
+
+    # нет ни одного — пусто, а не выдумка
+    _справочник(бот_модуль, monkeypatch, lambda *a: None)
+    assert asyncio.run(бот_модуль._номер_модели(п)) is None
+
+
+def test_a_broken_reference_never_stops_the_deal(бот_модуль, monkeypatch):
+    """Справочник — мелочь рядом со сделкой: упал запрос — сделка создаётся без номера."""
+    def упасть(*a):
+        raise RuntimeError("relation phone_tac does not exist")
+
+    _справочник(бот_модуль, monkeypatch, упасть)
+    assert asyncio.run(бот_модуль._номер_модели({"imei": ["350585886690250"]})) is None
+
+
+def test_the_deal_is_written_with_the_looked_up_model_number(бот_модуль, monkeypatch):
+    """Проверяем саму вставку: в `devices.code_name` уходит номер из справочника, даже если
+    касса старой сборки прислала заводской код; а чего в справочнике нет — номер, который
+    назвала касса, но никогда не «iPhone15,2»."""
+    database_database = types.ModuleType("database.database")
+    database_database.AsyncOrm = type("AsyncOrm", (), {})
+    monkeypatch.setitem(sys.modules, "database.database", database_database)
+
+    async def нет_колонки(*a):
+        return False
+
+    async def без_цены(device_id):
+        return None
+
+    async def точка(shop_id):
+        return "16/38 Pintel"
+
+    monkeypatch.setattr(бот_модуль, "_есть_колонка", нет_колонки)
+    monkeypatch.setattr(бот_модуль, "_автоцена", без_цены)
+    monkeypatch.setattr(бот_модуль, "_имя_точки", точка)
+
+    def вставленное(прислано, в_справочнике):
+        def ответы(текст, пар):
+            if "FROM phone_tac" in текст:
+                return в_справочнике
+            if текст.startswith("SELECT id FROM users"):
+                return 41                                      # клиент уже есть
+            if текст.startswith("INSERT INTO devices"):
+                return 7311
+            return None
+
+        журнал = _справочник(бот_модуль, monkeypatch, ответы)
+        п = {"версия": 1, "код": "ABCD12", "клиент": {"имя": "Зама", "телефон": "+77050000000"},
+             "imei": ["350585886690250"], "imei_проверен": True,
+             "сделка": {"model": "iPhone 14 Pro", "code_name": прислано, "ddr": 256,
+                        "akb": "86-90", "akb_exact": 86, "color": "BLACK", "sim": "Стандарт",
+                        "box": True, "cord": True, "phone_status": "Не был в ремонте"}}
+        итог = asyncio.run(бот_модуль._вставить(п, dict(СТРОКА)))
+        assert итог["id"] == 7311
+        (_, поля), = [x for x in журнал if x[0].startswith("INSERT INTO devices")]
+        return поля["code_name"]
+
+    assert вставленное("iPhone15,2", "A2890") == "A2890"       # касса старой сборки
+    assert вставленное("A2891", "A2890") == "A2890"            # справочник бота главнее
+    assert вставленное("A2891", None) == "A2891"               # новой модели в справочнике нет
+    assert вставленное("iPhone19,3", None) is None             # и номера нет — пусто

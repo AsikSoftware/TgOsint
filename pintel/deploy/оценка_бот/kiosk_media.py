@@ -1158,6 +1158,9 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     поля = kiosk_core.вписать_цену_клиенту(
         поля, посылка, kiosk_core.ответ_о_цене((медиа or {}).get("quote")),
         колонкой=await _есть_колонка("devices", "price_client"))
+    # Номер модели — как у сделки, заведённой в боте: из её справочника по началу IMEI.
+    # Нет в справочнике — остаётся то, что прислала касса (номер из базы IMEI) или пусто.
+    поля["code_name"] = await _номер_модели(посылка) or поля.get("code_name")
     # Циклы батареи — новая колонка devices. Пока её не добавили, в сделку не кладём:
     # иначе вставка падала бы на всех точках из-за поля, без которого сделка обходилась.
     if not await _есть_колонка("devices", "akb_cycles"):
@@ -1218,6 +1221,28 @@ async def _вставить(посылка: dict, медиа, нажал=None) -
     return {"id": int(device_id), "статус": статус, "цена": цена,
             "оценщик": имя or _имя(нажал), "точка": await _имя_точки(shop_id),
             "lang": (оценщик or {}).get("lang") or "ru"}
+
+
+async def _номер_модели(посылка: dict):
+    """Номер модели («A2890») по началу IMEI — из справочника самой Оценки, того же, по
+    которому его получает сделка, заведённая в боте (imei_api: phone_tac → phone_codenames).
+
+    Только чтение, и сделку оно не держит: справочник не ответил или такого начала в нём
+    нет — возвращаем пусто, сделка создаётся без номера модели."""
+    for начало in kiosk_core.начала_imei(посылка):
+        try:
+            async with async_session_factory() as session:
+                номер = (await session.execute(text(
+                    "SELECT c.code_name FROM phone_tac t "
+                    "JOIN phone_codenames c ON c.id = t.code_name_id "
+                    "WHERE t.tac = :t LIMIT 1"), {"t": начало})).scalar()
+        except Exception as exc:                                 # noqa: BLE001
+            logging.getLogger(__name__).warning("kiosk: справочник моделей не ответил: %s", exc)
+            return None
+        номер = str(номер or "").strip()[:kiosk_core.ПРЕДЕЛЫ["code_name"]]
+        if номер:
+            return номер
+    return None
 
 
 async def _автоцена(device_id: int):

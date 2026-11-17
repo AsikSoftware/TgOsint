@@ -86,6 +86,9 @@ def build(root):
         "модель": MODELS.get(pt, f"{pt} — модель не в справочнике"),
         "код_модели": pt,
         "номер_модели": mn,
+        # «A2890» с задней крышки: по кабелю его отдаёт только MobileGestalt и только на
+        # старых iOS — дописывает report.build; чаще он приходит из базы IMEI
+        "номер_a": None,
         "регион": region_from_model_number(mn),
         "серийник": txt(r.get("SerialNumber")),
         "серийник_платы": txt(r.get("MLBSerialNumber")),

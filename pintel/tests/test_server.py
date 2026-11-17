@@ -373,6 +373,37 @@ def test_ocenka_import_field_mapping():
     assert oi.staff_list() == []   # Оценка выключена в тестах → список сотрудников пуст
 
 
+def test_ocenka_import_writes_the_model_number_not_apples_factory_code():
+    """`devices.code_name` Оценки — номер модели («A2403»), её справочник знает его по
+    началу IMEI. Наш `model_code` («iPhone13,2») — заводской код, и в сделку он не идёт."""
+    from sqlalchemy import create_engine, text as sqltext
+    from sqlalchemy.pool import StaticPool
+    from pintel_server.services import ocenka_import as oi
+
+    движок = create_engine("sqlite://", poolclass=StaticPool,
+                           connect_args={"check_same_thread": False})
+    with движок.begin() as conn:
+        conn.execute(sqltext("CREATE TABLE phone_codenames (id INTEGER, phone_id INTEGER, code_name TEXT)"))
+        conn.execute(sqltext("CREATE TABLE phone_tac (id INTEGER, code_name_id INTEGER, tac TEXT)"))
+        conn.execute(sqltext("INSERT INTO phone_codenames VALUES (5, 1, 'A2403')"))
+        conn.execute(sqltext("INSERT INTO phone_tac VALUES (1, 5, '35391510')"))
+    ev = Evaluation(imei="353915105357912", model_name="iPhone 12", model_code="iPhone13,2",
+                    report={"паспорт": {"imei2": "356789012345678"}})
+    assert oi._номер_модели(движок, ev) == "A2403"
+
+    # начала IMEI в справочнике нет — номер из базы IMEI, а нет и его — пусто
+    ev.imei = "359999999999999"
+    assert oi._номер_модели(движок, ev) is None
+    ev.report = {"паспорт": {}, "sickw": {"все_поля": {"Model": "IPHONE 12 A2403"}}}
+    assert oi._номер_модели(движок, ev) == "A2403"
+
+    # справочника нет вовсе (старая база) — импорт на этом не падает
+    пустой = create_engine("sqlite://", poolclass=StaticPool,
+                           connect_args={"check_same_thread": False})
+    ev.report = {}
+    assert oi._номер_модели(пустой, ev) is None
+
+
 def test_references_collect_themselves_from_every_phone(app):
     """Эталон собирается сам с каждого телефона: киоск уже прислал слепок с сырым журналом
     Apple, а сверка сотрудника — та же правда с экрана. Выгрузка обезличена, ценное идёт

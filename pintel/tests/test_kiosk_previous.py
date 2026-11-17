@@ -209,6 +209,8 @@ def test_a_phone_that_thinks_about_find_my_forever_does_not_hold_the_check():
     не ждёт: он спрашивается на отдельном соединении и недолго, а главный ответ уже пришёл
     в корневом домене. Раньше этот вопрос шёл по общему соединению и без предела."""
     import time
+    pytest.importorskip("PySide6")               # на сборочной машине сервера Qt нет
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from pintel_kiosk import worker
 
     class Молчит(ФейкЗамок):

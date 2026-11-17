@@ -339,10 +339,14 @@ async def _читать_домены(ld, quality, связь, соединить
                     if v:
                         domains[dom] = v
                 except Exception as e:                            # noqa: BLE001
-                    quality["не_прочиталось"][dom] = f"{type(e).__name__}: {e}"
+                    почему = f"{type(e).__name__}: {e}"
+                    if dom in ВАЖНЫЕ_ДОМЕНЫ:
+                        quality["не_прочиталось"][dom] = почему
+                    else:                                         # отчёту не нужен — см. `не_спросили`
+                        quality.setdefault("домены_с_ошибкой", {})[dom] = почему[:160]
                     await _закрыть_соединение(бок)                # соединение могло умереть
                     бок = None
-                    await связь.сорвалось(dom, quality["не_прочиталось"][dom])
+                    await связь.сорвалось(dom, почему)            # оборвалась связь — узнаем здесь
             if time.monotonic() - t_dom >= 1.0:
                 медленные[dom] = round(time.monotonic() - t_dom, 1)
     finally:

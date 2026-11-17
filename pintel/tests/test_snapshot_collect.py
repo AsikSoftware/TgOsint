@@ -392,3 +392,27 @@ def test_the_doctor_reads_memory_on_its_own_connection_too(тихо, скоро,
     assert ДИСК not in snap["domains"] and snap["quality"]["память_не_дождались_с"] >= 0
     assert all(с.закрыто for с in выданы)
     assert report_mod.build(snap)["память"]["объём_гб"] == 64, "объём — с контроллера"
+
+
+def test_an_error_on_a_domain_the_report_does_not_need_keeps_the_check_complete(тихо, скоро):
+    """Боковое соединение ответило ошибкой на домен «на всякий случай» — проверка от этого
+    неполной не становится: ошибка записана в слепке, чтение идёт дальше на новом соединении.
+    А обрыв самой связи по-прежнему ловится: две ошибки связи подряд — и проба общего соединения."""
+    т = Телефон()
+    выданы = []
+
+    class Ломается(Боковое):
+        async def get_value(self, domain=None, key=None):
+            if domain == ЗАВИСАЕТ:
+                raise RuntimeError("LockdownError: GetProhibited")
+            return await super().get_value(domain, key)
+
+    async def соединить():
+        выданы.append(Ломается(т))
+        return выданы[-1]
+    snap = asyncio.run(snapshot.collect(т, т, память=False, соединить=соединить))
+    assert ЗАВИСАЕТ not in snap["quality"]["не_прочиталось"]
+    assert "GetProhibited" in snap["quality"]["домены_с_ошибкой"][ЗАВИСАЕТ]
+    assert len(выданы) == 2 and all(с.закрыто for с in выданы)
+    assert "com.apple.fairplay" in выданы[1].спрошено, "после ошибки остальные домены дочитаны"
+    assert not any("не прочиталась" in x for x in report_mod.build(snap)["не_прочиталось"])

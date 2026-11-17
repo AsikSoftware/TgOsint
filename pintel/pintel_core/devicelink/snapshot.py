@@ -7,10 +7,24 @@
   node_names  — карта всех узлов IORegistry (имена) — чтобы не угадывать
   nodes       — нужные узлы целиком (батарея, камера, NVMe, …)
   nand_summary — разбор NANDInfo и сверка прошивки с NVMe
-  quality     — повторы, устаревшие первые чтения, тайминги, что не прочиталось
+  quality     — повторы, тайминги, что не прочиталось
 
-Двойное чтение: disk_usage читается дважды с паузой; если второй снимок
-отличается — берём второй и помечаем «первое чтение устарело».
+Два правила, за которые заплачено на точках (17.11.2026):
+
+* **Про память телефон спрашивают один раз, последним и недолго.** Домен
+  `com.apple.disk_usage` телефон считает на ходу и отвечает когда как: обычно за доли секунды,
+  но бывало 20–45 секунд и больше трёх минут, а повторный вопрос на iOS 27 шёл по 20 секунд
+  каждый раз. Пока он считает, служба `deleted` заваливает журнал телефона тысячами строк в
+  секунду, и в этом потоке теряются строки, которых ждёт касса: процент батареи и записи
+  Apple о деталях. Раньше домен читали в начале и дважды (первый ответ бывает устаревшим —
+  про свободное место), и шаг «Модель и память» стоял всё это время. Сколько памяти занято,
+  владельцу не нужно; из домена нужны только объём для сверки и NANDInfo. Поэтому касса
+  читает его в самом конце проверки, по своему соединению и не дольше нескольких секунд
+  (`ЧтениеДиска`), а объём с первой секунды берётся с контроллера NVMe.
+* **Оборвалась связь — чтение останавливается сразу** (`СвязьПропала`). Раньше оно шло дальше
+  и по три раза с паузами стучалось в мёртвое соединение за каждым из двадцати узлов: шаг
+  крутился 1,5–3,5 минуты и кончался отчётом с «? ГБ». Теперь тот, кто читает, ждёт телефон
+  и начинает заново.
 """
 import asyncio, base64, json, time
 from datetime import datetime
@@ -53,82 +67,202 @@ def loads(text):
                  "ConnectionFailed", "BrokenPipe", "Timeout", "MuxException", "OSError", "EOF")
 
 
-async def _retry(fn, name, quality, tries=3, delays=(0.7, 1.5, 2.5)):
+class СвязьПропала(RuntimeError):
+    """Соединение с телефоном оборвалось посреди чтения: по нему больше ничего не прочитать.
+    Тот, кто читает, должен дождаться телефона и начать слепок заново."""
+
+
+class Остановлено(RuntimeError):
+    """Чтение отменили снаружи: телефон отключили или сделку закрыли."""
+
+
+def _обрыв(текст) -> bool:
+    return any(k in str(текст) for k in СВЯЗЬ_МИГНУЛА)
+
+
+class _Связь:
+    """Следит за чтением и отличает моргнувшую связь от оборванной.
+
+    Одна сорвавшаяся по связи попытка — бывает, её перечитывают. Две подряд, без единого
+    удачного чтения между ними, — повод спросить прямо: живо ли соединение? Спрашиваем тем,
+    что у исправного телефона отвечает всегда (`проба`). Не ответило — `СвязьПропала`.
+    У исправных телефонов ошибок связи при чтении не бывает вовсе (боевые слепки за 60 дней
+    и все эталоны: в «не прочиталось» только «пусто»), так что ложной тревоги тут нет."""
+
+    ПОДРЯД = 2
+
+    def __init__(self, проба=None, жив=None):
+        self.проба, self.жив, self.подряд = проба, жив, 0
+
+    def проверить(self):
+        """Между чтениями: не отменили ли нас. Иначе отменённое чтение дочитывало телефон до
+        конца и рисовало свои шаги поверх новой проверки."""
+        if self.жив is not None and not self.жив():
+            raise Остановлено("чтение отменено")
+
+    def удалось(self):
+        self.подряд = 0
+
+    async def сорвалось(self, имя, текст):
+        if not _обрыв(текст):
+            return
+        self.подряд += 1
+        if self.подряд < self.ПОДРЯД:
+            return
+        if self.проба is not None:
+            try:
+                if await asyncio.wait_for(self.проба(), 5):
+                    self.подряд = 0              # соединение живо — не дался только этот запрос
+                    return
+            except Exception:                    # noqa: BLE001 — проба не прошла: связи нет
+                pass
+        raise СвязьПропала(f"{имя}: {str(текст)[:160]}")
+
+
+async def _retry(fn, name, quality, tries=3, delays=(0.7, 1.5, 2.5), связь=None):
     last = None
     for i in range(tries):
+        if связь is not None:
+            связь.проверить()
         try:
             r = await fn()
             if r:
                 if i:
                     quality["повторы"][name] = i + 1
+                if связь is not None:
+                    связь.удалось()
                 return r
             last = "пусто"
+        except (СвязьПропала, Остановлено):
+            raise
         except Exception as e:
             last = f"{type(e).__name__}: {e}"
+            if связь is not None:
+                await связь.сорвалось(name, last)
         await asyncio.sleep(delays[min(i, len(delays) - 1)])
     quality["не_прочиталось"][name] = str(last)
     return None
 
 
-def _nand_stamp(dom):
-    blob = (dom or {}).get("NANDInfo")
-    if not blob:
-        return None
-    recs, _ = nand.parse(blob)
-    return recs.get(0x039, [None])[0]
+ДОМЕН_ДИСКА = "com.apple.disk_usage"
 
 
-async def collect(ld, diag, log=lambda *a: None):
+class ЧтениеДиска:
+    """Ответ телефона про память, который читается в стороне от основного слепка.
+
+    `соединить` — корутина без аргументов, дающая СВОЁ соединение lockdown с тем же
+    телефоном. Своё — потому что телефон может считать ответ минутами, а бросить ждать ответ
+    на общем соединении нельзя: он придёт позже и будет прочитан как ответ на следующий
+    вопрос. Своё соединение просто закрывают."""
+
+    def __init__(self, соединить):
+        """Чтение начинается сразу, в стороне; забирают его через `вложить`."""
+        self._соединить, self._соединение = соединить, None
+        self.начато, self.готово_за, self.ответ, self.беда = time.monotonic(), None, None, ""
+        self._задача = asyncio.ensure_future(self._читать())
+
+    async def _читать(self):
+        try:
+            self._соединение = await self._соединить()
+            self.ответ = await self._соединение.get_value(domain=ДОМЕН_ДИСКА) or None
+            self.готово_за = round(time.monotonic() - self.начато, 2)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:                                    # noqa: BLE001
+            self.беда = f"{type(e).__name__}: {str(e)[:120]}"
+        return self.ответ
+
+    async def вложить(self, snap: dict, ждать: float = 0.0) -> bool:
+        """Положить ответ в слепок, если он пришёл или придёт за `ждать` секунд. → пришёл ли.
+
+        Не пришёл — в `quality` остаётся, сколько ждали: отчёт скажет, что объём взят с
+        контроллера и с диском не сверен."""
+        if not self._задача.done() and ждать > 0:
+            await asyncio.wait({self._задача}, timeout=ждать)
+        кач = snap.setdefault("quality", {})
+        if self._задача.done() and self.ответ:
+            snap.setdefault("domains", {})[ДОМЕН_ДИСКА] = self.ответ
+            кач.setdefault("время_с", {})["диск"] = self.готово_за
+            кач.pop("память_не_дождались_с", None)
+            if self.ответ.get("NANDInfo"):
+                nv_fw = txt(deep((snap.get("nodes") or {}).get("nvme") or {}, "Firmware Revision"))
+                snap["nand_summary"] = nand.summarize(self.ответ["NANDInfo"], nv_fw)
+            return True
+        кач["память_не_дождались_с"] = round(time.monotonic() - self.начато, 1)
+        if self.беда:
+            кач["память_беда"] = self.беда
+        return False
+
+    async def закрыть(self):
+        """Больше не ждём: бросаем чтение и закрываем его соединение."""
+        if not self._задача.done():
+            self._задача.cancel()
+            try:
+                await self._задача
+            except BaseException:                                 # noqa: BLE001
+                pass
+        if self._соединение is not None:
+            try:
+                итог = self._соединение.close()
+                if asyncio.iscoroutine(итог):
+                    await итог
+            except Exception:                                     # noqa: BLE001
+                pass
+            self._соединение = None
+
+
+async def collect(ld, diag, log=lambda *a: None, жив=None, память=True):
+    """Слепок телефона. `жив()` — не отменили ли чтение. `память=False` — про память не
+    спрашивать вовсе: касса делает это сама, в конце проверки (`ЧтениеДиска`). Иначе (доктор,
+    тесты) память читается здесь же — один раз и последней.
+
+    Бросает `СвязьПропала`, если соединение оборвалось, и `Остановлено`, если отменили."""
     t0 = time.monotonic()
     quality = {"повторы": {}, "не_прочиталось": {}, "устарело": [], "время_с": {}}
 
+    async def проба():
+        # то же, чем `open_diagnostics` проверяет готовность: узел батареи есть у любого iPhone
+        return bool(await diag.ioregistry(name="AppleSmartBattery")) and bool(await ld.get_value(key="ProductType"))
+    связь = _Связь(проба, жив)
+
     log("паспорт…")
-    root = await _retry(lambda: ld.get_value(), "root", quality) or {}
+    root = await _retry(lambda: ld.get_value(), "root", quality, связь=связь) or {}
     quality["время_с"]["паспорт"] = round(time.monotonic() - t0, 2)
 
     log("домены…")
     t = time.monotonic()
     domains = {}
+    медленные = {}
     for dom in DOMAINS:
+        if dom == ДОМЕН_ДИСКА:
+            continue                             # про память — отдельно и не дожидаясь, см. ниже
+        связь.проверить()
+        t_dom = time.monotonic()
         try:
             v = await ld.get_value(domain=dom)
+            связь.удалось()
             if v:
                 domains[dom] = v
         except Exception as e:
             quality["не_прочиталось"][dom] = f"{type(e).__name__}: {e}"
+            await связь.сорвалось(dom, quality["не_прочиталось"][dom])
+        if time.monotonic() - t_dom >= 1.0:
+            медленные[dom] = round(time.monotonic() - t_dom, 1)
     quality["время_с"]["домены"] = round(time.monotonic() - t, 2)
-
-    # Двойное чтение disk_usage: первый снимок бывает устаревшим
-    first = domains.get("com.apple.disk_usage") or {}
-    await asyncio.sleep(1.5)
-    try:
-        second = await ld.get_value(domain="com.apple.disk_usage") or {}
-    except Exception:
-        second = {}
-    if second:
-        changed = []
-        cap = num(first.get("TotalDataCapacity")) or 0
-        for k in ("TotalDataAvailable", "TotalDataCapacity"):
-            a, b = num(first.get(k)) or 0, num(second.get(k)) or 0
-            # свободное место гуляет на сотни МБ само по себе — устаревшим считаем сдвиг > 1 %
-            if a != b and (k != "TotalDataAvailable" or not cap or abs(a - b) > cap * 0.01):
-                changed.append(k)
-        if _nand_stamp(first) != _nand_stamp(second):
-            changed.append("NANDInfo/0x039")
-        if changed:
-            quality["устарело"].append({"disk_usage": changed})
-        domains["com.apple.disk_usage"] = second
+    if медленные:
+        # какой именно домен телефон отдавал долго — раньше знали только сумму по всем
+        quality["медленные_домены"] = медленные
 
     # Второй заход за тем, без чего отчёт неполон. Домены читались ровно один раз, и одного
-    # моргнувшего USB хватало, чтобы память стала «? ГБ», а «Найти iPhone» — «не определился»:
-    # в отчёт это уезжало как незнание, хотя телефон всё это время лежал на кабеле.
-    # Перечитываем только то, что сорвалось по связи: если домена на этой iOS просто нет,
-    # повторять нечего и ждать сотрудника незачем.
-    for dom in ("com.apple.disk_usage", "com.apple.mobile.battery", "com.apple.fmip"):
+    # моргнувшего USB хватало, чтобы «Найти iPhone» стал «не определился»: в отчёт это уезжало
+    # как незнание, хотя телефон всё это время лежал на кабеле. Перечитываем только то, что
+    # сорвалось по связи: если домена на этой iOS просто нет, повторять нечего.
+    for dom in ("com.apple.mobile.battery", "com.apple.fmip"):
         почему = quality["не_прочиталось"].get(dom) or ""
-        if domains.get(dom) or not any(k in почему for k in СВЯЗЬ_МИГНУЛА):
+        if domains.get(dom) or not _обрыв(почему):
             continue
-        v = await _retry(lambda d=dom: ld.get_value(domain=d), dom, quality, tries=2, delays=(0.8, 2.0))
+        v = await _retry(lambda d=dom: ld.get_value(domain=d), dom, quality, tries=2, delays=(0.8, 2.0),
+                         связь=связь)
         if v:
             domains[dom] = v
             quality["не_прочиталось"].pop(dom, None)
@@ -136,7 +270,7 @@ async def collect(ld, diag, log=lambda *a: None):
 
     log("карта узлов…")
     t = time.monotonic()
-    tree = await _retry(lambda: diag.ioregistry(plane="IOService"), "ioreg:IOService", quality)
+    tree = await _retry(lambda: diag.ioregistry(plane="IOService"), "ioreg:IOService", quality, связь=связь)
     names = collect_entry_names(tree) if tree else set()
     quality["время_с"]["карта"] = round(time.monotonic() - t, 2)
     quality["узлов_в_карте"] = len(names)
@@ -145,7 +279,8 @@ async def collect(ld, diag, log=lambda *a: None):
     # любой модели попадают в слепок, даже если мы о них ещё не знаем.
     log("дерево устройств…")
     t = time.monotonic()
-    dtree = await _retry(lambda: diag.ioregistry(plane="IODeviceTree"), "ioreg:IODeviceTree", quality, tries=2)
+    dtree = await _retry(lambda: diag.ioregistry(plane="IODeviceTree"), "ioreg:IODeviceTree", quality, tries=2,
+                         связь=связь)
     quality["время_с"]["дерево"] = round(time.monotonic() - t, 2)
     names_all = set(names) | (collect_entry_names(dtree) if dtree else set())
 
@@ -163,12 +298,12 @@ async def collect(ld, diag, log=lambda *a: None):
             nodes[name] = None
             quality["нет_в_карте"].append(name)
             continue
-        nodes[name] = await _retry(lambda n=name: diag.ioregistry(name=n), name, quality)
+        nodes[name] = await _retry(lambda n=name: diag.ioregistry(name=n), name, quality, связь=связь)
     nodes["prox"] = None
     for n in pick_names(names_all, PROX_RE, PROX_FALLBACK):
         if names_all and n not in names_all:
             continue
-        v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2)
+        v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2, связь=связь)
         if v:
             nodes["prox"] = v
             quality["prox_узел"] = n
@@ -176,7 +311,7 @@ async def collect(ld, diag, log=lambda *a: None):
     for key, cands in (("camera", cam_names), ("nvme", nvme_names)):
         nodes[key] = None
         for n in cands:
-            v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2)
+            v = await _retry(lambda n=n: diag.ioregistry(name=n), n, quality, tries=2, связь=связь)
             if v:
                 nodes[key] = v
                 quality[f"{key}_узел"] = n
@@ -205,6 +340,7 @@ async def collect(ld, diag, log=lambda *a: None):
     # MobileGestalt — лучшим доступным каналом: diagnostics до iOS 17.4, а на 17.4+
     # через userspace-туннель CoreDevice (без прав администратора; тот же канал, что у
     # 3uTools). Печать деталей, серийники модулей, цвета корпуса — без действий клиента.
+    связь.проверить()
     log("MobileGestalt…")
     t = time.monotonic()
     serial = txt((root or {}).get("UniqueDeviceID")) or None
@@ -224,6 +360,7 @@ async def collect(ld, diag, log=lambda *a: None):
     quality["mobilegestalt_канал"] = mg_res.get("канал")
     quality["время_с"]["mobilegestalt"] = round(time.monotonic() - t, 2)
 
+    связь.проверить()
     log("джейлбрейк…")
     t = time.monotonic()
     jb = await jailbreak.probe(ld)
@@ -239,10 +376,19 @@ async def collect(ld, diag, log=lambda *a: None):
     mdm_info = await mdm.probe(ld)
     quality["время_с"]["mdm"] = round(time.monotonic() - t, 2)
 
-    # NANDInfo: разбор и сверка прошивки с NVMe-контроллером
-    disk = domains.get("com.apple.disk_usage") or {}
-    nv_fw = txt(deep(nodes.get("nvme") or {}, "Firmware Revision"))
-    nand_summary = nand.summarize(disk.get("NANDInfo"), nv_fw) if disk.get("NANDInfo") else {}
+    связь.проверить()
+    nand_summary = {}
+    if память:
+        log("память…")
+        t = time.monotonic()
+        disk = await _retry(lambda: ld.get_value(domain=ДОМЕН_ДИСКА), ДОМЕН_ДИСКА, quality, tries=2,
+                            delays=(0.8, 2.0), связь=связь) or {}
+        if disk:
+            domains[ДОМЕН_ДИСКА] = disk
+        quality["время_с"]["диск"] = round(time.monotonic() - t, 2)
+        # NANDInfo: разбор и сверка прошивки с NVMe-контроллером
+        if disk.get("NANDInfo"):
+            nand_summary = nand.summarize(disk["NANDInfo"], txt(deep(nodes.get("nvme") or {}, "Firmware Revision")))
 
     quality["время_с"]["всего"] = round(time.monotonic() - t0, 2)
     return {

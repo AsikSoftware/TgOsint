@@ -119,6 +119,14 @@ async def connect(serial=None, trust_timeout=0.0):
     return st
 
 
+async def второе_соединение(ld):
+    """Ещё одно соединение lockdown с тем же телефоном — под вопрос, ответ на который телефон
+    может считать долго (память). Сопряжение уже есть, диалога «Доверять» не будет."""
+    return await create_using_usbmux(
+        serial=getattr(ld, "udid", None) or None, autopair=False, label="PintelKiosk",
+        pairing_records_cache_folder=pair_records_dir())
+
+
 async def wait_ready(poll=1.5, on_status=None, deadline=None):
     """Цикл ожидания до READY. on_status(LinkStatus) зовётся при смене состояния."""
     last = None

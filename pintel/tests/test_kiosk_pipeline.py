@@ -43,6 +43,31 @@ class FakeListener:
     async def stop(self): self.stopped = True
 
 
+class ФейкСоединение:
+    """Отдельное соединение с телефоном под вопрос о памяти: отвечает сразу или через `ждать` с."""
+
+    def __init__(self, диск, ждать=0.0):
+        self.диск, self.ждать, self.спрошено, self.закрыто = диск, ждать, [], False
+
+    async def get_value(self, domain=None, key=None):
+        self.спрошено.append(domain)
+        if self.ждать:
+            await asyncio.sleep(self.ждать)
+        return self.диск
+
+    async def close(self):
+        self.закрыто = True
+
+
+def _без_диска(snap):
+    """Слепок, каким его теперь отдаёт касса: про память в нём ещё не спрашивали."""
+    копия = dict(snap)
+    копия["domains"] = {k: v for k, v in (snap.get("domains") or {}).items() if k != "com.apple.disk_usage"}
+    копия["quality"] = dict(snap.get("quality") or {})
+    копия["nand_summary"] = {}
+    return копия
+
+
 class FakeClient:
     enabled = True
     local_sickw = False
@@ -60,10 +85,13 @@ def fake_core(monkeypatch):
     snap.pop("repair_history", None)
     async def wait_ready(on_status=None, deadline=None): return FakeStatus()
     async def open_diag(ld): return object(), 1
-    async def collect(ld, diag, log=None): return json.loads(json.dumps(snap, default=str)) if False else dict(snap)
+    async def collect(ld, diag, log=None, **kw): return _без_диска(snap) if kw.get("память") is False else dict(snap)
     monkeypatch.setattr(worker.connect, "wait_ready", wait_ready)
     monkeypatch.setattr(worker.connect, "open_diagnostics", open_diag)
     monkeypatch.setattr(worker.snapshot, "collect", collect)
+    # про память касса спрашивает сама, в конце и по отдельному соединению — здесь оно подставное
+    async def второе(ld): return ФейкСоединение(snap["domains"].get("com.apple.disk_usage"))
+    monkeypatch.setattr(worker.connect, "второе_соединение", второе)
     listeners = []
     def mk(ld, log=None, **kw):
         l = FakeListener(ld); listeners.append(l); return l
@@ -171,7 +199,7 @@ def test_pipeline_skips_history_wait_on_unsupported_model(fake_core, monkeypatch
     snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"), encoding="utf-8").read())
     snap.pop("repair_history", None)
     snap["root"]["ProductType"] = "iPhone10,6"
-    async def collect(ld, diag, log=None): return dict(snap)
+    async def collect(ld, diag, log=None, **kw): return dict(snap)
     monkeypatch.setattr(worker.snapshot, "collect", collect)
     client = FakeClient()
     p = worker.Pipeline({"apple_history_seconds": 30, "currency": "₸", "sickw": False}, client, None)
@@ -354,7 +382,7 @@ def _прошлая_обстановка(fake_core, monkeypatch, tmp_path):
     monkeypatch.setattr(worker.connect, "wait_ready", wait_ready)
     читали = []
 
-    async def collect(ld, diag, log=None):
+    async def collect(ld, diag, log=None, **kw):
         читали.append(1)
         return dict(snap)
 
@@ -424,3 +452,127 @@ def test_a_changed_phone_is_read_again_even_if_the_report_is_fresh(fake_core, mo
     события, итоги = _прогнать(p)
     assert итоги and читали, события
     assert "повторная_проверка" not in итоги[0]["report"]
+
+
+# ---------------------------------------------------------------- шаг «Модель и память» не зависает
+
+def _слепок_из_файла():
+    return snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
+                               encoding="utf-8").read())
+
+
+def test_the_phone_is_asked_about_memory_once_at_the_very_end(fake_core, monkeypatch):
+    """Про память телефон отвечает когда как (бывало по три минуты), и пока он считает, его
+    журнал завален чужими строками. Поэтому касса спрашивает один раз, в самом конце и по
+    отдельному соединению: объём к тому времени уже известен с контроллера, а ответ нужен
+    только для сверки. Сам слепок про память не спрашивает вовсе."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    вызовы, соединения = [], []
+
+    async def collect(ld, diag, log=None, **kw):
+        вызовы.append(kw)
+        return _без_диска(snap)
+
+    async def второе(ld):
+        соединения.append(ФейкСоединение(snap["domains"]["com.apple.disk_usage"]))
+        return соединения[-1]
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    monkeypatch.setattr(worker.connect, "второе_соединение", второе)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    события, итоги = _прогнать(p)
+    assert итоги and not [с for с in события if с[0] == "failed"], события
+    assert вызовы and вызовы[0].get("память") is False, "слепок не должен спрашивать про память"
+    assert len(соединения) == 1 and соединения[0].спрошено == ["com.apple.disk_usage"], "спросили один раз"
+    assert соединения[0].закрыто, "отдельное соединение закрыто"
+    rep = итоги[0]["report"]
+    assert rep["память"]["объём_гб"] == 64 and rep["память"]["диск_гб"] == 64
+    # объём был на экране сразу после слепка — с контроллера, ещё до вопроса про память
+    assert [т for к, с, т in события if к == "passport" and с == "done"][0].endswith("64 ГБ")
+    p.cancel.set()
+    p.wait(3000)
+
+
+def test_a_phone_slow_to_answer_about_memory_does_not_hold_the_check(fake_core, monkeypatch):
+    """Телефон считает ответ про память дольше, чем касса готова ждать. Проверка идёт дальше:
+    объём — с контроллера NVMe, в отчёте служебной строкой сказано, что с диском он не сверен.
+    Автоцену это не отменяет: в «не прочиталось» такая проверка не попадает."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+
+    async def второе(ld):
+        return ФейкСоединение(snap["domains"]["com.apple.disk_usage"], ждать=30)
+    monkeypatch.setattr(worker.connect, "второе_соединение", второе)
+    monkeypatch.setattr(worker, "ЖДАТЬ_ПАМЯТЬ", 0.3)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    начало = time.monotonic()
+    события, итоги = _прогнать(p)
+    assert итоги and time.monotonic() - начало < 8, "проверка ждала телефон"
+    rep = итоги[0]["report"]
+    assert rep["память"]["объём_гб"] == 64 and rep["память"]["диск_гб"] is None
+    assert any("не ответил про память" in x for x in rep["служебное"]), rep["служебное"]
+    assert not any("память" in str(x).lower() for x in rep["не_прочиталось"]), rep["не_прочиталось"]
+    p.cancel.set()
+    p.wait(3000)
+
+
+def test_a_dropped_link_restarts_the_reading_instead_of_hanging(fake_core, monkeypatch):
+    """Связь по кабелю оборвалась посреди чтения. Касса не стучится в мёртвое соединение
+    (раньше — 1,5–3,5 минуты и отчёт с «? ГБ»), а ждёт телефон и читает заново; сотрудник
+    видит это словами на шаге."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    чтения = []
+
+    async def collect(ld, diag, log=None, **kw):
+        чтения.append(1)
+        if len(чтения) == 1:
+            raise snapshot.СвязьПропала("ioreg:IOService: ConnectionTerminatedError")
+        return _без_диска(snap)
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    события, итоги = _прогнать(p)
+    assert итоги and len(чтения) == 2, события
+    подписи = [т for к, с, т in события if к == "passport" and с == "run"]
+    assert any("связь пропала" in т for т in подписи) and any("читаем заново" in т for т in подписи), подписи
+    assert итоги[0]["report"]["память"]["объём_гб"] == 64
+    p.cancel.set()
+    p.wait(3000)
+
+
+def test_a_link_that_keeps_dropping_is_named_and_the_check_stops(fake_core, monkeypatch):
+    """Связь рвётся раз за разом — после третьей попытки касса говорит это словами: менять
+    кабель или порт. Полупустого результата при этом нет."""
+    QCoreApplication.instance() or QCoreApplication([])
+    чтения = []
+
+    async def collect(ld, diag, log=None, **kw):
+        чтения.append(1)
+        raise snapshot.СвязьПропала("com.apple.mobile.battery: DeviceNotFoundError")
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    события, итоги = _прогнать(p)
+    assert not итоги and len(чтения) == worker.ЧТЕНИЙ == 3
+    отказы = [т for к, т, _ in события if к == "failed"]
+    assert отказы and "кабель" in отказы[0] and "порт" in отказы[0], события
+    assert not [с for с in события if с[0] == "passport" and с[1] == "done"]
+
+
+def test_a_cancelled_reading_draws_nothing_and_gives_no_result(fake_core, monkeypatch):
+    """Чтение отменили (телефон отключили, окно начало новую проверку). Старое чтение обязано
+    замолчать: раньше оно дочитывало до конца и рисовало свои шаги и свой результат поверх
+    новой проверки."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+
+    async def collect(ld, diag, log=None, **kw):
+        p.cancel.set()                       # отмена приходит, пока идёт слепок
+        if not kw["жив"]():
+            raise snapshot.Остановлено("чтение отменено")
+        return _без_диска(snap)
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    события, итоги = _прогнать(p, таймаут=2500)
+    assert not итоги and not [с for с in события if с[0] == "failed"], события
+    assert not [с for с in события if с[0] == "passport" and с[1] == "done"], события
+    assert not [с for с in события if с[0] in ("battery", "locks", "apple", "upload")], события

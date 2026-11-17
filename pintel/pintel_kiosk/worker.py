@@ -140,11 +140,19 @@ def проверить_рфс(cfg, имеи, step):
 # Сколько секунд после чтения слепка ждать, пока телефон сам назовёт процент батареи. На
 # кабеле powerd печатает его раз в 20 секунд (iOS 14 и новее), так что за 25 первая строка
 # приходит наверняка; быстрая проверка без этого заканчивалась раньше неё.
-# Отсчёт — от КОНЦА слепка, а не от подключения: пока читается занятое место, служба
-# `deleted` на телефоне заваливает журнал (iPhone 12, 12.11.2026 — до 12 тысяч строк в
-# секунду), и касса на точке получает из этого потока малую часть — строка powerd в нём
-# терялась (проверка 57: 47 секунд слепка, 49 тысяч строк, ни одной от powerd).
+# Отсчёт — от КОНЦА слепка, а не от подключения. Когда слепок спрашивал телефон про занятое
+# место, служба `deleted` заваливала журнал (iPhone 12, 12.11.2026 — до 12 тысяч строк в
+# секунду), и строка powerd в этом потоке терялась (проверка 57: 47 секунд слепка, 49 тысяч
+# строк, ни одной от powerd). С 17.11.2026 про память спрашиваем после того, как процент
+# батареи уже услышан, — см. `_добрать_память`.
 ЖДАТЬ_БАТАРЕЮ = 25
+# Сколько секунд в самом конце проверки ждать ответ телефона про память. Обычно он приходит
+# за доли секунды; телефон, который считает дольше, не ждём — объём уже взят с контроллера.
+ЖДАТЬ_ПАМЯТЬ = 6
+# Связь оборвалась посреди чтения: сколько раз начинать слепок заново и сколько секунд ждать,
+# пока телефон вернётся на кабель.
+ЧТЕНИЙ = 3
+ЖДАТЬ_ТЕЛЕФОН_С = 25
 
 
 class Pipeline(QThread):
@@ -169,6 +177,7 @@ class Pipeline(QThread):
         self._listener = None                         # чтобы закрыть канал к телефону снаружи
         self._loop = None
         self._слепок_готов_в = None                   # от этого момента ждём процент батареи
+        self._ld = None                               # соединение, которым дочитали слепок
 
     def run(self):
         try:
@@ -372,17 +381,87 @@ class Pipeline(QThread):
             return False, "пароль на телефоне изменился"
         return True, ""
 
-    async def _flow(self, ld, st, listener):
-        diag, tries = await connect.open_diagnostics(ld)
-        self._step("passport", "run")
-        snap = await snapshot.collect(ld, diag)
-        self._слепок_готов_в = time.monotonic()
-        snap["quality"]["диагностика_попыток"] = tries
-        snap["quality"]["подключение"] = st.timings
+    async def _дождаться_телефона(self):
+        """Связь оборвалась посреди чтения — ждём, пока телефон вернётся на кабель.
+        → новое соединение; None — отменили или не дождались (тогда `failed` уже сказан)."""
+        до = time.monotonic() + ЖДАТЬ_ТЕЛЕФОН_С
+        while not self.cancel.is_set():
+            st = await connect.wait_ready(deadline=time.monotonic() + 2.0)
+            if st.state == READY:
+                return st.lockdown
+            if time.monotonic() > до:
+                self.failed.emit("связь с телефоном пропала и не вернулась — проверьте кабель и порт")
+                return None
+            await asyncio.sleep(0.5)
+        return None
+
+    async def _прочитать_телефон(self, ld):
+        """Слепок телефона. Оборвалась связь — ждём телефон и читаем заново, до `ЧТЕНИЙ` раз.
+
+        Раньше чтение на оборванной связи шло дальше: по три раза с паузами стучалось в
+        мёртвое соединение за каждым из двадцати узлов. Шаг «Модель и память» крутился
+        1,5–3,5 минуты и кончался отчётом с «? ГБ» — на точке 16/38 так кончалось каждое
+        третье чтение. → (слепок, попыток диагностики) или (None, 0), если отменили."""
+        for попытка in range(1, ЧТЕНИЙ + 1):
+            diag = None
+            try:
+                diag, tries = await connect.open_diagnostics(ld)
+                if self.cancel.is_set():
+                    return None, 0
+                self._step("passport", "run", "" if попытка == 1 else f"читаем заново · попытка {попытка}")
+                # про память здесь не спрашиваем: телефон отвечает на это когда как, а объём
+                # и так есть с контроллера — спросим в самом конце (`_добрать_память`)
+                snap = await snapshot.collect(ld, diag, жив=lambda: not self.cancel.is_set(), память=False)
+                snap["quality"]["диагностика_попыток"] = tries
+                if попытка > 1:
+                    snap["quality"]["чтений_из_за_обрыва"] = попытка
+                self._ld = ld
+                return snap, tries
+            except snapshot.Остановлено:
+                return None, 0
+            except snapshot.СвязьПропала as e:
+                log_line(f"чтение оборвалось (попытка {попытка} из {ЧТЕНИЙ}): {e}")
+                if попытка == ЧТЕНИЙ:
+                    self.failed.emit("связь с телефоном рвётся — замените кабель или переставьте в другой порт")
+                    return None, 0
+                self._step("passport", "run", "связь пропала — поправьте кабель")
+                ld = await self._дождаться_телефона()
+                if ld is None:
+                    return None, 0
+            finally:
+                if diag is not None:
+                    try:
+                        await diag.close()
+                    except Exception:                            # noqa: BLE001
+                        pass
+        return None, 0
+
+    async def _добрать_память(self, snap) -> None:
+        """Спросить телефон про память — один раз, в самом конце и недолго.
+
+        В конце — потому что, пока телефон считает ответ, его журнал завален строками службы
+        `deleted`, и в этом потоке терялись процент батареи и записи Apple. Недолго — потому
+        что объём уже известен с контроллера, а «сколько занято» владельцу не нужно: ответ
+        нужен только для сверки объёма. Не успел — идём дальше, в отчёте об этом сказано."""
+        if self.cancel.is_set() or self._ld is None:
+            return
+        ld = self._ld
+        диск = snapshot.ЧтениеДиска(lambda: connect.второе_соединение(ld))
         try:
-            await diag.close()
-        except Exception:                                        # noqa: BLE001
-            pass
+            if not await диск.вложить(snap, ждать=ЖДАТЬ_ПАМЯТЬ):
+                log_line(f"память: телефон не ответил за {ЖДАТЬ_ПАМЯТЬ} с — объём с контроллера, "
+                         f"с диском не сверен" + (f" ({диск.беда})" if диск.беда else ""))
+        finally:
+            await диск.закрыть()
+
+    async def _flow(self, ld, st, listener):
+        snap, tries = await self._прочитать_телефон(ld)
+        if snap is None or self.cancel.is_set():
+            # отменённое чтение ничего не рисует и не отдаёт: иначе его шаги ложились бы
+            # поверх новой проверки, которую окно уже начало
+            return
+        self._слепок_готов_в = time.monotonic()
+        snap["quality"]["подключение"] = st.timings
         rep = report_mod.build(snap)
         pas, bat = rep["паспорт"], rep["батарея"]
         self._step("passport", "done", f"{pas['модель']} · {rep['память'].get('объём_гб') or '?'} ГБ")
@@ -470,7 +549,11 @@ class Pipeline(QThread):
         # прошла быстро. Добираем её и кладём в слепок самое свежее, что слышали.
         await self._дождаться_батареи(listener)
         self._донести_батарею(snap, listener)
+        было_гб = rep["память"].get("объём_гб")
+        await self._добрать_память(snap)
         rep = report_mod.build(snap)
+        if rep["память"].get("объём_гб") != было_гб:
+            self._step("passport", "done", f"{pas['модель']} · {rep['память'].get('объём_гб') or '?'} ГБ")
         h = rep["батарея"].get("здоровье_%")
         self._step("battery", "done" if h is not None else "warn", f"{h} %" if h is not None else "не прочиталась")
         if self.cancel.is_set():
@@ -492,6 +575,10 @@ class Pipeline(QThread):
         else:
             self._step("upload", "done", "отправлено")
         result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial, "out": out}
+        if self.cancel.is_set():
+            # Отменили, пока оценка уходила на сервер: окно уже ведёт новую проверку, и этот
+            # результат лёг бы поверх неё. Оценка при этом сохранена — на диске и на сервере.
+            return
         self.done.emit(result)
         self._reference(snap, rep)                    # эталон с каждого телефона, уже после результата
         if self.cancel.is_set() or not hist_ok:

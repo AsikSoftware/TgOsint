@@ -82,3 +82,41 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "отключённая служба не починилась (код $LASTEXITCODE)" }
           $mux = Test-NetConnection -ComputerName 127.0.0.1 -Port 27015 -WarningAction SilentlyContinue
           if (-not $mux.TcpTestSucceeded) { throw "после починки порт 27015 молчит" }
+      - name: Режим модема iPhone — драйвер виден, отключается и возвращается
+        # Телефон с включённым режимом модема становится для Windows проводной сетью и
+        # перетягивает интернет кассы (pintel_core/devicelink/tether.py). Настоящего драйвера
+        # на чистой Windows нет: его служба Netaapl появляется, когда к компьютеру впервые
+        # подключают такой телефон. Поэтому ставим на её место заглушку с тем же именем и
+        # проверяем настоящими `sc`, что программа её видит, отключает тем же запуском, что
+        # чинит связь, и умеет вернуть. Службу Apple при этом не трогает.
+        shell: pwsh
+        run: |
+          # что видит программа — кодом возврата (10 нет, 11 включён, 12 отключён): русские
+          # слова в выводе exe оболочка сборочной машины читает не в той кодировке
+          function TetherSeen { python -c "import sys; from pintel_core.devicelink import tether; sys.exit({tether.НЕТ: 10, tether.ВКЛЮЧЁН: 11, tether.ОТКЛЮЧЁН: 12}[tether.драйвер()])"; return $LASTEXITCODE }
+          python -c "import sys; from pintel_core.devicelink import tether; sys.exit(0 if tether.сеть_телефона() is None else 1)"
+          if ($LASTEXITCODE -ne 0) { throw "ipconfig read wrong: there is no phone on this machine" }
+          $before = TetherSeen
+          Write-Host "tether driver after the Apple package install: code $before (10 none, 11 enabled, 12 disabled)"
+          $stub = $false
+          if ($before -eq 10) {
+            sc.exe create Netaapl binPath= "C:\Windows\System32\drivers\null.sys" type= kernel start= demand
+            if ($LASTEXITCODE -ne 0) { throw "stub driver service was not created" }
+            $stub = $true
+          } else {
+            & dist\pintel-doctor\pintel-doctor.exe --apple-setup --modem-on
+          }
+          if ((TetherSeen) -ne 11) { throw "an enabled tether driver is not seen by the program" }
+          & dist\pintel-doctor\pintel-doctor.exe link --install
+          if ($LASTEXITCODE -ne 0) { throw "link --install failed (code $LASTEXITCODE)" }
+          sc.exe qc Netaapl
+          if ((sc.exe qc Netaapl | Out-String) -notmatch 'DISABLED') { throw "tether driver is not disabled" }
+          if ((TetherSeen) -ne 12) { throw "a disabled tether driver is not seen by the program" }
+          $mux = Test-NetConnection -ComputerName 127.0.0.1 -Port 27015 -WarningAction SilentlyContinue
+          if (-not $mux.TcpTestSucceeded) { throw "Apple service went silent after the tether switch-off" }
+          & dist\pintel-doctor\pintel-doctor.exe --apple-setup --modem-on
+          if ((sc.exe qc Netaapl | Out-String) -notmatch 'DEMAND_START') { throw "tether driver was not restored" }
+          & dist\pintel-doctor\pintel-doctor.exe --apple-setup --modem-off
+          if ((sc.exe qc Netaapl | Out-String) -notmatch 'DISABLED') { throw "second switch-off did not work" }
+          if ($stub) { sc.exe delete Netaapl }
+          Write-Host "tether driver: seen, disabled, restored - ok"

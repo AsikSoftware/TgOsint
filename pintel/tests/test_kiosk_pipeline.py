@@ -576,3 +576,56 @@ def test_a_cancelled_reading_draws_nothing_and_gives_no_result(fake_core, monkey
     assert not итоги and not [с for с in события if с[0] == "failed"], события
     assert not [с for с in события if с[0] == "passport" and с[1] == "done"], события
     assert not [с for с in события if с[0] in ("battery", "locks", "apple", "upload")], события
+
+
+def test_a_question_the_phone_answered_late_reaches_the_report(fake_core, monkeypatch):
+    """Телефон не ответил на вопрос вовремя — чтение пошло дальше, вопрос остался ждать на
+    своём соединении. К концу проверки ответ пришёл: касса кладёт его в слепок, и оценка
+    уезжает уже с ним. Не пришёл — в слепке сказано, какой домен молчал."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    ДОМЕН = "com.apple.mobile.battery"
+    соединения = []
+
+    def подставить(ответит):
+        async def collect(ld, diag, log=None, **kw):
+            assert callable(kw.get("соединить")), "касса обязана дать слепку боковое соединение"
+            усечённый = _без_диска(snap)
+            усечённый["domains"].pop(ДОМЕН, None)
+            усечённый["quality"]["не_прочиталось"] = {ДОМЕН: "телефон не ответил за 4 с"}
+            усечённый["quality"]["зависшие_домены"] = {ДОМЕН: 4.0}
+            соединение = ФейкСоединение(None)
+            соединения.append(соединение)
+
+            async def вопрос():
+                if not ответит:
+                    await asyncio.Event().wait()
+                await asyncio.sleep(0.2)
+                return snap["domains"][ДОМЕН]
+            kw["поздние"].оставить(ДОМЕН, asyncio.ensure_future(вопрос()), соединение, time.monotonic())
+            return усечённый
+        monkeypatch.setattr(worker.snapshot, "collect", collect)
+
+    подставить(True)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
+                        заново=True)                       # не брать прошлую проверку из соседних тестов
+    события, итоги = _прогнать(p)
+    assert итоги and not [с for с in события if с[0] == "failed"], события
+    слепок = snapshot.loads(open(os.path.join(итоги[0]["out"], "snapshot.json"), encoding="utf-8").read())
+    assert слепок["domains"][ДОМЕН] == snap["domains"][ДОМЕН], "поздний ответ не дошёл до слепка"
+    assert ДОМЕН not in слепок["quality"]["не_прочиталось"] and "зависшие_домены" not in слепок["quality"]
+    assert соединения[-1].закрыто
+    p.cancel.set()
+    p.wait(3000)
+
+    подставить(False)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
+                        заново=True)
+    начало = time.monotonic()
+    события, итоги = _прогнать(p)
+    assert итоги and time.monotonic() - начало < 8, "проверка ждала молчащий телефон"
+    слепок = snapshot.loads(open(os.path.join(итоги[0]["out"], "snapshot.json"), encoding="utf-8").read())
+    assert ДОМЕН not in слепок["domains"] and ДОМЕН in слепок["quality"]["зависшие_домены"]
+    assert соединения[-1].закрыто, "брошенный вопрос закрыл своё соединение"
+    p.cancel.set()
+    p.wait(3000)

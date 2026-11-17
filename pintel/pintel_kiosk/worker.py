@@ -23,7 +23,7 @@ from pintel_core import previous, reference
 from pintel_core.analysis import legal as legal_mod
 from pintel_core.analysis import report as report_mod
 from pintel_core.analysis import sealed as sealed_mod
-from pintel_core.devicelink import connect, repair_history, snapshot
+from pintel_core.devicelink import connect, repair_history, snapshot, tether
 from pintel_core.devicelink.connect import READY
 from pintel_core.external import rfs, sickw
 
@@ -152,6 +152,9 @@ def проверить_рфс(cfg, имеи, step):
 # Связь оборвалась посреди чтения: сколько раз начинать слепок заново и сколько секунд ждать,
 # пока телефон вернётся на кабель.
 ЧТЕНИЙ = 3
+# Вопрос, на который телефон не ответил вовремя, ждёт в стороне всю проверку (это десятки
+# секунд). Если к её концу ответа всё ещё нет, а домен нужен отчёту — ждём ещё столько, не дольше.
+ЖДАТЬ_ПОЗДНИЕ = 2.0
 ЖДАТЬ_ТЕЛЕФОН_С = 25
 
 
@@ -163,6 +166,7 @@ class Pipeline(QThread):
     прошлая = Signal(dict)                    # взяли проверку, сделанную недавно (не читали заново)
     history = Signal(dict)                    # история Apple пришла позже: обновлённый результат
     failed = Signal(str)                      # человеческий текст ошибки
+    модем = Signal(str)                       # телефон стал сетью этого компьютера (режим модема)
 
     def __init__(self, cfg, client, parent=None, заново=False):
         super().__init__(parent)
@@ -178,6 +182,7 @@ class Pipeline(QThread):
         self._loop = None
         self._слепок_готов_в = None                   # от этого момента ждём процент батареи
         self._ld = None                               # соединение, которым дочитали слепок
+        self._поздние = snapshot.ПоздниеДомены()      # вопросы, на которые телефон ещё не ответил
 
     def run(self):
         try:
@@ -252,6 +257,7 @@ class Pipeline(QThread):
         try:
             await self._flow(ld, st, listener)
         finally:
+            await self._поздние.закрыть()
             await listener.stop()
 
     async def _дождаться_батареи(self, listener):
@@ -359,10 +365,11 @@ class Pipeline(QThread):
             root = await ld.get_value() or {}
         except Exception as exc:                                 # noqa: BLE001
             return None, f"не сверили: телефон не ответил ({type(exc).__name__})"
-        try:
-            fmip = await ld.get_value(domain="com.apple.fmip") or {}
-        except Exception:                                        # noqa: BLE001 — домен отдают не все
-            fmip = {}
+        # Третий канал «Найти iPhone» — на своём соединении и недолго: этот вопрос телефон
+        # может обдумывать минутами, а главный ответ уже есть в корневом домене выше.
+        fmip, _почему = await snapshot.спросить_в_стороне(
+            lambda: connect.второе_соединение(ld), домен="com.apple.fmip", ждать=3.0)
+        fmip = fmip or {}
         пас = (отчёт.get("паспорт") or {})
         for поле, было in (("SerialNumber", пас.get("серийник")),
                            ("InternationalMobileEquipmentIdentity", пас.get("imei"))):
@@ -411,8 +418,19 @@ class Pipeline(QThread):
                 self._step("passport", "run", "" if попытка == 1 else f"читаем заново · попытка {попытка}")
                 # про память здесь не спрашиваем: телефон отвечает на это когда как, а объём
                 # и так есть с контроллера — спросим в самом конце (`_добрать_память`)
-                snap = await snapshot.collect(ld, diag, жив=lambda: not self.cancel.is_set(), память=False)
+                # вопросы о доменах — на боковом соединении и с пределом: зависший остаётся
+                # ждать в `поздние`, чтение идёт дальше (`_добрать_поздние` заберёт ответ в конце)
+                await self._поздние.закрыть()
+                self._поздние = snapshot.ПоздниеДомены()
+                snap = await snapshot.collect(
+                    ld, diag, жив=lambda: not self.cancel.is_set(), память=False,
+                    соединить=lambda ld=ld: connect.второе_соединение(ld), поздние=self._поздние)
                 snap["quality"]["диагностика_попыток"] = tries
+                if snap["quality"].get("зависшие_домены"):
+                    log_line("телефон не ответил вовремя на: "
+                             + ", ".join(f"{д.replace('com.apple.', '')} ({с:g} с)"
+                                         for д, с in snap["quality"]["зависшие_домены"].items())
+                             + " — идём дальше, ответ заберём в конце")
                 if попытка > 1:
                     snap["quality"]["чтений_из_за_обрыва"] = попытка
                 self._ld = ld
@@ -435,6 +453,41 @@ class Pipeline(QThread):
                     except Exception:                            # noqa: BLE001
                         pass
         return None, 0
+
+    async def _заметить_режим_модема(self, snap) -> None:
+        """Телефон раздаёт интернет этому компьютеру по кабелю? — в слепок и в журнал.
+
+        Так бывает, когда на телефоне включён режим модема, а на компьютере работает драйвер
+        Apple для него (`tether`): интернет кассы уходит на телефон клиента. Чтению это уже
+        не мешает, но в слепке должно быть видно — по этой отметке потом сверяют, какие
+        телефоны отвечают медленно. Касса после сделки попросит права и отключит драйвер."""
+        try:
+            адрес = await asyncio.wait_for(asyncio.to_thread(tether.сеть_телефона), 20)
+        except Exception:                                        # noqa: BLE001
+            return
+        if not адрес:
+            return
+        snap.setdefault("quality", {})["режим_модема_по_кабелю"] = адрес
+        log_line(f"режим модема: телефон раздаёт интернет этой кассе по кабелю (адрес кассы в его сети {адрес})")
+        self.модем.emit(адрес)
+
+    async def _добрать_поздние(self, snap) -> list:
+        """Ответы на вопросы, которые телефон обдумывал дольше срока: что успело прийти к
+        концу проверки — в слепок, остальное бросаем. → какие домены пришли."""
+        пришли = []
+        try:
+            if len(self._поздние):
+                нужен = any(д in snapshot.ВАЖНЫЕ_ДОМЕНЫ for д in self._поздние.ждут())
+                пришли = await self._поздние.вложить(snap, ждать=ЖДАТЬ_ПОЗДНИЕ if нужен else 0.0)
+                ждут = (snap.get("quality") or {}).get("зависшие_домены") or {}
+                log_line("поздние ответы телефона: пришли — "
+                         + (", ".join(д.replace("com.apple.", "") for д in пришли) or "ни один")
+                         + ("; так и не ответил на: "
+                            + ", ".join(f"{д.replace('com.apple.', '')} ({с:g} с)" for д, с in ждут.items())
+                            if ждут else ""))
+        finally:
+            await self._поздние.закрыть()
+        return пришли
 
     async def _добрать_память(self, snap) -> None:
         """Спросить телефон про память — один раз, в самом конце и недолго.
@@ -551,9 +604,17 @@ class Pipeline(QThread):
         self._донести_батарею(snap, listener)
         было_гб = rep["память"].get("объём_гб")
         await self._добрать_память(snap)
+        поздние = await self._добрать_поздние(snap)
+        await self._заметить_режим_модема(snap)
         rep = report_mod.build(snap)
         if rep["память"].get("объём_гб") != было_гб:
             self._step("passport", "done", f"{pas['модель']} · {rep['память'].get('объём_гб') or '?'} ГБ")
+        if поздние:
+            # поздний ответ мог изменить замки (третий канал «Найти iPhone», ограничения)
+            leg = rep["правовой"]
+            locks = [x for x, ok in (("Найти iPhone", leg["найти_iphone"] != "включён"),
+                                     ("надзор MDM", leg["mdm"] is not True), ("пароль", not leg["пароль"])) if not ok]
+            self._step("locks", "done" if not locks else "warn", "чисто" if not locks else ", ".join(locks))
         h = rep["батарея"].get("здоровье_%")
         self._step("battery", "done" if h is not None else "warn", f"{h} %" if h is not None else "не прочиталась")
         if self.cancel.is_set():

@@ -132,6 +132,7 @@ class AdminScreen(Screen):
     сменить_токен = Signal(str)
     обновить = Signal()
     режим_мс = Signal()             # скрытый режим: обновление товаров МойСклада по IMEI
+    модем_отключить = Signal()      # отключить на этом компьютере драйвер режима модема iPhone
 
     def __init__(self):
         super().__init__(gray=True)
@@ -182,6 +183,19 @@ class AdminScreen(Screen):
         ряд_мс.addWidget(self.b_мс)
         ряд_мс.addStretch(1)
         пв.addLayout(ряд_мс)
+        # iPhone с включённым режимом модема становится для Windows проводной сетью и
+        # перетягивает на себя интернет кассы. Касса отключает этот драйвер сама при запуске;
+        # кнопка — если тогда в окне Windows нажали «Нет» или драйвер включился снова.
+        пв.addSpacing(18)
+        пв.addWidget(kicker("РЕЖИМ МОДЕМА IPHONE", 14, 2.4, C["brand"]))
+        пв.addWidget(label("Чтобы телефон клиента не становился сетью этой кассы. Windows спросит "
+                           "разрешение — нажмите «Да». На чтение телефона это не влияет.", "muted", wrap=True))
+        ряд_модем = QHBoxLayout()
+        self.b_модем = _кнопка("Отключить режим модема на этом компьютере", "ghost")
+        self.b_модем.clicked.connect(self.модем_отключить.emit)
+        ряд_модем.addWidget(self.b_модем)
+        ряд_модем.addStretch(1)
+        пв.addLayout(ряд_модем)
         пв.addStretch(1)
         тело.addWidget(правая, 1)
         self.root.addLayout(тело, 1)

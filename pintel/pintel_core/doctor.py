@@ -202,6 +202,11 @@ def cmd_selfcheck(args, cfg):
         окр = apple_service.Windows()
         say(f"служба Apple: {apple_service.служба(окр)}; порт {apple_service.ПОРТ[1]} "
             f"{'отвечает' if окр.порт_жив() else 'молчит'} (чинит: pintel-doctor link --install)")
+        from .devicelink import tether
+        сеть = tether.сеть_телефона(окр)
+        say(f"режим модема iPhone по кабелю: драйвер {tether.драйвер(окр)}"
+            + (f"; телефон сейчас раздаёт интернет этому компьютеру ({сеть})" if сеть else "")
+            + " (отключает: pintel-doctor link --install)")
     if devs:
         say("устройства на USB:", [d.serial for d in devs])
     return 0
@@ -215,6 +220,12 @@ def cmd_link(args, cfg):
         return 0 if итог in (apple_service.ГОТОВО, apple_service.НЕ_WINDOWS) else 1
     итог, текст = apple_service.обеспечить(сказать=say)
     say(f"служба Apple: {итог} — {текст}")
+    # и чтобы телефон клиента не становился сетью этого компьютера (если служба Apple уже
+    # работала, прав выше не просили — здесь попросим, и только если драйвер включён)
+    from .devicelink import tether
+    модем, слова = tether.обеспечить()
+    if модем != tether.НЕ_WINDOWS:
+        say(f"режим модема iPhone: {модем} — {слова}")
     return 0 if итог in (apple_service.ГОТОВО, apple_service.НЕ_WINDOWS) else 1
 
 
@@ -233,7 +244,8 @@ async def _snapshot(args, cfg):
     say("открываю диагностику…")
     diag, tries = await connect.open_diagnostics(ld)
     say(f"  диагностика готова с {tries}-й попытки, {time.monotonic() - t0:.1f} с")
-    snap = await snapshot.collect(ld, diag, log=lambda m: say("  " + m))
+    snap = await snapshot.collect(ld, diag, log=lambda m: say("  " + m),
+                                  соединить=lambda: connect.второе_соединение(ld))
     snap["quality"]["диагностика_попыток"] = tries
     snap["quality"]["подключение"] = st.timings
     try:
@@ -370,7 +382,8 @@ async def _reference(args, cfg):
     lst = repair_history.Listener(ld, log=lambda m: say("  " + m))
     await lst.start()                                   # слушаем с первой секунды — записи не пропадут
     try:
-        snap = await snapshot.collect(ld, diag, log=lambda m: say("  " + m))
+        snap = await snapshot.collect(ld, diag, log=lambda m: say("  " + m),
+                                      соединить=lambda: connect.второе_соединение(ld))
         snap["quality"]["диагностика_попыток"] = tries
         snap["quality"]["подключение"] = st.timings
         try:

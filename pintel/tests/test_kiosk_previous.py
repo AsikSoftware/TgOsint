@@ -153,7 +153,17 @@ def _сверить(отчёт, замок):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from pintel_kiosk import worker
     p = worker.Pipeline({}, None, None)
-    return asyncio.run(p._сверить_живьём(замок, отчёт))
+
+    # третий канал «Найти iPhone» касса спрашивает на отдельном соединении — здесь оно то же
+    # подставное; настоящий usbmux тест не трогает
+    async def второе(ld):
+        return ld
+    было = worker.connect.второе_соединение
+    worker.connect.второе_соединение = второе
+    try:
+        return asyncio.run(p._сверить_живьём(замок, отчёт))
+    finally:
+        worker.connect.второе_соединение = было
 
 
 ЖИВОЙ = {"SerialNumber": ПАСПОРТ["серийник"], "InternationalMobileEquipmentIdentity": ПАСПОРТ["imei"],
@@ -192,3 +202,28 @@ def test_an_unreadable_phone_is_not_called_verified():
     # то же, когда правовой статус сейчас не прочитался
     сошлось, почему = _сверить(_отчёт(), ФейкЗамок({"SerialNumber": ПАСПОРТ["серийник"]}))
     assert сошлось is None and "не сверили" in почему
+
+
+def test_a_phone_that_thinks_about_find_my_forever_does_not_hold_the_check():
+    """Третий канал «Найти iPhone» (домен fmip) телефон иногда обдумывает минутами. Сверка его
+    не ждёт: он спрашивается на отдельном соединении и недолго, а главный ответ уже пришёл
+    в корневом домене. Раньше этот вопрос шёл по общему соединению и без предела."""
+    import time
+    from pintel_kiosk import worker
+
+    class Молчит(ФейкЗамок):
+        async def get_value(self, domain=None):
+            if domain == "com.apple.fmip":
+                await asyncio.Event().wait()                   # не ответит никогда
+            return await super().get_value(domain)
+
+    async def сразу(соединить, домен=None, ключ=None, ждать=0):
+        return await было(соединить, домен=домен, ключ=ключ, ждать=0.05)
+    было = worker.snapshot.спросить_в_стороне
+    worker.snapshot.спросить_в_стороне = сразу
+    try:
+        начало = time.monotonic()
+        сошлось, почему = _сверить(_отчёт(), Молчит(ЖИВОЙ))
+    finally:
+        worker.snapshot.спросить_в_стороне = было
+    assert сошлось is True and почему == "" and time.monotonic() - начало < 3

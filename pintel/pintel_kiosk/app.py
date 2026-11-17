@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QShor
 from PySide6.QtWidgets import QApplication, QFrame, QGraphicsScene, QGraphicsView, QMainWindow, QStackedWidget
 
 from pintel_core import phonetest
-from pintel_core.devicelink import apple_service, connect
+from pintel_core.devicelink import apple_service, connect, tether
 from pintel_core.devicelink.connect import NO_DEVICE, NO_DRIVER, READY
 from pintel_core.external import ms_update, ocenka
 
@@ -188,6 +188,7 @@ class KioskWindow(QMainWindow):
     # результат теста с телефона клиента: приходит из потока мини-сервера
     тест_приехал = Signal(dict)
     связь_сказала = Signal(str)                 # ход починки службы Apple, из потока
+    модем_сказал = Signal(str)                  # режим модема iPhone: что делаем, из потока
 
     def __init__(self, cfg):
         super().__init__()
@@ -206,6 +207,9 @@ class KioskWindow(QMainWindow):
         # как раз тогда, когда служба отвечает, а телефон не виден. Только на Windows — на
         # маке и линуксе службы Apple нет, и кнопка там была бы обманом.
         self._связь_всегда = sys.platform == "win32"
+        # режим модема iPhone: идёт ли отключение драйвера, спрашивали ли права в этот запуск,
+        # видели ли телефон сетью этого компьютера
+        self._модем_идёт = self._модем_спрашивали = self._модем_замечен = False
         self.setWindowTitle(ui.НАЗВАНИЕ)
         self.stack = QStackedWidget()
         self.host = ScaledHost(self.stack)
@@ -257,6 +261,10 @@ class KioskWindow(QMainWindow):
         self.s_work.починить_связь.connect(self.починить_связь)
         self.s_work.напомнить.connect(self.напомнить_о_медиа)
         self.связь_сказала.connect(self._связь_идёт)
+        self.модем_сказал.connect(self._модем_идёт_текст)
+        self.s_admin.модем_отключить.connect(lambda: self.модем_проверить(сам=False))
+        if sys.platform == "win32":
+            QTimer.singleShot(6000, self.модем_проверить)       # окно уже на экране, клиента ещё нет
         self._кнопки_связи()
         self.s_start.далее.connect(self.анкета_готова)
         self.s_start.отмена.connect(self.go_home)
@@ -509,7 +517,10 @@ class KioskWindow(QMainWindow):
                 "Версия": __version__,
                 "Оценок в очереди": self.client.queued(),
                 "Не принято сервером": self.client.rejected(),
-                "Бот Оценки": self.cfg.get("ocenka_bot") or "не задан"}
+                "Бот Оценки": self.cfg.get("ocenka_bot") or "не задан",
+                **({"Режим модема iPhone": {tether.НЕТ: "драйвера нет", tether.ВКЛЮЧЁН: "включён — отключите",
+                                            tether.ОТКЛЮЧЁН: "отключён"}[tether.драйвер()]}
+                   if sys.platform == "win32" else {})}
 
     def открыть_меню(self):
         if self.stack.currentWidget() is self.s_token:
@@ -626,6 +637,83 @@ class KioskWindow(QMainWindow):
             self.s_work.сказать(текст, беда=not готово)
         self._кнопки_связи("" if готово else "Починить связь с iPhone — повторить")
 
+    # ---------- режим модема iPhone ----------
+    МОДЕМ_ПОСЛЕ_ОТКАЗА_ДНЕЙ = 7
+
+    def _модем_отметка(self) -> str:
+        return os.path.join(data_dir(), "cache", "режим_модема_отказ.txt")
+
+    def модем_проверить(self, сам=True):
+        """Драйвер режима модема iPhone на этом компьютере включён — отключаем его: одно окно
+        Windows «Разрешить?». Телефон клиента с включённым режимом модема иначе становится
+        сетью кассы (см. `tether`).
+
+        `сам` — касса спрашивает сама: при запуске и после сделки, в которой увидела телефон
+        сетью. Тогда только в простое, раз за запуск, а после отказа — не раньше чем через
+        неделю. По кнопке в меню администратора — всегда и сразу."""
+        if self._модем_идёт or sys.platform != "win32":
+            return
+        if сам:
+            if not self.cfg.get("modem_off", True) or self._модем_спрашивали:
+                return
+            if self.state != "idle" or self.stack.currentWidget() is not self.s_main:
+                QTimer.singleShot(60_000, self.модем_проверить)  # идёт сделка — позже
+                return
+        self._модем_идёт = True
+        self._run(lambda: self._модем_работа(сам), ok=self._модем_итог,
+                  err=lambda текст: self._модем_итог((tether.НЕ_ВЫШЛО, str(текст))))
+
+    def _модем_работа(self, сам):
+        """В потоке: посмотреть на драйвер и, если он включён, отключить. → (итог, текст)."""
+        что = tether.драйвер()
+        if что != tether.ВКЛЮЧЁН:
+            return "тихо", что
+        if сам:
+            try:
+                дней = (time.time() - os.path.getmtime(self._модем_отметка())) / 86400
+                if дней < self.МОДЕМ_ПОСЛЕ_ОТКАЗА_ДНЕЙ:
+                    return "тихо", "включён, в правах недавно отказали"
+            except OSError:
+                pass
+        self.модем_сказал.emit("Отключаем режим модема iPhone на этом компьютере — "
+                               "Windows спросит разрешение, нажмите «Да»")
+        return tether.обеспечить()
+
+    def _модем_идёт_текст(self, текст):
+        if self.state == "idle":
+            self.s_main.set_status(текст, ok=True)
+        if self.stack.currentWidget() is self.s_admin:
+            self.s_admin.ответ.setText(текст)
+
+    def _модем_итог(self, пара):
+        итог, текст = пара
+        self._модем_идёт = False
+        if итог == "тихо":
+            log_line(f"режим модема: драйвер {текст}")
+            текст = {tether.НЕТ: "Драйвера режима модема на этом компьютере нет — отключать нечего.",
+                     tether.ОТКЛЮЧЁН: tether.ЧЕЛОВЕКУ[tether.ГОТОВО]}.get(текст, "")
+        else:
+            self._модем_спрашивали = True
+            log_line(f"режим модема: {итог} — {текст}")
+            try:
+                if итог == tether.НУЖНЫ_ПРАВА:
+                    os.makedirs(os.path.dirname(self._модем_отметка()), exist_ok=True)
+                    open(self._модем_отметка(), "w", encoding="utf-8").write(datetime.now().isoformat())
+                elif итог == tether.ГОТОВО and os.path.isfile(self._модем_отметка()):
+                    os.remove(self._модем_отметка())
+            except OSError:
+                pass
+            if self.state == "idle":
+                self.s_main.set_status(текст, ok=итог == tether.ГОТОВО)
+        if текст and self.stack.currentWidget() is self.s_admin:
+            self.s_admin.ответ.setText(текст)
+            self.s_admin.показать(self._сведения())
+
+    def _модем_замечен_у_телефона(self, адрес):
+        """Телефон в этой сделке стал сетью кассы: после сделки спросим права и отключим."""
+        self._модем_замечен = True
+        self._модем_спрашивали = False
+
     def on_tick(self, state, detail, count):
         self.net.device_state = state
         self.кабель = state
@@ -702,6 +790,7 @@ class KioskWindow(QMainWindow):
         self.pipeline.done.connect(self.on_done)
         self.pipeline.history.connect(self.on_history)
         self.pipeline.failed.connect(self.on_failed)
+        self.pipeline.модем.connect(self._модем_замечен_у_телефона)
         self.pipeline.start()
 
     def on_history(self, result):
@@ -933,6 +1022,7 @@ class KioskWindow(QMainWindow):
         self.pipeline.step.connect(self.s_ms.set_step)
         self.pipeline.done.connect(self._мс_прочитано)
         self.pipeline.failed.connect(self._мс_не_прочитано)
+        self.pipeline.модем.connect(self._модем_замечен_у_телефона)
         self.pipeline.start()
 
     def _мс_связь(self, state, human):
@@ -1676,6 +1766,11 @@ class KioskWindow(QMainWindow):
         self.статус_сделки = self.переклассификация = None
         self.s_main.set_device("found" if self.кабель == READY else "wait")
         self.show_screen(self.s_main)
+        if self._модем_замечен:
+            # в этой сделке телефон стал сетью кассы — драйвер режима модема включён (на новом
+            # компьютере он появляется с первым таким телефоном): отключаем, пока клиента нет
+            self._модем_замечен = False
+            QTimer.singleShot(4000, self.модем_проверить)
 
 
 def light_palette():

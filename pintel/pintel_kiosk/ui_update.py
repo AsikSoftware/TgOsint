@@ -66,7 +66,7 @@ class UpdateScreen(Screen):
 
         # --- слева: телефон и шаги чтения
         левая, лв = _карточка("ТЕЛЕФОН")
-        левая.setFixedWidth(560)
+        левая.setFixedWidth(680)      # шире, чем в сделке: подпись шага Apple длинная и обрезалась
         self.аппарат = label(ПОДКЛЮЧИТЕ, wrap=True, font_=font(FONT_HEAD, 26, W.Bold))
         лв.addWidget(self.аппарат)
         self.аппарат_подробно = label("", wrap=True, font_=font(FONT_TEXT, 16, W.Medium), color=C["muted"])

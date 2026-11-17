@@ -764,3 +764,55 @@ def test_a_phone_that_reads_badly_still_gives_a_check_and_a_deal(fake_core, monk
     assert os.path.isfile(os.path.join(итоги[0]["out"], "snapshot.json")), "слепок не сохранён"
     p.cancel.set()
     p.wait(3000)
+
+
+def test_the_phone_is_read_again_while_something_mandatory_is_missing(fake_core, monkeypatch):
+    """Обязательное касса не записывает в «не прочиталось», а дочитывает: телефон на кабеле,
+    и ещё одно чтение стоит секунды. Прочиталось со второго раза — сделка идёт как обычно."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    чтения = []
+
+    async def collect(ld, diag, log=None, **kw):
+        чтения.append(1)
+        if len(чтения) == 1:
+            # первый раз телефон не отдал узлы: ни батареи, ни вердикта по деталям
+            плохой = _без_диска(snap)
+            плохой["nodes"] = {}
+            return плохой
+        return _без_диска(snap)
+
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
+                        заново=True)
+    события, итоги = _прогнать(p)
+    assert итоги and len(чтения) == 2, (события, чтения)
+    assert итоги[0]["report"]["обязательное_не_прочитано"] == [], "сделку пустили без обязательного"
+    assert итоги[0]["report"]["батарея"]["здоровье_%"] is not None
+    шаги = [т for к, с, т in события if к == "passport"]
+    assert any("читаем заново" in (т or "") for т in шаги), шаги
+    p.cancel.set()
+    p.wait(3000)
+
+
+def test_a_phone_that_never_gives_the_mandatory_values_is_named_not_hidden(fake_core, monkeypatch):
+    """Телефон так и не отдал обязательное: проверка доходит до конца (данные не выбрасываем),
+    но в отчёте прямо сказано, чего нет, — и касса по нему сделку не пустит."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+
+    async def collect(ld, diag, log=None, **kw):
+        плохой = _без_диска(snap)
+        плохой["nodes"] = {}                         # батарея и детали читаются из узлов
+        return плохой
+
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None,
+                        заново=True)
+    события, итоги = _прогнать(p)
+    assert итоги, события
+    нет = итоги[0]["report"]["обязательное_не_прочитано"]
+    assert [x["ключ"] for x in нет], "в отчёте не сказано, чего не хватило"
+    assert any("не прочитано обязательное" in x for x in итоги[0]["report"]["не_прочиталось"])
+    p.cancel.set()
+    p.wait(3000)

@@ -277,7 +277,9 @@ def test_the_line_a_person_can_close_is_kept_apart():
     rep = report_mod.build(snap)
     assert rep["сверка_деталей"] and rep["сверка_деталей"] in rep["не_прочиталось"]
     assert ocenka.сверка_нужна(rep) is True
-    assert ocenka.незакрытое(rep) == []                      # закрыть нечем — ничего
+    # закрыть нечем — ничего; строку про panic full (его читает модуль нашей сборки, а не
+    # телефон) сюда не считаем: она не о деталях и сотрудником не закрывается
+    assert [x for x in ocenka.незакрытое(rep) if "Panic" not in x] == []
     snap["nodes"]["AppleSmartBattery"] = {}
     rep = report_mod.build(snap)
     assert any("батарея" in x for x in ocenka.незакрытое(rep))

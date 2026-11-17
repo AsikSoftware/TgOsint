@@ -21,6 +21,7 @@ from PySide6.QtCore import QThread, Signal
 
 from pintel_core import previous, reference
 from pintel_core.analysis import legal as legal_mod
+from pintel_core.analysis import обязательное
 from pintel_core.analysis import report as report_mod
 from pintel_core.analysis import sealed as sealed_mod
 from pintel_core.devicelink import connect, repair_history, snapshot, tether
@@ -491,6 +492,21 @@ class Pipeline(QThread):
                     жив=lambda: not self.cancel.is_set(), память=False,
                     соединить=self._боковое, сбор=self._сбор)
                 snap["quality"]["диагностика_попыток"] = tries
+                # Обязательное дочитываем, а не записываем в «не прочиталось»: телефон на
+                # кабеле, и ещё одно чтение стоит секунды. Сделку по неполной проверке касса
+                # всё равно не пустит (`ui_deal.можно_отправить`), так что лучше перечитать.
+                нет_обяз = обязательное.не_прочитано(report_mod.build(snap))
+                if нет_обяз and попытка < ЧТЕНИЙ and time.monotonic() < до:
+                    чего = ", ".join(н for _к, н, _з in нет_обяз)
+                    log_line(f"обязательное не прочитано ({чего}) — читаем телефон заново, "
+                             f"попытка {попытка + 1} из {ЧТЕНИЙ}")
+                    self._step("passport", "run", f"не прочитано: {чего} — читаем заново")
+                    частичный = _полнее(snap, частичный)
+                    continue
+                if нет_обяз:
+                    log_line("обязательное так и не прочиталось: "
+                             + ", ".join(н for _к, н, _з in нет_обяз))
+                    snap = _полнее(snap, частичный) or snap
                 ждём = snap["quality"].get("ждём_домены") or {}
                 if ждём:
                     log_line("телефон ещё обдумывает ответ про: "

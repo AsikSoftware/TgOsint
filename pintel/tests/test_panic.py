@@ -125,5 +125,6 @@ def test_export_sends_what_we_actually_know(паника, ждём):
     from pintel_core.external import ocenka
     данные = {"модель": "iPhone 14 Pro", "память": 256, "имя_клиента": "Зама",
               "телефон_клиента": "+77058837953", "imei": "350585886690250",
+              "акб": 86, "статус_ремонта": "Не был в ремонте",
               "panic_full": (паника or {}).get("panic_full")}
     assert ocenka.посылка(данные, "7KQ4M")["сделка"]["panic_full"] is ждём

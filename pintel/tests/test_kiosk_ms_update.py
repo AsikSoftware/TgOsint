@@ -122,6 +122,18 @@ def test_without_a_server_or_a_bot_the_mode_does_not_start(окно):
     assert not окно.мс_режим and "бот" in окно.s_admin.ответ.text()
 
 
+def _проверки_сделаны(окно):
+    """Пройти тест и отметить все восемь пунктов: без этого запись не разрешена.
+
+    Проверки в режиме обновления обязательные (18.11.2026): запись заменяет поля целиком, и
+    пропуск проверок означал бы не освежение данных, а их стирание."""
+    from pintel_core import phonetest
+    from pintel_core.external import ocenka_media
+    окно.s_ms.set_тест({к: phonetest.ОК for к in phonetest.КЛЮЧИ})
+    for ключ in ocenka_media.КЛЮЧИ:
+        окно.s_ms.отметить(ключ)
+
+
 def test_a_phone_is_read_and_its_product_is_shown_before_anything_is_written(окно):
     """Телефон прочитан — касса просит бота НАЙТИ товар по IMEI и показывает «было → станет».
     В запросе — оба IMEI и то, что прочитал кабель; записи никто не просил."""
@@ -141,6 +153,11 @@ def test_a_phone_is_read_and_its_product_is_shown_before_anything_is_written(о�
     слова = " | ".join(l.text() for l in окно.s_ms.findChildren(QLabel))
     for нужно in ("АКБ", "80-85%", "81%", "Цикл", "1642", "БЫЛО", "СТАНЕТ"):
         assert нужно in слова, нужно
+    # пока проверки не сделаны, записывать нельзя: замена полная, и пустые поля затёрли бы
+    # прежние вместо того, чтобы их освежить
+    assert not окно.s_ms.b_записать.isEnabled()
+    assert "тест на телефоне" in " ".join(окно.s_ms.чего_не_хватает())
+    _проверки_сделаны(окно)
     assert окно.s_ms.b_записать.isEnabled() and окно.s_ms.b_записать.text() == "Обновить в МойСкладе"
     assert len(окно.запросы) == 1, "показ ничего не пишет"
 
@@ -151,6 +168,7 @@ def test_writing_happens_only_after_the_button_and_into_the_shown_product(окн
     _до_телефона(окно)
     _прочитан(окно)
     _ответ(окно)
+    _проверки_сделаны(окно)
     окно.s_ms.b_записать.click()
     assert len(окно.запросы) == 2 and окно.запросы[1]["мойсклад"] == {"что": "записать", "товар": "t-1"}
     assert окно.запросы[1]["запрос_цены"] != окно.запросы[0]["запрос_цены"]

@@ -1037,7 +1037,27 @@ class KioskWindow(QMainWindow):
         self.pipeline.done.connect(self._мс_прочитано)
         self.pipeline.failed.connect(self._мс_не_прочитано)
         self.pipeline.модем.connect(self._модем_замечен_у_телефона)
+        # Журнал Apple: до 18.11.2026 в этом режиме его не просили и не ждали вовсе — отсюда
+        # пустые «Деталь: Плата», «Корпус», «Заднее стекло», «Верхний модуль», «LiDAR» у
+        # телефонов со склада: их не знает никто, кроме этого журнала. Теперь просим так же,
+        # как в сделке, и дожидаемся: при полной замене неоткрытый раздел означал бы, что мы
+        # стираем то, что записали при выкупе.
+        self.pipeline.apple_prompt.connect(self.s_ms.show_prompt)
+        self.pipeline.history.connect(self._мс_история)
         self.pipeline.start()
+
+    def _мс_история(self, result):
+        """Журнал Apple пришёл после чтения — обновляем отчёт, с которым пойдём в МойСклад."""
+        if not self.мс_режим or not self.last:
+            return
+        if result.get("client_id") != self.last.get("client_id"):
+            return
+        self.last = result
+        self.s_ms.set_телефон(result.get("report") or {})
+        self.s_ms.show_prompt(False)
+        log_line("режим обновления: журнал Apple пришёл, отчёт обновлён")
+        if self.state == "ms_view" and not self._мс_запрос and not self._мс_товар:
+            self._мс_спросить(ms_update.НАЙТИ)       # пересчитать «было → станет» с журналом
 
     def _мс_связь(self, state, human):
         if self.state == "ms_scan" and state != READY:

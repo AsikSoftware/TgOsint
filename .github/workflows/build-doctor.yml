@@ -29,6 +29,7 @@ jobs:
       - name: Зависимости (ядро + сервер)
         run: python -m pip install --quiet -e ".[server,test]"
       - name: Тесты ядра и сервера
+        timeout-minutes: 20
         run: |
           set +e
           python -m pytest tests -q --tb=short > pytest.log 2>&1
@@ -47,6 +48,9 @@ jobs:
   build:
     runs-on: windows-latest
     needs: server-tests
+    # Своих часов у сборки нет, а у GitHub лимит по умолчанию — шесть. 17.11.2026 тесты
+    # зависли на Windows и сожгли все шесть, не оставив ни лога, ни подсказки.
+    timeout-minutes: 50
     defaults:
       run:
         working-directory: pintel
@@ -60,8 +64,12 @@ jobs:
         run: python -m pip install --quiet -e ".[server,kiosk,test]" pyinstaller
 
       - name: Тесты ядра (архивные слепки — регрессия)
+        timeout-minutes: 20
+        # `faulthandler_timeout` — на случай зависания: через три минуты без движения pytest
+        # печатает стек всех потоков, и видно, какой тест встал. Без этого зависший тест
+        # выглядит как молчание. Лог сохраняем всегда — шаг ниже выложит его артефактом.
         run: |
-          python -m pytest tests -q -s --tb=short --ignore=tests/test_server.py 2>&1 | Tee-Object -FilePath pytest.log
+          python -m pytest tests -q -s --tb=short -o faulthandler_timeout=180 --ignore=tests/test_server.py 2>&1 | Tee-Object -FilePath pytest.log
           $rc = $LASTEXITCODE
           if ($rc -ne 0) {
             Select-String -Path pytest.log -Pattern '^(FAILED|ERROR)' | Select-Object -First 20 |
@@ -69,6 +77,14 @@ jobs:
             Write-Output "::error::Тесты ядра упали в сборке Windows (код $rc)"
           }
           exit $rc
+
+      - name: Лог тестов — артефактом (даже если упало)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-windows
+          path: pintel/pytest.log
+          if-no-files-found: ignore
 
       - name: Сборка exe
         run: python -m PyInstaller --clean --noconfirm pintel-doctor.spec

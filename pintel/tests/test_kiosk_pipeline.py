@@ -79,6 +79,36 @@ class FakeClient:
     def update_evaluation(self, ev_id, report, snapshot_patch=None): self.calls.append(("update", ev_id, list(snapshot_patch or {}))); return {"ok": True}
 
 
+@pytest.fixture(autouse=True)
+def _без_живых_потоков():
+    """После каждого теста гасим все созданные Pipeline и ждём их.
+
+    Поток проверки живёт после результата, пока телефон на кабеле: он дособирает остаток и
+    слушает журнал Apple, а кончается по `cancel` (его ставит `go_home`). Тест, который
+    забыл об этом, оставлял живой QThread — на Windows разрушение такого потока вешает весь
+    прогон (сборка 17.11.2026 сожгла на этом шесть часов), на маке только печатает
+    «QThread: Destroyed while thread is still running»."""
+    живые = []
+    было = worker.Pipeline.__init__
+
+    def запомнить(self, *a, **k):
+        было(self, *a, **k)
+        живые.append(self)
+    worker.Pipeline.__init__ = запомнить
+    try:
+        yield
+    finally:
+        worker.Pipeline.__init__ = было
+        for p in живые:
+            try:
+                p.cancel.set()
+                p.остановить_слушателя()
+                if p.isRunning():
+                    p.wait(10000)
+            except RuntimeError:                 # объект уже разрушен — и ладно
+                pass
+
+
 @pytest.fixture
 def fake_core(monkeypatch):
     snap = _слепок_из_файла()                    # как у живой проверки: с отчётами о сбоях

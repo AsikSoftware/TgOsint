@@ -227,3 +227,20 @@ def test_the_cable_finding_goes_into_the_request_as_status_and_report():
     assert пустой["akb"] is None and пустой["akb_exact"] is None and пустой["sim"] is None and пустой["ddr"] is None
     запрос = ms_update.запрос(_отчёт(), "ABCD12", что="записать", номер="q7", товар="t-1")
     assert запрос["мойсклад"] == {"что": "записать", "товар": "t-1"} and запрос["код"] == "ABCD12"
+
+
+def test_the_kiosk_sends_when_the_phone_was_read():
+    """Дату для поля «Дата диагностики» присылает касса: это время чтения телефона из слепка,
+    а не момент записи в МойСклад — товар со склада могли читать и раньше, чем отправили."""
+    from pintel_core.external import ms_update
+    rep = _отчёт()
+    rep["когда"] = "2026-11-18T05:42:07"
+    поля = ms_update.поля(rep, точка="16/38")
+    assert поля["когда_диагностика"] == "2026-11-18T05:42:07"
+
+    # в слепке времени нет — берём то, что передали (или «сейчас»), но не выдумываем пустое
+    rep.pop("когда", None)
+    from datetime import datetime
+    поля = ms_update.поля(rep, точка="16/38", когда=datetime(2026, 11, 18, 6, 0, 0))
+    assert поля["когда_диагностика"] == "2026-11-18 06:00:00"
+    assert ms_update.поля(rep, точка="16/38")["когда_диагностика"]

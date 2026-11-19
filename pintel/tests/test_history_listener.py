@@ -223,6 +223,69 @@ def test_report_uses_seal_verdict_for_face_id_and_unknown_part_is_stop():
     assert any("неизвестного происхождения" in x for x in rep["стоп"]) and rep["итог"]["вердикт"] == "ПРОБЛЕМНЫЙ"
 
 
+# -------------------------------------------- доверие к компонентам как вердикт (iOS 18, 19.11.2026)
+# Живой iPhone 14 Pro Max на iOS 18.6 при заходе в раздел напечатал ТОЛЬКО это: проверку
+# подлинности компонентов, «FDR Validation status:Pass» и пустой RCHL. Ни записей, ни
+# «delta components» — и вердикт уходил в «кабель», то есть «мы не дочитали». Про телефон
+# такой ответ не говорит ничего, а сотруднику всё равно идти проверять руками.
+ДОВЕРИЕ_ЧИСТО = {"Battery": {"AuthPassed": 1, "isTrusted": 1, "isTrustedForUI": 1},
+                 "Display": {"AuthPassed": 1, "isTrusted": 1, "isTrustedForUI": 1}}
+
+
+def _вердикт(доверие=None, **мета):
+    """Вердикт по деталям на живом слепке: кабель чистый, меняем только ответ Apple."""
+    import os
+    from pintel_core.devicelink import snapshot
+    from pintel_core.analysis import report as report_mod
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    snap = snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone17pro_anon.snapshot.json"),
+                               encoding="utf-8").read())
+    snap["repair_history"] = {}
+    snap["repair_history_meta"] = {"раздел_открыт": True,
+                                   "компоненты": {"доверие": доверие or {}, "здоровье": {}, "ремонты": {}},
+                                   **мета}
+    return report_mod.build(snap)["детали_вердикт"]
+
+
+def test_component_trust_alone_is_an_apple_confirmation():
+    """Словарь доверия — вердикт сам по себе, без записей о ремонте.
+
+    На втором заходе в раздел iOS 18 печатает только его: сверку с заводской печатью
+    телефон не повторяет. Прежде такой аппарат получал «кабель» — ответ читалки."""
+    в = _вердикт(ДОВЕРИЕ_ЧИСТО, fdr_печать="Pass", rchl_байт=0)
+    assert в["итог"] == "родные" and в["apple_подтверждено"] is True
+    # и видно, что согласились оба канала: сотрудник читает слова Apple, а не нашу калибровку
+    источники = {d["деталь"]: d["источник"] for d in в["детали"]}
+    assert "проверка Apple" in источники["Экран"] and "кабель" in источники["Экран"]
+    assert "проверка Apple" in источники["Аккумулятор"]
+
+
+def test_an_untrusted_component_is_a_stop_even_with_the_seal_passing():
+    """isTrusted = 0 — СТОП, и «печать сошлась» этого не отменяет."""
+    доверие = {**ДОВЕРИЕ_ЧИСТО, "Display": {"AuthPassed": 1, "isTrusted": 0, "isTrustedForUI": 0}}
+    в = _вердикт(доверие, fdr_печать="Pass", rchl_байт=0)
+    assert в["итог"] == "замена"
+    плохой = [d for d in в["детали"] if d["статус"] == "bad"]
+    assert плохой and плохой[0]["деталь"] == "Экран"
+
+
+def test_the_seal_passing_alone_proves_nothing():
+    """«FDR Validation status:Pass» и пустой RCHL — НЕ подтверждение.
+
+    Проверено по 15 эталонам 19.11.2026: обе строки печатают и аппараты с заменами
+    (13 на 26.6.1, 13 на 26.7, 14 на 26.4.2, 15 Pro Max на 26.5.2), а «Fail» не встретился
+    ни разу. Зелёный по ним выдали бы телефону с пересаженным экраном."""
+    в = _вердикт({}, fdr_печать="Pass", rchl_байт=0)
+    assert в["apple_подтверждено"] is False and в["итог"] == "кабель"
+
+
+def test_a_lone_trust_line_is_not_a_confirmation():
+    """Одна строка «isTrustedForUI: 1» без словаря подтверждением не становится:
+    на iOS 15 она выдала бы зелёный по всему аппарату, ничего не проверив."""
+    в = _вердикт({"Battery": {"isTrustedForUI": 1}})
+    assert в["apple_подтверждено"] is False and в["итог"] == "кабель"
+
+
 # ---------------------------------------------------------------- проверка компонентов (iOS 26)
 # Значения сверены на двух живых аппаратах: чистый iPhone 14 Pro (iOS 26.5) и iPhone 15 Pro
 # с «Неизвестно» на экране (iOS 26.6.1). Это единственный известный канал, который даёт

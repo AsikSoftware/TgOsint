@@ -63,7 +63,7 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
         оригинальный экран, а Apple видит, поэтому сотрудник должен читать её слова, а не
         нашу калибровку. Канал, согласившийся вторым, не теряем — дописываем в «источник»."""
         rank = {"bad": 3, "used": 2, "repaired": 1, "ok": 0}
-        сила = {"сверка Apple": 2, "печать Apple": 2}
+        сила = {"сверка Apple": 2, "печать Apple": 2, "проверка Apple": 2}
         new = {"ключ": key, "деталь": PART_RU.get(key, key), "статус": status,
                "почему": why, "источник": source}
         cur = parts.get(key)
@@ -129,6 +129,30 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
             # одни записи о ремонтах: «ремонтов не было» ≠ «деталь родная» (демо 15 Pro)
             note(key, "ok", "не меняли" + (f" (журнал, {d})" if d else " (журнал)"), "журнал Apple")
 
+    # Канал 4: проверка подлинности компонентов самой Apple (AuthCP Components).
+    #
+    # Телефон печатает её при заходе в раздел: по каждой детали AuthPassed, isTrusted,
+    # isTrustedForUI, authErrorDescription. Это тот самый словарь, по которому раздел и
+    # рисует «Запчасти и история обслуживания» (ключ так и зовётся isTrustedForUI).
+    #
+    # Проверено по 15 эталонам 19.11.2026: isTrusted = 0 стоит ТОЛЬКО у ремонтных аппаратов
+    # (13 на 26.6.1, 14 на 26.4.2, 15 Pro Max на 26.5.2, 15 Pro на 26.6.1 — и у 15 Pro,
+    # который показывал «Неизвестно» на экране), у чистых всегда 1. Соседние строки того же
+    # всплеска доказательством НЕ являются: «FDR Validation status:Pass» и пустой RCHL
+    # печатают и ремонтные аппараты — по ним зелёный давать нельзя.
+    #
+    # Берём только словарь (в нём есть AuthPassed), а не одиночную строку «isTrustedForUI: 1»:
+    # на iOS 15 такая строка выдала бы зелёный по всему аппарату.
+    доверие = ((hist_meta or {}).get("компоненты") or {}).get("доверие") or {}
+    словарь_доверия = {k: v for k, v in доверие.items() if "AuthPassed" in v and k in PART_RU}
+    for key, vals in словарь_доверия.items():
+        плохо = (vals.get("isTrusted") == 0 or vals.get("isTrustedForUI") == 0
+                 or vals.get("AuthPassed") == 0)
+        if плохо:
+            note(key, "bad", "Apple не признала деталь подлинной", "проверка Apple")
+        elif vals.get("isTrusted") == 1 and vals.get("AuthPassed") == 1:
+            note(key, "ok", "Apple подтвердила: деталь оригинальная", "проверка Apple")
+
     # Подтверждение Apple: сверка с заводской печатью прочитана (iOS 18 — сама сверка;
     # iOS 26 — записи вместе со строками сверки), либо телефон сказал прямым текстом
     # «FDR data indicates no repair happened» — это тот же вывод словами. Одни записи с
@@ -136,12 +160,16 @@ def verdict(snap, signals, hist, battery, seal, hist_meta=None, apple_supported=
     # детали на экране телефона.
     meta = hist_meta or {}
     fmt = str(meta.get("формат") or "")
-    apple_ok = bool(hist) and (fmt.startswith("сверка") or fmt.startswith("проверка компонентов")
-                               or fmt.startswith("заключение FDR")
-                               or meta.get("дельта") is not None
-                               or bool((meta.get("компоненты") or {}).get("здоровье"))
-                               or any(str(h.get("источник") or "").startswith(("сверка", "проверка"))
-                                      for h in hist.values()))
+    # Словарь доверия — подтверждение сам по себе, без записей: на iOS 18 телефон на втором
+    # заходе в раздел печатает только его, а сверку с печатью не повторяет. Прежде такой
+    # аппарат уходил в «кабель» — то есть «мы не дочитали», что про телефон не говорит ничего.
+    apple_ok = bool(словарь_доверия) or bool(hist) and (
+        fmt.startswith("сверка") or fmt.startswith("проверка компонентов")
+        or fmt.startswith("заключение FDR")
+        or meta.get("дельта") is not None
+        or bool((meta.get("компоненты") or {}).get("здоровье"))
+        or any(str(h.get("источник") or "").startswith(("сверка", "проверка"))
+               for h in hist.values()))
 
     details = [v for k, v in parts.items()]
     statuses = {p["статус"] for p in details}

@@ -181,9 +181,10 @@ class UpdateScreen(Screen):
         self.таблица.setContentsMargins(0, 6, 0, 0)
         self.таблица.setHorizontalSpacing(22)
         self.таблица.setVerticalSpacing(7)
-        self.таблица.setColumnStretch(0, 3)
-        self.таблица.setColumnStretch(1, 4)
-        self.таблица.setColumnStretch(2, 5)
+        self.таблица.setColumnStretch(0, 2)
+        self.таблица.setColumnStretch(1, 3)
+        self.таблица.setColumnStretch(2, 4)
+        self.таблица.setColumnStretch(3, 5)
         self.таблица_рамка.hide()
         пв.addWidget(self.таблица_рамка)
         self.заметки = label("", wrap=True, font_=font(FONT_TEXT, 16, W.Medium), color=C["warntext"])
@@ -353,21 +354,38 @@ class UpdateScreen(Screen):
             f"Код {товар.get('код')}" if товар.get("код") else "", товар.get("название") or "") if x))
         self.товар_подробно.setText(str(товар.get("папка") or ""))
 
+    @staticmethod
+    def _разряд(и) -> str:
+        """Что это за строка: исправление, очистка или заполнение пустого.
+
+        Владелец 19.11.2026: «пусть обновление показывает, что исправил и что дописал».
+        Разряд виден отдельной колонкой: в списке из шестидесяти строк исправление — то, на
+        что надо смотреть, а дописывание пустого проверять незачем."""
+        было, станет = str(и.get("было") or ""), str(и.get("станет") or "")
+        if станет == "— очищено":
+            return "очищено"
+        return "исправлено" if было and было != "—" else "дописано"
+
+    ЦВЕТ_РАЗРЯДА = {"исправлено": "warntext", "очищено": "muted", "дописано": "ok"}
+
     def _таблица(self, изменения):
         if not изменения:
             return
-        for колонка, имя in enumerate(("ПОЛЕ", "БЫЛО", "СТАНЕТ")):
+        for колонка, имя in enumerate(("ЧТО", "ПОЛЕ", "БЫЛО", "СТАНЕТ")):
             self.таблица.addWidget(kicker(имя, 13, 2.0), 0, колонка)
         for ряд, и in enumerate(изменения[:ИЗМЕНЕНИЙ_НА_ЭКРАНЕ], 1):
-            self.таблица.addWidget(label(str(и.get("поле") or ""), font_=font(FONT_TEXT, 19, W.DemiBold)), ряд, 0)
+            разряд = self._разряд(и)
+            self.таблица.addWidget(label(разряд, font_=font(FONT_TEXT, 16, W.DemiBold),
+                                         color=C[self.ЦВЕТ_РАЗРЯДА[разряд]]), ряд, 0)
+            self.таблица.addWidget(label(str(и.get("поле") or ""), font_=font(FONT_TEXT, 19, W.DemiBold)), ряд, 1)
             self.таблица.addWidget(label(str(и.get("было") or "—"), wrap=True, font_=font(FONT_TEXT, 19),
-                                         color=C["muted"]), ряд, 1)
+                                         color=C["muted"]), ряд, 2)
             self.таблица.addWidget(label(str(и.get("станет") or ""), wrap=True,
-                                         font_=font(FONT_NUM, 19, W.Bold), color=C["ok"]), ряд, 2)
+                                         font_=font(FONT_NUM, 19, W.Bold), color=C["ok"]), ряд, 3)
         лишние = len(изменения) - ИЗМЕНЕНИЙ_НА_ЭКРАНЕ
         if лишние > 0:
             self.таблица.addWidget(label(f"…и ещё {лишние}", font_=font(FONT_TEXT, 17), color=C["muted"]),
-                                   ИЗМЕНЕНИЙ_НА_ЭКРАНЕ + 1, 0, 1, 3)
+                                   ИЗМЕНЕНИЙ_НА_ЭКРАНЕ + 1, 0, 1, 4)
         self.таблица_рамка.show()
 
     def _заметки(self, мс):

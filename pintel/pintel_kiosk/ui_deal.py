@@ -311,15 +311,19 @@ class ПунктРяд(QFrame):
 
     нажали = Signal(str)
 
-    def __init__(self, ключ, имя, подробно):
+    def __init__(self, ключ, имя, подробно, плотно=False):
         super().__init__()
         self.ключ = ключ
+        # `плотно` — для узкой колонки (режим обновления МойСклада): состояние встаёт под
+        # названием, а чем проверять — не пишем вовсе. В одну строку «Кнопки работает» на
+        # 230 px не помещается и обрывается на полуслове, а подпись снизу режется посередине.
+        self.плотно = bool(плотно)
         # имя объекта и селектор по нему: иначе рамка и фон достаются и подписям внутри —
         # стиль QFrame без селектора наследуется всеми детьми
         self.setObjectName("checkrow")
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.MinimumExpanding)
-        self.setMinimumHeight(72)
+        self.setMinimumHeight(62 if плотно else 72)
         ряд = QHBoxLayout(self)
         ряд.setContentsMargins(16, 8, 14, 8)
         ряд.setSpacing(14)
@@ -330,16 +334,19 @@ class ПунктРяд(QFrame):
         текст.addStretch(1)
         # Состояние словами — в одну строку с названием, а не отдельной колонкой справа:
         # колонка съедала ширину у подписи, и та обрывалась на полуслове.
-        верх = QHBoxLayout()
+        верх = QVBoxLayout() if плотно else QHBoxLayout()
         верх.setContentsMargins(0, 0, 0, 0)
-        верх.setSpacing(10)
+        верх.setSpacing(1 if плотно else 10)
         self.имя = label(имя, font_=font(FONT_TEXT, 21, W.Bold))
         self.состояние = label("", font_=font(FONT_TEXT, 16, W.Bold))
         верх.addWidget(self.имя)
         верх.addWidget(self.состояние)
-        верх.addStretch(1)
+        if not плотно:
+            верх.addStretch(1)
         текст.addLayout(верх)
         self.подробно = label(подробно, wrap=True, font_=font(FONT_TEXT, 15), color=C["muted"])
+        if плотно:
+            self.подробно.hide()           # место под название: на узкой плитке его и так впритык
         текст.addWidget(self.подробно)
         текст.addStretch(1)
         ряд.addWidget(self.значок, 0, Qt.AlignVCenter)

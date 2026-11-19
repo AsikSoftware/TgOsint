@@ -198,6 +198,15 @@ def test_the_moysklad_update_screen_fits(открыть, отчёт):
         экран.set_step(ключ, вид, текст)
     assert _замечания(экран) == [] and not экран.b_apple.isHidden(), "читаем, ждём раздел Apple"
     экран.set_телефон(отчёт)
+    # шаг 2: проверки открылись, появился код теста и восемь плиток — самое тесное место
+    экран.проверки_идут()
+    экран.показать_тест("https://kiosk.pintelkz.com/t/AbCd1234EfGh5678")
+    from pintel_core import phonetest
+    from pintel_core.external import ocenka_media
+    экран.set_тест({к: phonetest.ПЛОХО for к in phonetest.КЛЮЧИ})
+    for ключ in ocenka_media.КЛЮЧИ:
+        экран.отметить(ключ)
+    assert _замечания(экран) == [], "шаг проверок: QR, результат и восемь плиток"
     экран.ищем()
     assert _замечания(экран) == [], "ищем товар"
     товар = {"id": "t-1", "код": "40117", "название": "026 Ip 14 Pro 128 Deep Purple Dual Sim " * 2,

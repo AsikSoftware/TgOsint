@@ -190,7 +190,7 @@ class Pipeline(QThread):
     failed = Signal(str)                      # человеческий текст ошибки
     модем = Signal(str)                       # телефон стал сетью этого компьютера (режим модема)
 
-    def __init__(self, cfg, client, parent=None, заново=False):
+    def __init__(self, cfg, client, parent=None, заново=False, отложить_отправку=False):
         super().__init__(parent)
         self.cfg, self.client = cfg, client
         self.skip_apple = threading.Event()
@@ -198,6 +198,12 @@ class Pipeline(QThread):
         # `заново` ставит кнопка «Проверить телефон заново»: тогда прошлую проверку не берём
         # даже если она свежая — сотрудник сказал, что хочет перечитать аппарат.
         self.заново = bool(заново)
+        # `отложить_отправку` ставит режим обновления МойСклада: оценка там создаётся ПОСЛЕ
+        # теста и проверок руками (владелец, 19.11.2026). Созданная до них, она ушла бы на
+        # сервер без них, и её сертификат — то самое «Заключение» карточки товара — не
+        # открылся бы вовсе: страница ждёт пройденных этапов. Отчёт и слепок при этом
+        # сохраняются на точке как обычно, в `out/`: отложена отправка, а не проверка.
+        self.отложить_отправку = bool(отложить_отправку)
         self.serial = None
         self.started = datetime.now()                 # имя эталона за этот прогон — одно на все перезаписи
         self._listener = None                         # чтобы закрыть канал к телефону снаружи
@@ -802,14 +808,19 @@ class Pipeline(QThread):
         self._save(out, snap, rep)
         payload = {"client_id": cid, "report": json.loads(snapshot.dumps(rep)),
                    "snapshot": json.loads(snapshot.dumps(snap))}
-        self._step("upload", "run")
-        # в отдельный поток по той же причине: пока ждём сервер, журнал Apple должен читаться
-        server = await asyncio.to_thread(self.client.upload, payload)   # без связи кладёт в очередь сама
-        if not server:
-            server = {"номер": self.client.local_number(), "локально": True}
-            self._step("upload", "done" if not self.client.enabled else "warn", self._не_ушло())
+        if self.отложить_отправку:
+            # заключение создадут после проверок — отсюда оценка не уходит вовсе
+            server = {"отложено": True}
+            self._step("upload", "wait", "после проверок")
         else:
-            self._step("upload", "done", "отправлено")
+            self._step("upload", "run")
+            # в отдельный поток по той же причине: пока ждём сервер, журнал Apple должен читаться
+            server = await asyncio.to_thread(self.client.upload, payload)   # без связи кладёт в очередь сама
+            if not server:
+                server = {"номер": self.client.local_number(), "локально": True}
+                self._step("upload", "done" if not self.client.enabled else "warn", self._не_ушло())
+            else:
+                self._step("upload", "done", "отправлено")
         result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial, "out": out}
         if self.cancel.is_set():
             # Отменили, пока оценка уходила на сервер: окно уже ведёт новую проверку, и этот

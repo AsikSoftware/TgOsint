@@ -236,6 +236,8 @@ class KioskWindow(QMainWindow):
             self.stack.addWidget(s)
         self.мс_режим = False
         self._мс_запрос, self._мс_что, self._мс_товар, self._мс_спросили_в = "", "", {}, 0.0
+        # какой из трёх шагов режима обновления идёт сейчас (см. ui_update.этап)
+        self._мс_этап = ui_update.ЭТАП_ДИАГНОСТИКА
         self.s_admin.режим_мс.connect(self.мс_переключить)
         self.s_ms.записать.connect(self.мс_записать)
         self.s_ms.дальше.connect(self.мс_дальше)
@@ -243,6 +245,7 @@ class KioskWindow(QMainWindow):
         self.s_ms.пропустить_apple.connect(self.on_skip_apple)
         self.s_ms.починить_связь.connect(self.починить_связь)
         self.s_ms.новый_тест.connect(self.новый_код_теста)
+        self.s_ms.проверки_готовы.connect(self.мс_проверки_готовы)
         self.s_link.готово.connect(self._привязка_готова)
         self.s_link.отмена.connect(self.go_home)
         self.s_link.новый_код.connect(self.новый_код_медиа)
@@ -998,9 +1001,13 @@ class KioskWindow(QMainWindow):
                                  ocenka_media.ссылка_обновления(self.cfg["ocenka_bot"], self.код_медиа))
         self._медиа_спрашиваем = False
         self.медиа_опрос.start(1500)
-        # свой код теста: страницу открывают на том же телефоне со склада, который проверяют
-        self.коды_теста = []
-        self.новый_код_теста()
+        # Код теста заводится не здесь, а когда телефон дочитан (владелец, 19.11.2026):
+        # «пока не генерит кьюар для тестов». До диагностики его и показать негде — блок
+        # проверок размыт, — а заведённый заранее код прочёл бы не тот аппарат: сотрудник
+        # сканирует его телефоном со склада, и результат лёг бы в соседнюю карточку.
+        self.коды_теста, self.тест_телефона, self.код_теста = [], {}, ""
+        self.тест_через_сервер = False
+        self.тест_опрос.stop()                       # тест прошлой сделки в этот режим не идёт
         self.show_screen(self.s_link)
 
     def мс_ждать(self, почему=""):
@@ -1009,13 +1016,12 @@ class KioskWindow(QMainWindow):
         self.last = None
         self._мс_запрос, self._мс_товар = "", {}
         self.медиа_опрос.stop()
-        # отметки прошлого телефона в этот не идут: иначе его тест уедет в чужую карточку
-        if not self.тест_телефона and not any((self.s_ms.проверки())):
-            pass                                  # нечего сбрасывать — не дёргаем экран
-        else:
-            self.тест_телефона = {}
-            self.s_ms.сбросить_проверки()
-            self.новый_код_теста()
+        # Отметки прошлого телефона в этот не идут: иначе его тест уедет в чужую карточку.
+        # Коды тоже: новый заведём после того, как дочитаем следующий аппарат.
+        self._мс_этап = ui_update.ЭТАП_ДИАГНОСТИКА
+        self.тест_телефона, self.коды_теста, self.код_теста = {}, [], ""
+        self.тест_опрос.stop()
+        self.s_ms.сбросить_проверки()
         self.s_ms.set_сотрудник(self.сотрудник)
         self.s_ms.ждать(почему)
         self.show_screen(self.s_ms)
@@ -1031,7 +1037,7 @@ class KioskWindow(QMainWindow):
         self.state = "ms_scan"
         self.wait_unplug = True
         self.s_ms.читаем()
-        self.pipeline = Pipeline(self.cfg, self.client, self, заново=True)
+        self.pipeline = Pipeline(self.cfg, self.client, self, заново=True, отложить_отправку=True)
         self.pipeline.status.connect(self._мс_связь)
         self.pipeline.step.connect(self.s_ms.set_step)
         self.pipeline.done.connect(self._мс_прочитано)
@@ -1056,7 +1062,8 @@ class KioskWindow(QMainWindow):
         self.s_ms.set_телефон(result.get("report") or {})
         self.s_ms.show_prompt(False)
         log_line("режим обновления: журнал Apple пришёл, отчёт обновлён")
-        if self.state == "ms_view" and not self._мс_запрос and not self._мс_товар:
+        if (self.state == "ms_view" and self._мс_этап == ui_update.ЭТАП_ИЗМЕНЕНИЯ
+                and not self._мс_запрос and self._мс_товар):
             self._мс_спросить(ms_update.НАЙТИ)       # пересчитать «было → станет» с журналом
 
     def _мс_связь(self, state, human):
@@ -1073,12 +1080,81 @@ class KioskWindow(QMainWindow):
                       + ". Отключите и подключите кабель заново.")
 
     def _мс_прочитано(self, result):
-        """Телефон прочитан — спрашиваем у бота его товар и что в нём изменится."""
+        """Телефон прочитан — открываем проверки. Товар и заключение будут после них.
+
+        Владелец, 19.11.2026: сначала вся диагностика, потом тест и проверки руками, и
+        только потом заключение и список изменений. Раньше касса спрашивала товар прямо
+        здесь — и «станет» считалось без теста с анкетой, то есть показывало не то, что
+        уедет в карточку на самом деле."""
         if self.state != "ms_scan":
             return
         self.last = result
         self.state = "ms_view"
+        self._мс_этап = ui_update.ЭТАП_ПРОВЕРКИ
         self.s_ms.set_телефон(result.get("report") or {})
+        self.s_ms.проверки_идут()
+        self.новый_код_теста()                       # код теста — только теперь
+
+    def мс_проверки_готовы(self):
+        """Тест пройден и все восемь отмечены — третий шаг: заключение и список изменений."""
+        if not self.мс_режим or self.state != "ms_view" or self._мс_запрос or self._мс_товар:
+            return
+        if self._мс_этап != ui_update.ЭТАП_ПРОВЕРКИ:
+            return
+        self._мс_этап = ui_update.ЭТАП_ИЗМЕНЕНИЯ
+        self._мс_заключение()
+
+    def _мс_заключение(self):
+        """Оценка этого телефона на нашем сервере — она же «Заключение» в карточке товара.
+
+        Создаётся ПОСЛЕ проверок и сразу целой: с тестом, анкетой и журналом Apple. Оценка,
+        созданная до них (так было до 19.11.2026), уходила на сервер без отметок, и её
+        страница-сертификат не открывалась вовсе — она ждёт пройденных этапов.
+
+        Слепок берём с диска: пока телефон лежал на кабеле, касса дописывала в него то, что
+        он додумал позже, и в папке `out` лежит самый свежий."""
+        from .worker import _прочитать_слепок
+        from pintel_core.devicelink import snapshot as _snap
+        from pintel_core.external import ocenka_media as _ом
+        rep = dict((self.last or {}).get("report") or {})
+        тест, ручная = self.s_ms.проверки()
+        if тест:
+            rep["тест_телефона"] = dict(тест)
+        if ручная:
+            rep["ручная_диагностика"] = dict(ручная)
+            rep["ручная_словами"] = _ом.словами(ручная)
+        self.last["report"] = rep
+        self.s_ms.set_step("upload", "run", "")
+        cid = (self.last or {}).get("client_id") or uuid.uuid4().hex[:16]
+        папка = (self.last or {}).get("out") or ""
+        тело = json.loads(_snap.dumps(rep))
+
+        def отправить():
+            return self.client.upload({"client_id": cid, "report": тело,
+                                       "snapshot": _прочитать_слепок(папка) if папка else None})
+
+        log_line("режим обновления: проверки сделаны — создаём заключение")
+        self._run(отправить, ok=self._мс_заключение_готово,
+                  err=lambda e: self._мс_заключение_готово(None, str(e)[:120]))
+
+    def _мс_заключение_готово(self, сервер, почему=""):
+        """Заключение создано — считаем изменения. Не создано — товар не трогаем вовсе.
+
+        Без ссылки на сертификат запись стёрла бы «Заключение» в карточке: поля диагностики
+        заменяются целиком, и пустая ссылка значила бы «заключения нет». Поэтому без неё
+        третьего шага не будет — лучше перечитать телефон, чем затереть прежнюю ссылку."""
+        if not self.мс_режим or self.state != "ms_view":
+            return
+        if not (сервер or {}).get("ссылка_чека"):
+            self._мс_этап = ui_update.ЭТАП_ПРОВЕРКИ
+            отказ = self.client.отвергнуто or почему or "сервер не ответил"
+            self._мс_беда("Заключение не создалось (" + отказ + "). Без него карточку обновлять "
+                          "нельзя: ссылка на сертификат в ней стёрлась бы. Проверьте связь, "
+                          "нажмите «Следующий телефон» и подключите этот же аппарат заново.")
+            self.s_ms.set_step("upload", "fail", "не ушло")
+            return
+        self.last["server"] = dict(сервер)
+        self.s_ms.set_step("upload", "done", "отправлено")
         self._мс_спросить(ms_update.НАЙТИ)
 
     def _мс_спросить(self, что):
@@ -1550,13 +1626,18 @@ class KioskWindow(QMainWindow):
         Сервера нет — всё то же лежит в out/ на точке и уходит в Оценку карточкой."""
         import json as _json
         from pintel_core.devicelink import snapshot as _snap
-        сервер = (self.last or {}).get("server") or {}
+        if self.last is None:
+            return
+        # В отчёт кладём ВСЕГДА, даже когда слать некуда: этот отчёт — то, что уедет в
+        # МойСклад и в заключение. В режиме обновления оценка создаётся позже самих отметок,
+        # и без этого тест с анкетой не попали бы в неё вовсе.
+        rep = dict(self.last.get("report") or {})
+        rep.update(добавка)
+        self.last["report"] = rep
+        сервер = self.last.get("server") or {}
         ev_id = сервер.get("id")
         if not (self.client.enabled and ev_id) or сервер.get("локально"):
             return
-        rep = dict((self.last or {}).get("report") or {})
-        rep.update(добавка)
-        self.last["report"] = rep
         тело = _json.loads(_snap.dumps(rep))
         self._run(lambda: self.client.update_evaluation(ev_id, тело),
                   err=lambda e: log_line(f"оценка на сервере не обновилась: {e}"))

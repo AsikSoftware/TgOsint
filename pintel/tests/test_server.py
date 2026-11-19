@@ -540,8 +540,26 @@ def test_the_receipt_is_on_our_domain(app):
             "тест_телефона": {"sensor": "ok", "speaker": "fail"}}
     assert k.patch(f"/api/kiosk/evaluations/{resp['id']}", json={"report": rep2}, headers=H).status_code == 200
 
+    # Тест прошли не весь, анкеты нет вовсе — сертификат ещё не выдаём: он обещал бы полную
+    # проверку (19.11.2026). Страница говорит, чего не хватает, и ссылка не меняется.
+    рано = TestClient(app).get(resp["ссылка_чека"].replace("http://testserver", ""))
+    assert рано.status_code == 409
+    assert "Проверка не закончена" in рано.text and "проверки руками" in рано.text
+
+    # этапы пройдены — сертификат открывается
+    rep3 = {**rep2,
+            # «speaker: fail» оставляем: этап ПРОЙДЕН, даже когда пункт не прошёл — именно
+            # такой сертификат и нужен покупателю, чтобы видеть, что не работает
+            "тест_телефона": {**{k2: "ok" for k2 in ("sensor", "multitouch", "screen",
+                                                     "mic", "camera_back", "camera_front")},
+                              "speaker": "fail"},
+            "ручная_диагностика": {k2: True for k2 in ("keys", "vibro", "bio", "charge",
+                                                       "net", "glue", "apple", "mdm")}}
+    assert k.patch(f"/api/kiosk/evaluations/{resp['id']}", json={"report": rep3}, headers=H).status_code == 200
     страница = TestClient(app).get(resp["ссылка_чека"].replace("http://testserver", ""))
     assert страница.status_code == 200
+    # и отметки в нём есть: раньше сервер собирал сделку только из «чек», и блок был пуст
+    assert "Герметик" in страница.text and "Кнопки" in страница.text
     for кусок in ("Зама", "Асылбек", "iPhone 12", "A-7"):
         assert кусок in страница.text, кусок
     assert "<svg" in страница.text                                 # QR на сам себя
@@ -604,8 +622,26 @@ def test_the_receipt_is_on_our_domain(app):
             "тест_телефона": {"sensor": "ok", "speaker": "fail"}}
     assert k.patch(f"/api/kiosk/evaluations/{resp['id']}", json={"report": rep2}, headers=H).status_code == 200
 
+    # Тест прошли не весь, анкеты нет вовсе — сертификат ещё не выдаём: он обещал бы полную
+    # проверку (19.11.2026). Страница говорит, чего не хватает, и ссылка не меняется.
+    рано = TestClient(app).get(resp["ссылка_чека"].replace("http://testserver", ""))
+    assert рано.status_code == 409
+    assert "Проверка не закончена" in рано.text and "проверки руками" in рано.text
+
+    # этапы пройдены — сертификат открывается
+    rep3 = {**rep2,
+            # «speaker: fail» оставляем: этап ПРОЙДЕН, даже когда пункт не прошёл — именно
+            # такой сертификат и нужен покупателю, чтобы видеть, что не работает
+            "тест_телефона": {**{k2: "ok" for k2 in ("sensor", "multitouch", "screen",
+                                                     "mic", "camera_back", "camera_front")},
+                              "speaker": "fail"},
+            "ручная_диагностика": {k2: True for k2 in ("keys", "vibro", "bio", "charge",
+                                                       "net", "glue", "apple", "mdm")}}
+    assert k.patch(f"/api/kiosk/evaluations/{resp['id']}", json={"report": rep3}, headers=H).status_code == 200
     страница = TestClient(app).get(resp["ссылка_чека"].replace("http://testserver", ""))
     assert страница.status_code == 200
+    # и отметки в нём есть: раньше сервер собирал сделку только из «чек», и блок был пуст
+    assert "Герметик" in страница.text and "Кнопки" in страница.text
     for кусок in ("Зама", "Асылбек", "iPhone 12", "A-7"):
         assert кусок in страница.text, кусок
     assert "<svg" in страница.text                                 # QR на сам себя

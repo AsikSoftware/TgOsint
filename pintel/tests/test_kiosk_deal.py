@@ -439,6 +439,17 @@ def test_sent_deal_shows_the_code_and_opens_printing(окно):
     assert окно.сделка["клиент"] == "Зама" and окно.сделка["сотрудник"] == "Асылбек"
 
 
+def _этапы_пройдены() -> dict:
+    """Тест и проверки руками для чека: без них сертификат не печатается (19.11.2026).
+
+    Сертификат обещает покупателю полную проверку, и напечатанный до теста он показывал бы
+    пустой блок проверок."""
+    from pintel_core import phonetest
+    from pintel_core.external import ocenka_media
+    return {"тест": {к: phonetest.ОК for к in phonetest.КЛЮЧИ},
+            "ручная": {к: True for к in ocenka_media.КЛЮЧИ}}
+
+
 def test_receipt_is_written_and_named_by_deal(окно, tmp_path, monkeypatch):
     """Чек складывается файлом — его печатает сотрудник из окна просмотра."""
     monkeypatch.setattr(kapp, "data_dir", lambda: str(tmp_path))
@@ -446,7 +457,7 @@ def test_receipt_is_written_and_named_by_deal(окно, tmp_path, monkeypatch):
     окно.last = {"report": _отчёт("эталон_iPhone-14-Pro_iOS26.5.zip")}
     окно.сделка = {"номер": "7KQ4M", "клиент": "Зама",
                    "телефон": "+77058837953", "сотрудник": "Асылбек", "точка": "16/38",
-                   "коробка": True, "шнур": False}
+                   "коробка": True, "шнур": False, **_этапы_пройдены()}
     monkeypatch.setattr(kapp.os, "startfile", lambda p: None, raising=False)
     окно.напечатать_чек()
     файл = tmp_path / "out" / "сертификат_7KQ4M.html"
@@ -956,6 +967,13 @@ def test_the_receipt_can_be_printed_before_the_deal_is_sent(окно, tmp_path, 
     _чистый_без_теста(окно)
     окно.s_work.имя.setText("Зама")
     окно.s_work.телефон.setText("+77058837953")
+    # этапы проверки проходим: до них сертификат не печатается (19.11.2026). Речь в этом
+    # тесте про другое — что ждать ОТПРАВКИ сделки не нужно.
+    from pintel_core import phonetest
+    нет = окно._чего_не_хватает_для_чека(окно._чек_данные())
+    assert нет, "без теста и анкеты сертификат печатать нельзя"
+    _руками_отмечено(окно)
+    окно.s_work.set_тест({к: phonetest.ОК for к in phonetest.КЛЮЧИ})
     assert окно.s_work.b_печать.isEnabled(), "медиа дошли, а чек не напечатать"
     assert not окно.s_work.отправлено
     окно.напечатать_чек()

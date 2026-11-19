@@ -239,6 +239,61 @@ def public_report(request: Request, token: str, db: DbSession = Depends(get_db))
     return render(request, "public_report.html", None, ev=ev, rep=ev.report or {})
 
 
+def _чего_не_хватает_для_сертификата(rep: dict) -> list:
+    """Какие этапы проверки ещё не пройдены. Пусто — сертификат можно отдавать.
+
+    Владелец, 19.11.2026: «пусть заключение появляется только после прохождения всех этапов
+    тестов (через браузер и ручные)». Сертификат — обещание покупателю, что телефон проверили
+    целиком; выданный до теста, он показывает пустой блок проверок и обещает то, чего не было.
+
+    Оценки прежних сборок кассы отметок не присылали вовсе — у них в отчёте нет ни одного из
+    этих ключей, и такие сертификаты мы не прячем: ссылки на них уже у клиентов на руках, а
+    задним числом проверку не пройти.
+    """
+    from pintel_core import phonetest
+    from pintel_core.external import ocenka_media
+    тест = rep.get("тест_телефона")
+    ручная = rep.get("ручная_диагностика")
+    if тест is None and ручная is None and not rep.get("тест_пропущен"):
+        return []                                   # прежняя сборка: отметок не присылали
+    нет = []
+    if not (phonetest.готов(тест or {}) or rep.get("тест_пропущен")):
+        не_пройдено = [имя for имя, ответ in phonetest.коротко(тест or {}) if ответ is None]
+        нет.append("тест на телефоне" + (f" ({', '.join(не_пройдено)})" if не_пройдено else ""))
+    if not ocenka_media.готова(ручная or {}):
+        не_отмечено = [имя for ключ, имя, _ in ocenka_media.ПУНКТЫ
+                       if (ручная or {}).get(ключ) is None]
+        нет.append("проверки руками" + (f" ({', '.join(не_отмечено)})" if не_отмечено else ""))
+    return нет
+
+
+def _сертификат_не_готов(нет: list) -> str:
+    """Страница вместо сертификата: что ещё не пройдено. Её видит и клиент, поэтому без
+    упрёков сотруднику и без внутренних подробностей."""
+    from html import escape
+    пункты = "".join(f"<li>{escape(str(x))}</li>" for x in нет)
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка не закончена</title>
+<style>
+  :root {{ color-scheme: light dark; --фон: #fff; --текст: #111; --тихий: #666; }}
+  @media (prefers-color-scheme: dark) {{
+    :root:not([data-theme="light"]) {{ --фон: #15171a; --текст: #f2f3f5; --тихий: #a8adb5; }} }}
+  :root[data-theme="dark"] {{ --фон: #15171a; --текст: #f2f3f5; --тихий: #a8adb5; }}
+  body {{ margin: 0; padding: 40px 16px; background: var(--фон); color: var(--текст);
+          font: 17px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }}
+  main {{ max-width: 34rem; margin: 0 auto; }}
+  h1 {{ font-size: 1.5rem; margin: 0 0 .6rem; }}
+  p, li {{ color: var(--тихий); }}
+  ul {{ padding-left: 1.2rem; }}
+</style></head><body><main>
+<h1>Проверка не закончена</h1>
+<p>Заключение появится здесь, когда телефон пройдёт все этапы. Не пройдено:</p>
+<ul>{пункты}</ul>
+<p>Откройте эту ссылку позже — она не меняется.</p>
+</main></body></html>"""
+
+
 @router.get("/check/{token}", response_class=HTMLResponse)
 def public_check(token: str, db: DbSession = Depends(get_db)):
     """Чек оценки на домене: ровно тот же документ, что печатается на точке.
@@ -260,6 +315,18 @@ def public_check(token: str, db: DbSession = Depends(get_db)):
     сделка.setdefault("точка", ev.point.name if ev.point else "")
     сделка.setdefault("коробка", bool(ev.has_box))
     сделка.setdefault("шнур", bool(ev.has_cord))
+    # Тест на телефоне и проверки руками: чек ждёт их в «сделке», а она собиралась только из
+    # `чек` — там отметок нет, и в сетевом сертификате блок тестов выходил пустым, хотя на
+    # бумаге он печатался (владелец, 19.11.2026: «в заключении их нет!»). Берём их из самого
+    # отчёта: касса досылает их туда после чтения кабелем.
+    сделка.setdefault("тест", dict(rep.get("тест_телефона") or {}))
+    сделка.setdefault("тест_пропущен", str(rep.get("тест_пропущен") or ""))
+    сделка.setdefault("ручная", dict(rep.get("ручная_диагностика") or {}))
+    нет = _чего_не_хватает_для_сертификата(rep)
+    if нет:
+        # Сертификат — обещание покупателю, что телефон проверили целиком. Пока этапы не
+        # пройдены, выдавать его нельзя: он выглядел бы как полная проверка.
+        return HTMLResponse(_сертификат_не_готов(нет), status_code=409)
     return HTMLResponse(receipt.html(сделка, rep, когда=ev.created_at))
 
 

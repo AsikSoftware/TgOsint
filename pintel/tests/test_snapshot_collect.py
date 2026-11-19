@@ -20,6 +20,41 @@ from pintel_core.devicelink import snapshot
 HERE = os.path.dirname(os.path.abspath(__file__))
 ДИСК = snapshot.ДОМЕН_ДИСКА
 
+_ПЕТЛЯ = []                # петля текущего теста: её ставит и убирает фикстура `своя_петля`
+
+
+@pytest.fixture(autouse=True)
+def своя_петля():
+    """Своя петля событий на тест, и уборка остатков — С ПРЕДЕЛОМ.
+
+    Вопрос, который телефон обдумывает, остаётся живой задачей нарочно: ответ подберут позже.
+    Поэтому после теста в петле почти всегда что-то живо. `asyncio.run` снимает такие остатки
+    без предела — и 19.11.2026 сборка Windows встала ровно в этой уборке и шла в тупике 17
+    минут, до обрыва шага по времени. Здесь остатки снимаются с пределом: зависший остаток
+    портит один тест, а не всю сборку.
+    """
+    петля = asyncio.new_event_loop()
+    asyncio.set_event_loop(петля)
+    _ПЕТЛЯ.append(петля)
+    try:
+        yield петля
+    finally:
+        _ПЕТЛЯ.pop()
+        остатки = [з for з in asyncio.all_tasks(петля) if not з.done()]
+        for з in остатки:
+            з.cancel()
+        if остатки:
+            петля.run_until_complete(asyncio.wait(остатки, timeout=5))
+        петля.close()
+        asyncio.set_event_loop(None)
+
+
+def прогнать(корутина):
+    """Прогнать корутину в петле теста — вместо `asyncio.run` (см. `своя_петля`)."""
+    if _ПЕТЛЯ:
+        return _ПЕТЛЯ[-1].run_until_complete(корутина)
+    return asyncio.run(корутина)
+
 
 def _слепок():
     return snapshot.loads(open(os.path.join(HERE, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
@@ -94,7 +129,7 @@ def test_the_kiosk_snapshot_does_not_ask_about_memory_at_all(тихо):
     """Касса читает слепок с `память=False`: домен диска не трогается, свободное место никого
     не задерживает. Объём при этом известен — с контроллера NVMe."""
     т = Телефон()
-    snap = asyncio.run(snapshot.collect(т, т, память=False))
+    snap = прогнать(snapshot.collect(т, т, память=False))
     assert ДИСК not in т.домены and ДИСК not in snap["domains"]
     assert snap["quality"]["не_прочиталось"].get(ДИСК) is None
     rep = report_mod.build(snap)
@@ -106,7 +141,7 @@ def test_memory_is_asked_once_not_twice(тихо):
     """Без кассы (доктор) память читается здесь же — но один раз. Раньше домен читали дважды с
     паузой, и на iOS 27 второй ответ каждый раз шёл по 20 секунд."""
     т = Телефон()
-    snap = asyncio.run(snapshot.collect(т, т))
+    snap = прогнать(snapshot.collect(т, т))
     assert т.домены.count(ДИСК) == 1 and т.домены[-1] == ДИСК, "память — один раз и последней"
     assert snap["domains"][ДИСК]["TotalDiskCapacity"] and snap["quality"]["устарело"] == []
     assert report_mod.build(snap)["память"]["диск_гб"] == 64
@@ -117,14 +152,14 @@ def test_a_dead_link_stops_the_reading_at_once(тихо):
     на каждый из двадцати узлов. Теперь — два сорвавшихся чтения, проба, и `СвязьПропала`."""
     т = Телефон(оборвать_после=5)
     with pytest.raises(snapshot.СвязьПропала):
-        asyncio.run(snapshot.collect(т, т, память=False))
+        прогнать(snapshot.collect(т, т, память=False))
     assert т.чтений <= 5 + 3, f"после обрыва сделано ещё {т.чтений - 5} чтений"
 
 
 def test_a_single_blink_is_reread_and_the_snapshot_goes_on(тихо):
     """Одно сорвавшееся чтение — не обрыв: его перечитывают, слепок доходит до конца."""
     т = Телефон(моргнуть_на=1)                               # сорвалось самое первое чтение — паспорт
-    snap = asyncio.run(snapshot.collect(т, т, память=False))
+    snap = прогнать(snapshot.collect(т, т, память=False))
     assert snap["root"]["ProductType"] and snap["quality"]["повторы"].get("root") == 2
     assert report_mod.build(snap)["паспорт"]["модель"] == "iPhone 12"
 
@@ -133,7 +168,7 @@ def test_a_cancelled_reading_stops_between_reads(тихо):
     """Чтение отменили — оно останавливается на ближайшем шаге, а не дочитывает телефон."""
     т = Телефон()
     with pytest.raises(snapshot.Остановлено):
-        asyncio.run(snapshot.collect(т, т, жив=lambda: т.чтений < 4, память=False))
+        прогнать(snapshot.collect(т, т, жив=lambda: т.чтений < 4, память=False))
     assert т.чтений <= 5
 
 
@@ -176,11 +211,11 @@ def test_the_side_read_puts_the_answer_into_the_snapshot_or_says_it_did_not_wait
         await чтение.закрыть()
         return пришло, snap, соединение
 
-    пришло, snap, соединение = asyncio.run(прогон(0, 1.0))
+    пришло, snap, соединение = прогнать(прогон(0, 1.0))
     assert пришло and snap["domains"][ДИСК]["TotalDiskCapacity"] and соединение.закрыто
     assert snap["nand_summary"].get("записей") and "память_не_дождались_с" not in snap["quality"]
 
-    пришло, snap, соединение = asyncio.run(прогон(30, 0.05))
+    пришло, snap, соединение = прогнать(прогон(30, 0.05))
     assert not пришло and ДИСК not in snap["domains"] and соединение.закрыто
     assert snap["quality"]["память_не_дождались_с"] >= 0
     rep = report_mod.build(snap)
@@ -267,7 +302,7 @@ def _собрать(т, соединить, *, память=False, ждать_о
             return snap, сбор
         finally:
             pass
-    return asyncio.run(прогон())
+    return прогнать(прогон())
 
 
 def test_every_domain_is_collected_on_side_connections(тихо, скоро):
@@ -316,7 +351,7 @@ def test_a_question_the_phone_never_answers_does_not_stop_the_others(тихо, �
     assert not any("по кабелю не прочиталась" in x for x in rep["не_прочиталось"]), (
         "домен, которого никто не читает, сделал проверку неполной")
     assert any("так и не ответил" in x for x in rep["служебное"]), rep["служебное"]
-    asyncio.run(сбор.закрыть())
+    прогнать(сбор.закрыть())
     assert all(с.закрыто for с in выданы)
 
 
@@ -352,7 +387,44 @@ def test_a_phone_that_answers_nothing_is_still_asked_about_everything(тихо, 
     assert not any("по кабелю не прочиталась" in x for x in rep["не_прочиталось"])
     assert rep["паспорт"]["модель"] == "iPhone 12"
     assert any("так и не ответил" in x for x in rep["служебное"])
-    asyncio.run(сбор.закрыть())
+    прогнать(сбор.закрыть())
+
+
+def test_a_silent_phone_is_not_asked_forever(тихо, скоро, monkeypatch, своя_петля):
+    """Вытесненный ради места вопрос возвращается в очередь — но не по кругу без конца.
+
+    Когда телефон молчит, а мест в парке меньше, чем вопросов, каждый новый вопрос вытесняет
+    уже стоящий. Вытеснение нарочно не тратит попытку домена (телефон не виноват, что мест не
+    хватило) — и без предела это ходило по кругу: ни один домен не сдавался, очередь не
+    кончалась, рабочие жили всегда, и сбор без конца открывал телефону новые соединения. На
+    этом же встала уборка `asyncio.run` в сборке Windows 19.11.2026: пока рабочие живы, их
+    отмена поднимает новых, и снятие остатков не кончалось вовсе — шаг оборвался по времени.
+
+    Сцена нарочно тесная: одно место в парке и два молчащих домена, чтобы вытеснение шло
+    на каждом вопросе. Граница считается по правилам (попытки × вытеснения), а не по
+    секундомеру: от скорости машины она не зависит."""
+    monkeypatch.setattr(snapshot, "ПАРКОВОК", 1)
+    два = БЕЗ_ДИСКА[:2]
+    т = Телефон()
+    соединить, выданы, журнал = _боковые(т, молчит=два)
+
+    async def прогон():
+        сбор = snapshot.СборДоменов(соединить, log=lambda *a: None)
+        сбор.начать(два)
+        await сбор.собрать(ждать=2.0)
+        return сбор
+    сбор = прогнать(прогон())
+
+    предел = len(два) * (snapshot.ПОПЫТОК_ДОМЕНА + snapshot.ВЫТЕСНЕНИЙ_БЕЗ_ПОПЫТКИ)
+    assert len(журнал) <= предел, (
+        f"вопросов задано {len(журнал)}, больше {предел}: вытеснение ходит по кругу")
+    assert сбор.сдались, "ни один домен не сдался — попытки не тратятся, спрашивать будем вечно"
+    assert sorted(set(журнал)) == sorted(два), "спрошены не оба домена"
+    # после закрытия не остаётся ни одной живой задачи — ни рабочего, ни вопроса в парке
+    прогнать(сбор.закрыть())
+    живые = [з for з in asyncio.all_tasks(своя_петля) if not з.done()]
+    assert живые == [], f"после закрытия остались задачи: {живые}"
+    assert all(с.закрыто for с in выданы), "соединения закрыты за собой"
 
 
 def test_a_late_answer_is_folded_in_whenever_it_arrives(тихо, скоро):
@@ -371,7 +443,7 @@ def test_a_late_answer_is_folded_in_whenever_it_arrives(тихо, скоро):
         сбор.итог(snap)
         await сбор.закрыть()
         return snap, пришли, выданы
-    snap, пришли, выданы = asyncio.run(прогон())
+    snap, пришли, выданы = прогнать(прогон())
     assert пришли == [ПОЗДНИЙ] and snap["domains"][ПОЗДНИЙ] == _слепок()["domains"][ПОЗДНИЙ]
     assert "домены_без_ответа" not in snap["quality"] and "ждём_домены" not in snap["quality"]
     assert all(с.закрыто for с in выданы), "соединения закрыты за собой"
@@ -389,7 +461,7 @@ def test_a_second_reading_keeps_what_was_already_collected(тихо, скоро)
         snap2 = await snapshot.collect(т, т, память=False, соединить=соединить, сбор=сбор)
         await сбор.закрыть()
         return snap1, snap2, было, len(журнал)
-    snap1, snap2, было, стало = asyncio.run(прогон())
+    snap1, snap2, было, стало = прогнать(прогон())
     assert было == len(БЕЗ_ДИСКА) and стало == было, "второе чтение спрашивало телефон заново"
     assert snap2["domains"] == snap1["domains"] and snap2["domains"]
 
@@ -406,7 +478,7 @@ def test_closing_the_collector_leaves_nothing_running(тихо, скоро):
         await сбор.закрыть()
         висят = [з for з in asyncio.all_tasks() if з is not asyncio.current_task() and not з.done()]
         return выданы, висят, сбор
-    выданы, висят, сбор = asyncio.run(прогон())
+    выданы, висят, сбор = прогнать(прогон())
     assert выданы and all(с.закрыто for с in выданы), "соединения не закрыты"
     assert висят == [], f"после закрытия остались задачи: {висят}"
     assert len(сбор) == 0 or сбор.осталось(), "закрытый сбор больше ничего не ждёт"
@@ -428,7 +500,7 @@ def test_a_dropped_answer_never_lands_on_another_question(тихо, скоро):
     полный = _слепок()["domains"]
     for домен, значение in snap["domains"].items():
         assert значение == полный[домен], домен
-    asyncio.run(сбор.закрыть())
+    прогнать(сбор.закрыть())
 
 
 def test_without_a_second_connection_the_domains_are_read_on_the_main_one(тихо, скоро):
@@ -476,14 +548,14 @@ def test_one_bounded_question_on_its_own_connection(тихо, скоро):
         соединить, выданы, _ж = _боковые(т, молчит=молчит)
         ответ, почему = await snapshot.спросить_в_стороне(соединить, домен=ПОЗДНИЙ, ждать=0.05)
         return ответ, почему, выданы
-    ответ, почему, выданы = asyncio.run(прогон([]))
+    ответ, почему, выданы = прогнать(прогон([]))
     assert ответ == _слепок()["domains"][ПОЗДНИЙ] and почему == "" and выданы[0].закрыто
-    ответ, почему, выданы = asyncio.run(прогон([ПОЗДНИЙ]))
+    ответ, почему, выданы = прогнать(прогон([ПОЗДНИЙ]))
     assert ответ is None and почему.startswith(snapshot.НЕ_ОТВЕТИЛ) and выданы[0].закрыто
 
     async def не_соединить():
         raise ConnectionRefusedError("нет телефона")
-    ответ, почему = asyncio.run(snapshot.спросить_в_стороне(не_соединить, домен=ПОЗДНИЙ))
+    ответ, почему = прогнать(snapshot.спросить_в_стороне(не_соединить, домен=ПОЗДНИЙ))
     assert ответ is None and "ConnectionRefusedError" in почему
 
 
@@ -526,7 +598,7 @@ def test_connecting_and_opening_diagnostics_cannot_hang(monkeypatch):
     monkeypatch.setattr(c, "create_using_usbmux", молчит)
     # deadline — абсолютный момент, и нулю он равняться не может: нуль здесь значил бы «без
     # срока» (так в самом цикле: `if deadline and ...`)
-    st = asyncio.run(c.wait_ready(poll=0, deadline=1.0))
+    st = прогнать(c.wait_ready(poll=0, deadline=1.0))
     assert st.state == c.ERROR and "не ответил" in st.human
 
     class Диагностика:
@@ -555,7 +627,7 @@ def test_connecting_and_opening_diagnostics_cannot_hang(monkeypatch):
             return открытые[-1]
         monkeypatch.setattr(c, "DiagnosticsService", служба)
         with pytest.raises(RuntimeError) as e:
-            asyncio.run(c.open_diagnostics(object(), attempts=2, delays=(0, 0)))
+            прогнать(c.open_diagnostics(object(), attempts=2, delays=(0, 0)))
         assert "не ответила" in str(e.value), тихо_на
         assert открытые and all(д.закрыта for д in открытые), "служба не закрыта после предела"
 
@@ -600,7 +672,7 @@ def test_the_longest_thinking_question_is_the_one_we_keep(тихо, скоро, 
     assert держат, "самый давний вопрос вытеснили, хотя он ближе всех к ответу"
     assert first_asked_more_than_once(журнал, молчат[1:]), "вытесненные домены не переспросили"
     assert not сбор.сдались, "вытеснение потратило попытки домена"
-    asyncio.run(сбор.закрыть())
+    прогнать(сбор.закрыть())
 
 
 def first_asked_more_than_once(журнал, домены) -> bool:
@@ -623,7 +695,7 @@ def test_closing_does_not_throw_away_an_answer_that_already_arrived(тихо, с
         await asyncio.wait(ждут, timeout=1)
         await сбор.закрыть(snap)                     # ...и ровно в этот момент всё закрывают
         return snap, выданы
-    snap, выданы = asyncio.run(прогон())
+    snap, выданы = прогнать(прогон())
     assert snap["domains"].get(ПОЗДНИЙ) == _слепок()["domains"][ПОЗДНИЙ], "ответ выброшен при закрытии"
     assert all(с.закрыто for с in выданы)
 
@@ -647,7 +719,7 @@ def test_the_phone_says_what_it_is_even_before_trust(monkeypatch):
         клиенты.append(Доверия_нет())
         return клиенты[-1]
     monkeypatch.setattr(c, "create_using_usbmux", без_пары)
-    сведения = asyncio.run(c.сведения_без_доверия("UDID"))
+    сведения = прогнать(c.сведения_без_доверия("UDID"))
     assert сведения["модель"] == "iPhone 13" and сведения["ios"] == "18.7.8"
     assert сведения["серийник"] == "F2LW104QPN" and сведения["код_модели"] == "iPhone14,5"
     assert getattr(клиенты[0], "закрыт", False), "соединение карточки не закрыли"
@@ -658,4 +730,4 @@ def test_the_phone_says_what_it_is_even_before_trust(monkeypatch):
     async def не_вышло(**k):
         raise ConnectionRefusedError("нет телефона")
     monkeypatch.setattr(c, "create_using_usbmux", не_вышло)
-    assert asyncio.run(c.сведения_без_доверия("UDID")) == {}, "подсказка не должна ронять подключение"
+    assert прогнать(c.сведения_без_доверия("UDID")) == {}, "подсказка не должна ронять подключение"

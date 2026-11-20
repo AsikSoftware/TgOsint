@@ -63,13 +63,22 @@ def склад(товары, карточка=None):
     def запрос(session, метод, адрес, params=None, body=None):
         журнал.append((метод, адрес, body))
         if адрес == "/entity/product/metadata":
+            # Ссылка справочника — как у настоящего МойСклада: номер стоит ПЕРЕД словом
+            # «metadata». Подменный склад держит её в том же виде нарочно: пока здесь было
+            # «справочник/<номер>», разбор ссылки читался неверно и тесты этого не видели,
+            # а на точке 20.11.2026 все справочники отвечали 404.
             return {"attributes": {"rows": [
                 {"name": n, "type": t, "meta": {"href": "поле/" + n},
-                 **({"customEntityMeta": {"href": "справочник/" + d}} if d else {})}
+                 **({"customEntityMeta": {
+                     "href": f"https://api.moysklad.ru/api/remap/1.2/entity/customentity/{d}/metadata"}}
+                    if d else {})}
                 for n, t, d in поля]}}
         if адрес.startswith("/entity/customentity/"):
+            номер = адрес.rsplit("/", 1)[-1]
+            if номер not in справочники:          # настоящий МойСклад отвечает на это 404
+                raise AssertionError(f"нет такого справочника: {адрес}")
             return {"rows": [{"name": v, "meta": {"href": "значение/" + v}}
-                             for v in справочники[адрес.rsplit("/", 1)[-1]]]}
+                             for v in справочники[номер]]}
         if адрес == "/entity/product" and метод == "GET":
             фильтр = params["filter"]
             ключ, значение = фильтр.split("=", 1)

@@ -240,7 +240,13 @@ def поля_товара(session, device, *, запрос, кэш, pick_imeis, 
         href = cem.get("href") or (cem.get("meta") or {}).get("href") or ""
         if not href:
             return []
-        cid = href.rstrip("/").split("/")[-1]
+        # Ссылка справочника у МойСклада выглядит так:
+        #     …/entity/customentity/<номер справочника>/metadata
+        # то есть номер стоит ПЕРЕД словом «metadata», а не в конце. Брали последний кусок —
+        # получалось «/entity/customentity/metadata», и МойСклад отвечал 404 на каждый
+        # справочник (АКБ, Память, Статус, Комплектация, Способ приобретения, Цвет).
+        части = [ч for ч in href.rstrip("/").split("/") if ч]
+        cid = части[части.index("customentity") + 1] if "customentity" in части else части[-1]
 
         def загрузить():
             все, сдвиг = [], 0

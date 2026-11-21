@@ -337,21 +337,22 @@ def test_the_three_steps_open_one_after_another(окно):
     _до_телефона(окно)
     окно.on_tick("READY", "", 1)
     assert окно.s_ms.этап_сейчас == ui_update.ЭТАП_ДИАГНОСТИКА
-    assert окно.s_ms.пров_тело.graphicsEffect() is not None, "блок проверок обязан быть размыт"
-    assert окно.s_ms.товар_тело.graphicsEffect() is not None, "блок товара обязан быть размыт"
+    assert окно.s_ms.пров_тело.isHidden(), "блок проверок обязан быть закрыт"
+    assert окно.s_ms.товар_тело.isHidden(), "блок товара обязан быть закрыт"
+    assert окно.s_ms.пров_заглушка.text(), "закрытый блок обязан сказать, чего он ждёт"
     assert not окно.код_теста, "кьюар теста до диагностики не заводится"
 
     окно._мс_прочитано({"report": _отчёт(), "server": {"отложено": True}, "client_id": "x", "out": ""})
     assert окно.s_ms.этап_сейчас == ui_update.ЭТАП_ПРОВЕРКИ
-    assert окно.s_ms.пров_тело.graphicsEffect() is None, "после диагностики проверки открыты"
-    assert окно.s_ms.товар_тело.graphicsEffect() is not None, "товар ждёт проверок"
+    assert not окно.s_ms.пров_тело.isHidden(), "после диагностики проверки открыты"
+    assert окно.s_ms.товар_тело.isHidden(), "товар ждёт проверок"
     assert окно.код_теста, "кьюар теста заводится после диагностики"
     assert "Осталось" in окно.s_ms.товар_занавес.text()
 
     _проверки_сделаны(окно)
     _ответ(окно)
     assert окно.s_ms.этап_сейчас == ui_update.ЭТАП_ИЗМЕНЕНИЯ
-    assert окно.s_ms.товар_тело.graphicsEffect() is None, "список изменений открыт"
+    assert not окно.s_ms.товар_тело.isHidden(), "список изменений открыт"
     assert окно.s_ms.b_записать.isEnabled()
 
 

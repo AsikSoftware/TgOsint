@@ -1773,6 +1773,24 @@ def test_changing_what_the_price_depends_on_asks_again_and_a_note_does_not(ок�
     assert э.цена_число.text() == "170 000 ₸"
 
 
+def test_a_thread_answering_after_the_window_closed_touches_nothing(окно):
+    """Поток ответил, когда окно уже закрывают — обработчик не зовём.
+
+    В журнале сборки 23.11.2026 это видно так: «Internal C++ object (QVBoxLayout) already
+    deleted» из обработчика медиа. Экраны в ту секунду уже разрушались, а ответ из потока
+    всё ещё шёл в них. Для PySide это необработанная ошибка в слоте — на точке она выскочит
+    окном в момент закрытия смены."""
+    пришло = []
+    ответ = окно._если_живы(lambda состояние: пришло.append(состояние))
+    ответ({"известно": True})
+    assert пришло == [{"известно": True}], "пока окно живо, ответ доходит как обычно"
+
+    окно.close()
+    ответ({"известно": True})
+    assert len(пришло) == 1, "после закрытия ответ из потока до экранов не доходит"
+    assert not окно.медиа_опрос.isActive() and not окно.тест_опрос.isActive()
+
+
 def test_the_price_block_says_what_to_do_now_not_what_to_wait_for(окно):
     """Пока цены нет, посреди экрана стоит ближайшее ДЕЛО, а не ожидание.
 

@@ -297,6 +297,7 @@ class KioskWindow(QMainWindow):
         self.тест_телефона = {}
         self.тест_через_сервер = False
         self._тест_спрашиваем = False
+        self._закрываемся = False            # окно закрывают: ответы потоков уже не нужны
         self.тест_опрос = QTimer(self)
         self.тест_опрос.timeout.connect(self._спросить_тест)
         # Фото и видео сотрудник шлёт боту, а не нам: в базу Оценки с точки хода нет.
@@ -547,12 +548,26 @@ class KioskWindow(QMainWindow):
         теста это ловится сразу, на медленной отправке сделки — раз в сто прогонов."""
         t = Task(fn, self)
         if ok is not None:
-            t.ok.connect(ok)
+            t.ok.connect(self._если_живы(ok))
         if err is not None:
-            t.err.connect(err)
+            t.err.connect(self._если_живы(err))
         self.tasks = [x for x in self.tasks if x.isRunning()] + [t]
         t.start()
         return t
+
+    def _если_живы(self, вызвать):
+        """Обёртка ответа из потока: после закрытия окна его не зовём.
+
+        Поток мог ответить ровно тогда, когда экраны уже разрушаются. Тогда обработчик
+        лезет в удалённый слой Qt и падает: «Internal C++ object (QVBoxLayout) already
+        deleted». Для PySide это необработанная ошибка в слоте, и на точке она выскакивает
+        окном в момент закрытия смены. Ответ в такую минуту никому не нужен — его и роняем.
+        """
+        def дошло(*аргументы):
+            if self._закрываемся:
+                return
+            вызвать(*аргументы)
+        return дошло
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -561,6 +576,11 @@ class KioskWindow(QMainWindow):
             self.showFullScreen()
 
     def closeEvent(self, e):
+        # Сначала флаг, потом всё остальное: ответы потоков, пришедшие во время закрытия,
+        # до экранов уже не доходят (см. `_если_живы`).
+        self._закрываемся = True
+        for часы in (self.медиа_опрос, self.тест_опрос):
+            часы.stop()
         self.poller.stop()
         self.net.stop()
         if self.pipeline and self.pipeline.isRunning():

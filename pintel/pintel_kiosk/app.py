@@ -243,6 +243,7 @@ class KioskWindow(QMainWindow):
         self.s_admin.режим_мс.connect(self.мс_переключить)
         self.s_ms.записать.connect(self.мс_записать)
         self.s_ms.дальше.connect(self.мс_дальше)
+        self.s_ms.заново.connect(self.мс_заново)
         self.s_ms.выйти.connect(self.мс_выключить)
         self.s_ms.пропустить_apple.connect(self.on_skip_apple)
         self.s_ms.починить_связь.connect(self.починить_связь)
@@ -1327,6 +1328,25 @@ class KioskWindow(QMainWindow):
             if добавка:
                 self._дослать_на_сервер(добавка)
             self._мс_спросить(ms_update.ЗАПИСАТЬ)
+
+    def мс_заново(self):
+        """Перечитать ЭТОТ телефон с начала, не отключая кабель.
+
+        Нужна отдельная кнопка: «Следующий телефон» ждёт, пока кабель отключат, а здесь
+        аппарат тот же. Поводы обычные — промахнулись в отметках (после третьего шага их
+        уже не поправить), раздел Apple открыли поздно, телефон ответил не всё.
+
+        Пока идёт запись в МойСклад — не трогаем: карточка в этот момент меняется."""
+        if not self.мс_режим or not self.state.startswith("ms_"):
+            return
+        if self._мс_что == ms_update.ЗАПИСАТЬ and self._мс_запрос:
+            return
+        if self.pipeline and self.pipeline.isRunning():
+            self.pipeline.cancel.set()               # слушатель истории Apple больше не нужен
+            self.pipeline.остановить_слушателя()
+        log_line("режим обновления: читаем этот телефон заново (кнопка «Заново»)")
+        self.wait_unplug = False                     # кабель не трогают — читаем сразу
+        self.мс_ждать()
 
     def мс_дальше(self):
         """Этот телефон закончен. Тот же аппарат на кабеле второй раз не читаем."""

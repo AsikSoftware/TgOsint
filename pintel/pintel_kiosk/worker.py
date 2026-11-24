@@ -379,8 +379,9 @@ class Pipeline(QThread):
             self._step(ключ, "done", подпись)
         self._step("upload", "run")
         cid = f"{self.serial or 'phone'}-{uuid.uuid4().hex[:12]}"
+        снимок = _прочитать_слепок(находка["путь"])
         payload = {"client_id": cid, "report": json.loads(snapshot.dumps(rep)),
-                   "snapshot": _прочитать_слепок(находка["путь"])}
+                   "snapshot": снимок}
         server = await asyncio.to_thread(self.client.upload, payload)
         if not server:
             server = {"номер": self.client.local_number(), "локально": True}
@@ -390,7 +391,7 @@ class Pipeline(QThread):
         log_line(f"взята прошлая проверка: {находка['словами']}, папка {находка['путь']}, "
                  f"сверка с телефоном: {rep['повторная_проверка']['сверка']}")
         self.прошлая.emit(dict(rep["повторная_проверка"]))
-        self.done.emit({"report": rep, "server": server, "client_id": cid,
+        self.done.emit({"report": rep, "server": server, "client_id": cid, "snap": снимок,
                         "serial": self.serial, "out": находка["путь"], "повторная": True})
         return True
 
@@ -851,7 +852,10 @@ class Pipeline(QThread):
                 self._step("upload", "done" if not self.client.enabled else "warn", self._не_ушло())
             else:
                 self._step("upload", "done", "отправлено")
-        result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial, "out": out}
+        # Слепок отдаём вместе с отчётом: по нему пересобирается вердикт, когда сотрудник
+        # сверит детали с экраном телефона. Читать его с диска на каждое нажатие — лишнее.
+        result = {"report": rep, "server": server, "client_id": cid, "serial": self.serial,
+                  "out": out, "snap": snap}
         if self.cancel.is_set():
             # Отменили, пока оценка уходила на сервер: окно уже ведёт новую проверку, и этот
             # результат лёг бы поверх неё. Оценка при этом сохранена — на диске и на сервере.

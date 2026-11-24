@@ -422,12 +422,9 @@ async def _reference(args, cfg):
     else:
         say("\n  Расхождений нет: на этом аппарате проверка сработала верно.")
 
-    clean, done, why = reference.pseudonymize(snap, report_mod.build)
-    if not done:
-        say(f"  обезличивание отменено ({why}) — в файле реальные серийники")
     out = os.path.join(args.out or os.path.join(app_dir(), "out"), reference.bundle_name(rep))
-    reference.save_bundle(out, clean, report_mod.build(clean) if done else rep, truth,
-                          raw=clean.get("repair_history_raw") or raw, mismatches=bad, dumps=snapshot.dumps)
+    reference.save_bundle(out, snap, rep, truth,
+                          raw=snap.get("repair_history_raw") or raw, mismatches=bad, dumps=snapshot.dumps)
     say(f"\n  ЭТАЛОН СОБРАН: {out}")
     say("  Отправьте этот файл разработчику — по нему система научится этому аппарату.")
     try:

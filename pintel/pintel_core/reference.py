@@ -12,16 +12,15 @@
   2. ПОТОМ — по сырым строкам дописывается разбор, а эталон ложится в тесты:
      вердикт обязан совпасть с правдой, иначе сборка не пройдёт.
 
-Слепок обезличивается: серийники, IMEI и MAC заменяются по постоянной подстановке —
-одинаковые значения остаются одинаковыми (иначе сломались бы проверки сопряжения
-деталей), IMEI сохраняет контрольную цифру. После замены отчёт пересобирается и
-сверяется с исходным: если хоть один вывод изменился — обезличивание отменяется.
+Слепок кладётся КАК ЕСТЬ, с настоящими серийниками и IMEI (решение владельца,
+24.11.2026). Подмена, которая была здесь раньше, портила сами данные: дата изготовления
+детали закодирована в её серийнике и пропадала, коды заводов переставали совпадать — и
+эталон врал ровно там, где по нему и разбираются. Защищать тут нечего: эталон едет с
+нашего сервера разработчику и никуда больше.
 """
-import hashlib
 import io
 import json
 import os
-import random
 import re
 import zipfile
 from datetime import datetime
@@ -34,202 +33,6 @@ STATES = {k: v[0] for k, v in APPLE_STATES.items()}
 NOT_ORIGINAL = tuple(k for k, v in APPLE_STATES.items() if v[2] in ("bad", "used", "repaired"))
 # Состояния, которые обязаны дать СТОП.
 MUST_STOP = tuple(k for k, v in APPLE_STATES.items() if v[2] == "bad")
-
-# ---------------------------------------------------------------- обезличивание
-
-_ALPHABETS = ("0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
-# Ключи, значения которых — идентификаторы аппарата (по имени ключа, без учёта регистра).
-_ID_KEY = re.compile(r"serial|imei|udid|uniquedeviceid|uniquechipid|chipid|address|iccid|meid|"
-                     r"snum|sn$|regionalinfo|mlbserial|equipmentident|circuitcard|subscriberident|"
-                     r"phonenumber|uniqueid", re.I)
-_IMEI_RE = re.compile(r"^\d{15}$")
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]{8,}")
-
-
-def _substitution(salt):
-    """Постоянная подстановка по классам символов: цифра→цифра, буква→буква.
-    Одинаковые строки дают одинаковый результат, разные остаются разными."""
-    rnd = random.Random(hashlib.sha256(salt.encode("utf-8")).digest())
-    table = {}
-    for alphabet in _ALPHABETS:
-        shuffled = list(alphabet)
-        rnd.shuffle(shuffled)
-        table.update(zip(alphabet, shuffled))
-    return table
-
-
-def _luhn_fix(digits):
-    """Вернуть IMEI с правильной контрольной цифрой — иначе наш же код его отвергнет."""
-    d = [int(c) for c in digits[:14]]
-    total = 0
-    for i, x in enumerate(d):
-        if i % 2:
-            x *= 2
-            x = x - 9 if x > 9 else x
-        total += x
-    return digits[:14] + str((10 - total % 10) % 10)
-
-
-# Первые семь знаков серийника детали — завод и дата изготовления; уникален хвост.
-# Это признак ПАРТИИ, а не аппарата, и на нём стоят выводы отчёта: дата выпуска
-# аккумулятора и повторы кода завода. Подменяли их вместе с хвостом — и эталон начинал
-# врать: на живом слепке дата АКБ читалась, после обезличивания пропадала (проверено
-# 24.11.2026 на tests/fixtures_real/iphone12_FFXH33T20F0N и на живом iPhone 14). По
-# 659 эталонам с точек это давало «не прочитано, хотя у таких телефонов читается всегда:
-# АКБ: дата выпуска» у 90 аппаратов — дыру, которой на самих телефонах не было.
-ПАРТИЯ = 7
-
-
-def _sub_value(value, table):
-    out = "".join(table.get(c, c) for c in value)
-    return _luhn_fix(out) if _IMEI_RE.match(value) else out
-
-
-def _карта_партий(ids, table):
-    """{подменённый серийник детали: он же с сохранённым началом} для всех найденных ids.
-
-    Возвращать начало на месте нельзя: один и тот же серийник лежит и отдельным значением,
-    и куском внутри калибровки платы — а по этому вхождению сверяется сопряжение деталей.
-    Поэтому замена делается одной картой по всему слепку сразу, строка в строку и той же
-    длины: тогда и дата сохраняется, и все совпадения остаются совпадениями."""
-    карта = {}
-    for значение in ids:
-        if _IMEI_RE.match(значение) or not _серийник_детали(значение):
-            continue
-        подменён = _sub_value(значение, table)
-        if len(подменён) == len(значение):
-            карта[подменён] = значение[:ПАРТИЯ] + подменён[ПАРТИЯ:]
-    return карта
-
-
-def _вернуть_партии(obj, карта):
-    """Пройти по уже обезличенному слепку и вернуть началам серийников их вид."""
-    if not карта:
-        return obj
-    if isinstance(obj, dict):
-        return {k: _вернуть_партии(v, карта) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_вернуть_партии(v, карта) for v in obj]
-    текст = _as_text(obj)
-    if текст is None:
-        return obj
-    out = текст
-    for было, стало in карта.items():
-        if было in out:
-            out = out.replace(было, стало)
-    if out == текст:
-        return obj
-    return out.encode("latin-1") if isinstance(obj, (bytes, bytearray)) else out
-
-
-ДЛИНЫ_СЕРИЙНИКА = (15, 16, 17, 18)   # серийник детали Apple; у IMEI, MAC и ICCID длина другая
-
-
-def _серийник_детали(value):
-    """Похоже на серийник детали? (а не на IMEI, MAC, серийник аппарата или слово)
-
-    Длина и буквы внутри — всё, на что можно опираться: формат у Apple свой на каждую
-    деталь. Серийник самого АППАРАТА (10–12 знаков) сюда не попадает намеренно: у него
-    начало — не партия, а признак конкретного телефона, и сохранять его нельзя.
-
-    Строгость важна с двух сторон. Кусок IMEI под это правило попадал — и возврат начала
-    ломал контрольную цифру, наш же код потом отвергал такой IMEI. А заглушка вида
-    X0X00000XXXXXXXX, в которой даты нет, после подстановки получала валидную неделю — и
-    обезличивание ВЫДУМЫВАЛО дату изготовления, которой на телефоне не было."""
-    s = str(value or "")
-    return len(s) in ДЛИНЫ_СЕРИЙНИКА and not s.isdigit() and s.isalnum()
-
-
-def _as_text(value):
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value).decode("latin-1")
-    return None
-
-
-def _collect_ids(obj, found, key_hit=False):
-    """Значения под ключами-идентификаторами (SerialNumber, IMEI, rosaline-serial-num…).
-    Они же встречаются внутри других значений — например, серийник Taptic лежит
-    куском в калибровке платы, и проверка сопряжения сверяет именно вхождение."""
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            _collect_ids(v, found, key_hit or bool(_ID_KEY.search(str(k))))
-    elif isinstance(obj, list):
-        for v in obj:
-            _collect_ids(v, found, key_hit)
-    elif key_hit:
-        text = _as_text(obj)
-        if text:
-            for token in _TOKEN_RE.findall(text):
-                if len(token) >= 8:
-                    found.add(token)
-    return found
-
-
-def _walk(obj, table, ids=(), key_hit=False):
-    """Заменить идентификаторы. Берём значения под ключами-идентификаторами и любые
-    значения, внутри которых такой идентификатор лежит куском (иначе разъехались бы
-    проверки сопряжения). Модель, версия iOS, цвет, даты не трогаем."""
-    if isinstance(obj, dict):
-        return {k: _walk(v, table, ids, key_hit or bool(_ID_KEY.search(str(k)))) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_walk(v, table, ids, key_hit) for v in obj]
-    text = _as_text(obj)
-    if text is None:
-        return obj
-    if not key_hit:
-        if len(text) < 8 or not any(i in text for i in ids):
-            return obj
-    out = _sub_value(text, table)
-    return out.encode("latin-1") if isinstance(obj, (bytes, bytearray)) else out
-
-
-def _sub_log(text, table):
-    """В журнале Apple заменяем только значения печати (…Using value X for key Y)
-    и длинные буквенно-цифровые токены — имена ключей и формат строк нужны разбору."""
-    def one(m):
-        tok = m.group(0)
-        if tok.isalpha() or tok.isdigit() and len(tok) < 14:
-            return tok
-        return _sub_value(tok, table)
-    return _TOKEN_RE.sub(one, text or "")
-
-
-def _conclusions(rep):
-    """Выводы, которые обезличивание не имеет права изменить."""
-    return {"вердикт": (rep.get("итог") or {}).get("вердикт"),
-            "детали": (rep.get("детали_вердикт") or {}).get("итог"),
-            "сигналы": {k: v.get("ок") for k, v in (rep.get("сигналы") or {}).items()},
-            "история": {k: (v.get("меняли"), v.get("бу"), v.get("неизвестная"))
-                        for k, v in (rep.get("apple_история") or {}).items()},
-            # Дата изготовления детали — тоже вывод: по ней видно, что деталь новее
-            # аппарата, и она же едет в карточку товара. Подстановка её однажды съедала
-            # молча, и 90 эталонов из 659 числились «не прочиталось», хотя на телефонах
-            # дата была (24.11.2026).
-            "даты_деталей": {str(d.get("деталь")): d.get("дата") for d in (rep.get("детали") or [])},
-            "стоп": len(rep.get("стоп") or []), "внимание": len(rep.get("внимание") or [])}
-
-
-def pseudonymize(snap, build_report):
-    """→ (слепок, заменено, причина_отказа). Отчёт после замены обязан совпасть
-    с исходным, иначе возвращаем слепок как есть: правда важнее обезличивания."""
-    table = _substitution(datetime.now().isoformat() + str(os.getpid()))
-    ids = _collect_ids(snap, set())
-    out = _walk(snap, table, ids)
-    if snap.get("repair_history_raw"):
-        out["repair_history_raw"] = _sub_log(snap["repair_history_raw"], table)
-    # Начало серийника детали (завод и дата изготовления) возвращаем на место — одной
-    # картой по всему слепку, чтобы вхождения в калибровках остались вхождениями.
-    out = _вернуть_партии(out, _карта_партий(ids, table))
-    try:
-        before, after = _conclusions(build_report(snap)), _conclusions(build_report(out))
-    except Exception as exc:                                     # noqa: BLE001
-        return snap, False, f"отчёт не пересобрался ({type(exc).__name__}: {exc})"
-    if before != after:
-        return snap, False, "после замены изменились выводы отчёта"
-    return out, True, ""
-
 
 # ---------------------------------------------------------------- правда и сверка
 

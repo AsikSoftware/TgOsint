@@ -27,64 +27,6 @@ REAL = ("iphone12_ios26_anon.snapshot.json", "iphone17pro_anon.snapshot.json",
         "iphone12_FFXH33T20F0N.snapshot.json")
 
 
-@pytest.mark.parametrize("name", REAL)
-def test_pseudonymize_keeps_every_conclusion(name):
-    """Обезличивание не имеет права изменить ни один вывод отчёта — на всех живых слепках."""
-    snap = _snap(name)
-    clean, done, why = reference.pseudonymize(snap, report_mod.build)
-    assert done, why
-    before, after = report_mod.build(snap), report_mod.build(clean)
-    assert reference._conclusions(before) == reference._conclusions(after)
-    assert after["паспорт"]["модель"] == before["паспорт"]["модель"]    # модель и iOS не трогаем
-    assert after["паспорт"]["ios"] == before["паспорт"]["ios"]
-    assert after["паспорт"]["регион"] == before["паспорт"]["регион"]
-    for поле in ("серийник", "imei"):
-        было, стало = before["паспорт"][поле], after["паспорт"][поле]
-        if было and len(set(было)) > 2:          # в обезличенных слепках стоят заглушки из одного знака
-            assert стало != было, поле
-    if after["паспорт"]["imei"]:
-        assert sickw.luhn_ok(after["паспорт"]["imei"])                  # контрольная цифра пересчитана
-
-
-@pytest.mark.parametrize("name", REAL)
-def test_anonymising_neither_eats_nor_invents_a_part_date(name):
-    """Дата изготовления детали — это вывод, и подстановка не имеет права ни съесть её,
-    ни выдумать.
-
-    24.11.2026, прогон 659 эталонов с точек: 90 аппаратов числились «не прочитано, хотя у
-    таких телефонов читается всегда: АКБ: дата выпуска», хотя на самих телефонах дата
-    читалась — её съедало обезличивание. Обратная беда там же: заглушка X0X00000XXXXXXXX,
-    в которой даты нет, после подстановки получала валидную неделю, и эталон приносил дату,
-    которой на аппарате не было. Инструмент, который врёт, хуже отсутствующего: по этим
-    цифрам мы решаем, что чинить.
-
-    Подстановка случайная, поэтому гоняем несколько раз: обе беды проявлялись не на каждой."""
-    snap = _snap(name)
-    было = report_mod.build(snap)
-
-    def даты(rep):
-        return {str(d.get("деталь")): d.get("дата") for d in (rep.get("детали") or [])}
-
-    for _ in range(8):
-        clean, done, why = reference.pseudonymize(snap, report_mod.build)
-        assert done, why
-        стало = report_mod.build(clean)
-        assert даты(стало) == даты(было)
-        assert стало.get("дыры_чтения") == было.get("дыры_чтения")
-        for a, b in zip(было.get("детали") or [], стало.get("детали") or []):
-            серийник = str(a.get("серийник") or "")
-            if len(set(серийник)) > 2:            # в заглушках из одного знака менять нечего
-                assert серийник != str(b.get("серийник") or ""), a.get("деталь")
-
-
-def test_pseudonymize_keeps_equal_serials_equal():
-    """Сопряжение деталей сверяет серийники между узлами — равенство обязано сохраниться."""
-    table = reference._substitution("соль")
-    assert reference._sub_value("GVH122154X3LQHMA9", table) == reference._sub_value("GVH122154X3LQHMA9", table)
-    assert reference._sub_value("GVH122154X3LQHMA9", table) != reference._sub_value("GVH122154X3LQHMA8", table)
-    assert reference._sub_value("FXP11821H1BPFFK94", table).isalnum()
-
-
 def test_compare_catches_the_demo_case():
     """iPhone 15 Pro с демо: телефон писал «сервисное обслуживание» и «неизвестно»,
     а мы показывали зелёное. Сверка обязана это назвать."""
@@ -171,3 +113,27 @@ def test_clean_ios26_gives_apple_confirmed_green():
     assert {d["ключ"] for d in сильные} >= {"Battery", "Display", "Camera", "FaceID"}
     assert all("сверка Apple" in d["источник"] for d in сильные)
     assert reference.compare(rep, truth) == []
+
+
+@pytest.mark.parametrize("name", REAL)
+def test_the_reference_keeps_the_phone_as_it_is(name):
+    """Эталон кладётся как есть: серийники и IMEI настоящие.
+
+    Владелец, 24.11.2026: «зачем ты в эталонах меняешь значения? убирай». Подмена портила
+    сами данные, ради которых эталон и собирают: дата изготовления детали закодирована в её
+    серийнике и пропадала (90 аппаратов из 659 числились «не прочиталось», хотя на телефонах
+    дата была), а коды заводов переставали совпадать между деталями."""
+    assert not hasattr(reference, "pseudonymize"), "подмена вернулась в код"
+    snap = _snap(name)
+    rep = report_mod.build(snap)
+    в_файле = reference.bundle_bytes(snap, rep, reference.truth_template(),
+                                     raw=snap.get("repair_history_raw") or "",
+                                     dumps=snapshot.dumps)
+    import io as _io, json as _json, zipfile
+    with zipfile.ZipFile(_io.BytesIO(в_файле)) as z:
+        внутри = _json.loads(z.read("snapshot.json").decode("utf-8"))
+    серийник = ((snap.get("root") or {}).get("SerialNumber") or "")
+    assert серийник and ((внутри.get("root") or {}).get("SerialNumber")) == серийник
+    из_файла = report_mod.build(snapshot.loads(_json.dumps(внутри)))
+    даты = lambda r: {str(d.get("деталь")): d.get("дата") for d in (r.get("детали") or [])}
+    assert даты(из_файла) == даты(rep)

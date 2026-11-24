@@ -374,7 +374,7 @@ class KioskWindow(QMainWindow):
 
     def _выгрузить_архив(self):
         """Слепки — в закрытый чат Telegram: объезжать точки и собирать папки руками никто
-        не станет. Уходят эталоны (обезличенные), полные слепки — только если включили."""
+        не станет. Уходят эталоны, полные слепки — только если включили."""
         from pintel_core.external import tg_upload
         cfg = self.cfg
         токен, чат = cfg.get("ocenka_bot_token"), cfg.get("archive_chat_id")

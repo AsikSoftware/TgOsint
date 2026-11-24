@@ -88,7 +88,7 @@ def убрать_старое(дней=90):
     уборки диск на точке кончается за несколько месяцев, а кончившийся диск останавливает
     приём: записать очередную оценку будет некуда.
 
-    Эталоны не трогаем: они обезличены, по 85 КБ и ограничены числом (reference_keep).
+    Эталоны не трогаем: по 85 КБ и ограничены числом (reference_keep).
     Чеки клиентам и остатки очереди на сервер чистим вместе с оценками — и те, что сервер
     отверг (`queue/rejected`): за 90 дней их успевают разобрать, а весят они как оценка."""
     if not дней or int(дней) <= 0:
@@ -919,24 +919,21 @@ class Pipeline(QThread):
             self.history.emit({**result, "report": rep})
 
     def _reference(self, snap, rep):
-        """Эталон с КАЖДОГО телефона: обезличенный слепок, сырой журнал Apple и наш вердикт.
+        """Эталон с КАЖДОГО телефона: слепок как есть, сырой журнал Apple и наш вердикт.
         На этом учится разбор: новая iOS пишет вердикт по-своему, и угадывать нечего — нужен
         живой аппарат. Пишем после результата, чтобы не задержать экран; если вердикт пришёл
         позже, файл за тот же прогон перезаписывается.
 
-        Обезличиваем здесь же: наружу (и даже в папку на точке) серийники и IMEI не уходят.
-        Замена не удалась или изменила выводы — эталон не пишем вовсе."""
+        Серийники и IMEI остаются настоящими (решение владельца, 24.11.2026). Подмена их
+        портила: дата изготовления детали из серийника пропадала, коды заводов переставали
+        совпадать — и эталон врал там, где по нему и разбираются. Эталоны лежат на своём
+        сервере и уезжают только разработчику."""
         try:
-            clean, ok, why = reference.pseudonymize(snap, report_mod.build)
-            if not ok:
-                log_line(f"эталон не сохранён (обезличивание): {why}")
-                return
-            clean_rep = report_mod.build(clean)
-            path = os.path.join(data_dir(), "эталоны", reference.bundle_name(clean_rep, self.started))
+            path = os.path.join(data_dir(), "эталоны", reference.bundle_name(rep, self.started))
             reference.save_bundle(
-                path, clean, clean_rep,
+                path, snap, rep,
                 reference.auto_truth(раздел_открывали=bool((snap.get("repair_history_meta") or {}).get("раздел_открыт"))),
-                raw=clean.get("repair_history_raw") or "", dumps=snapshot.dumps)
+                raw=snap.get("repair_history_raw") or "", dumps=snapshot.dumps)
             keep = int(self.cfg.get("reference_keep") or 500)
             старые = sorted(glob.glob(os.path.join(data_dir(), "эталоны", "эталон_*.zip")),
                             key=os.path.getmtime, reverse=True)[keep:]

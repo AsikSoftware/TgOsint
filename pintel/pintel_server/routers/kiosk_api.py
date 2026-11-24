@@ -171,7 +171,7 @@ def logs(body: LogsIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSession = De
 @router.post("/reference")
 async def reference_upload(file: UploadFile = File(...), name: str = Form(""),
                            kiosk: Kiosk = Depends(current_kiosk), db: DbSession = Depends(get_db)):
-    """Эталон с точки: обезличенный слепок, сырой журнал Apple и наш вердикт.
+    """Эталон с точки: слепок телефона, сырой журнал Apple и наш вердикт.
 
     Складываем файлом рядом с медиа, в базе — карточка. Повторная присылка того же имени
     не плодит копий: точка досылает всё, что у неё накопилось, и не помнит, что уже ушло."""

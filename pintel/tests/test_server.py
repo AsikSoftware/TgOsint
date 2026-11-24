@@ -253,6 +253,43 @@ def test_two_kiosks_asking_the_same_imei_at_once_both_get_an_answer(app, monkeyp
     assert ответ.json()["в_чёрном_списке"] is False
 
 
+def test_the_kiosk_answers_become_the_truth_the_reference_is_checked_against():
+    """Ответы сотрудника с кассы — это и есть правда для эталона.
+
+    Он отвечал по каждой детали, глядя на экран телефона, и этот экран приезжает в бот
+    четвёртым фото. До 24.11.2026 правды не было ни у одного из 659 эталонов: они
+    доказывали только то, что мы разобрали формат журнала, а совпал ли наш вердикт с
+    экраном телефона — проверить было нечем. Теперь сверка идёт сама."""
+    from pintel_server.services import references as ref_service
+
+    class Оценка:                      # в базу класть нечего: сверка читает только поля
+        staff_parts = None
+        snapshot = {"сверка_деталей": {"Display": "unknown"},
+                    "repair_history_meta": {"раздел_открыт": True}}
+        report = {"детали_вердикт": {"итог": "родные", "apple_подтверждено": True,
+                                     "детали": [{"ключ": "Display", "деталь": "Экран",
+                                                 "статус": "ok", "почему": "привязка сошлась",
+                                                 "источник": "привязка (кабель)"}]},
+                  "сверка_сотрудником": {"Display": "unknown"}}
+
+    ev = Оценка()
+    правда = ref_service._truth(ev)
+    assert правда["детали"] == {"Display": "unknown"} and правда["кто"] == "сотрудник на кассе"
+    важность, почему = ref_service.rank(ev)
+    assert важность == 3 and "расхождение" in почему, (важность, почему)
+    assert "Дисплей" in почему or "Экран" in почему, почему
+
+    # сотрудник сказал то же, что и мы, — расхождения нет, и эталон этим ценен меньше
+    ev.snapshot = {**ev.snapshot, "сверка_деталей": {"Display": "genuine"}}
+    ev.report = {**ev.report, "сверка_сотрудником": {"Display": "genuine"}}
+    важность, почему = ref_service.rank(ev)
+    assert важность == 1 and "совпала" in почему, (важность, почему)
+
+    # отметки администратора главнее: он смотрит на фото раздела позже и спокойно
+    ev.staff_parts = {"Display": "used", "кто": "Руслан"}
+    assert ref_service._truth(ev)["детали"] == {"Display": "used"}
+
+
 def test_employees_create_update_and_revoke(app):
     admin = client_for(app, "admin", "admin123")
     r = admin.post("/employees", data={"name": "Мадина Ержанова", "login": "madina", "role": "cashier", "password": "madina1", "point_id": ""})

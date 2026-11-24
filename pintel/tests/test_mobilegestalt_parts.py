@@ -136,3 +136,31 @@ def test_broken_tunnel_is_named_not_hidden():
 
     snap["mobilegestalt"] = {"недоступен": "DeprecationError: deprecated on iOS 17.4 and later"}
     assert any("17.4" in x for x in report_mod.build(snap)["служебное"])
+
+
+def test_a_read_that_never_happened_says_so_with_one_line():
+    """Связь рвалась всё чтение — это одна беда, и она про кабель, а не про телефон.
+
+    По 659 эталонам таких аппаратов 20: паспорт lockdown отдал, а ни одного узла телефона
+    прочитать не удалось. Отчёт при этом собирался, и сотрудник видел от 3 до 14 строк
+    «не прочиталось» — батарея, привязка, паника, цвет — и ни слова о причине. Теперь
+    причина стоит первой строкой и становится объяснением вердикта (24.11.2026)."""
+    import os
+    from pintel_core.analysis import report as report_mod
+    from pintel_core.devicelink import snapshot
+    here = os.path.dirname(os.path.abspath(__file__))
+    snap = snapshot.loads(open(os.path.join(here, "fixtures_real", "iphone12_ios26_anon.snapshot.json"),
+                               encoding="utf-8").read())
+    целый = report_mod.build(snap)
+    assert not целый["чтение_не_состоялось"], "целое чтение приняли за сорванное"
+
+    оборвалось = {**snap, "nodes": {}, "quality": {
+        **(snap.get("quality") or {}),
+        "не_прочиталось": {"чтение телефона": "связь рвалась, прочитано не всё: "
+                                              "ioreg:IOService: ConnectionTerminatedError"},
+        "чтений_из_за_обрыва": 3}}
+    rep = report_mod.build(оборвалось)
+    assert rep["чтение_не_состоялось"] is True
+    первая = (rep.get("не_прочиталось") or [""])[0]
+    assert "связь по кабелю рвалась" in первая and "смените кабель" in первая, первая
+    assert первая.split(";")[0] in rep["итог"]["почему"], rep["итог"]

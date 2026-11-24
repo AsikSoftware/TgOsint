@@ -112,3 +112,33 @@ def test_log_does_not_grow_forever(точка, monkeypatch):
     путь = os.path.join(точка, "logs", "kiosk.log")
     assert os.path.getsize(путь) <= 2000 + 200
     assert os.path.isfile(путь + ".1")        # предыдущий кусок рядом, не потерян
+
+
+def test_a_network_blip_does_not_fill_the_log_with_a_traceback(tmp_path, monkeypatch, capsys):
+    """Журнал точки — то, чем мы ищем беды; трассировка на обрыв связи его топит.
+
+    За 10 дней на восьми точках таких трассировок 571, и в них тонуло всё остальное
+    (24.11.2026). Обрыв связи — обычная жизнь точки, а не поломка программы: одна строка.
+    А вот настоящая ошибка в коде обязана остаться с трассировкой — по ней её и чинят."""
+    import os
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    pytest.importorskip("PySide6")
+    from pintel_kiosk import app as kapp
+    from pintel_kiosk.client import ServerError
+
+    строки = []
+    monkeypatch.setattr(kapp, "log_line", lambda s: строки.append(s))
+
+    def прогнать(исключение):
+        строки.clear()
+        задача = kapp.Task(lambda: (_ for _ in ()).throw(исключение))
+        задача.err.connect(lambda _т: None)
+        задача.run()
+        return "\n".join(строки)
+
+    связь = прогнать(ServerError("нет связи с сервером: ConnectError"))
+    assert "Traceback" not in связь and "связь" in связь, связь
+    assert len(связь.splitlines()) == 1, связь
+
+    поломка = прогнать(KeyError("опечатка в ключе"))
+    assert "Traceback" in поломка, поломка

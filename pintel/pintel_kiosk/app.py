@@ -108,12 +108,23 @@ class Task(QThread):
         super().__init__(parent)
         self.fn = fn
 
+    # Обрыв связи с сервером — не поломка программы, а обычная жизнь точки: интернет моргнул.
+    # Трассировка на него засоряет журнал, по которому мы ищем настоящие беды: за 10 дней
+    # таких трассировок 571 на восьми точках, и в них тонуло всё остальное (24.11.2026).
+    СЕТЬ = ("ServerError", "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
+            "PoolTimeout", "RemoteProtocolError", "ReadError", "WriteError", "ProxyError",
+            "ConnectionError", "TimeoutError", "OSError")
+
     def run(self):
         try:
             self.ok.emit(self.fn())
         except Exception as e:                                   # noqa: BLE001
-            log_line("задача не выполнилась: " + traceback.format_exc())
-            self.err.emit(f"{type(e).__name__}: {e}")
+            имя = type(e).__name__
+            if имя in self.СЕТЬ:
+                log_line(f"задача не выполнилась (связь): {имя}: {str(e)[:120]}")
+            else:
+                log_line("задача не выполнилась: " + traceback.format_exc())
+            self.err.emit(f"{имя}: {e}")
 
 
 

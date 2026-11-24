@@ -880,10 +880,10 @@ def test_the_kiosk_can_see_what_reached_the_bot(app, monkeypatch, tmp_path):
     assert серёдка["фото"] == 2 and серёдка["видео"] is False and серёдка["готово"] is False
 
     with движок.begin() as conn:
-        conn.execute(sqltext("UPDATE kiosk_media SET photos = 'f1||f2||f3', video = 'v1' "
+        conn.execute(sqltext("UPDATE kiosk_media SET photos = 'f1||f2||f3||f4', video = 'v1' "
                              "WHERE code = 'ABCD12'"))
     готово = k.get("/api/kiosk/media/ABCD12", headers=H).json()
-    assert готово["готово"] is True and готово["фото"] == 3 and готово["видео"] is True
+    assert готово["готово"] is True and готово["фото"] == 4 and готово["видео"] is True
     # Про проверки руками сервер не рассказывает вовсе: их отмечают на экране программы.
     # Полям в ответе остаётся сказать сборкам до doctor-64 «не держи сделку из-за них».
     assert готово["диагностика_видна"] is False and готово["не_отмечено"] == []
@@ -898,7 +898,7 @@ def test_the_kiosk_can_see_what_reached_the_bot(app, monkeypatch, tmp_path):
         conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
                              "done INTEGER, device_id INTEGER)"))
         conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
-                             "VALUES ('ABCD12', 'f1||f2||f3', 'v1')"))
+                             "VALUES ('ABCD12', 'f1||f2||f3||f4', 'v1')"))
     monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: старый)
     без_колонки = k.get("/api/kiosk/media/ABCD12", headers=H).json()
     assert без_колонки["известно"] is True and без_колонки["готово"] is True
@@ -941,7 +941,7 @@ def test_the_deal_from_the_point_goes_to_the_bot_through_us(app, monkeypatch, tm
 
     with движок.begin() as conn:
         conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
-                             "VALUES ('ABCD12', 'f1||f2||f3', 'v1')"))
+                             "VALUES ('ABCD12', 'f1||f2||f3||f4', 'v1')"))
     ответ = k.post("/api/kiosk/media/ABCD12/parcel", headers=H, json={"посылка": посылка}).json()
     assert ответ["принято"] is True
     with движок.connect() as conn:
@@ -968,7 +968,7 @@ def test_the_deal_from_the_point_goes_to_the_bot_through_us(app, monkeypatch, tm
         conn.execute(sqltext("CREATE TABLE kiosk_media (code TEXT, photos TEXT, video TEXT, "
                              "done INTEGER, device_id INTEGER)"))
         conn.execute(sqltext("INSERT INTO kiosk_media (code, photos, video) "
-                             "VALUES ('ABCD12', 'f1||f2||f3', 'v1')"))
+                             "VALUES ('ABCD12', 'f1||f2||f3||f4', 'v1')"))
     monkeypatch.setattr(ocenka_import, "_ocenka_engine", lambda: старая)
     отказ = k.post("/api/kiosk/media/ABCD12/parcel", headers=H, json={"посылка": посылка}).json()
     assert отказ["принято"] is False and отказ["почему"]
@@ -1196,7 +1196,7 @@ def test_the_kiosk_can_make_the_bot_remind_the_employee(app, monkeypatch, tmp_pa
     assert да == {"отправлено": True, "почему": ""}
     url, данные = ушло[-1]
     assert url == "https://api.telegram.org/bot123:СЕКРЕТ/sendMessage" and данные["chat_id"] == 777001
-    assert "iPhone 14 Pro" in данные["text"] and "фото 1 из 3" in данные["text"] and "видео — нет" in данные["text"]
+    assert "iPhone 14 Pro" in данные["text"] and "фото 1 из 4" in данные["text"] and "видео — нет" in данные["text"]
     assert "главное меню" in данные["text"] and "СЕКРЕТ" not in json.dumps(да, ensure_ascii=False)
 
     # До отправки сделка ждёт другого — суммы клиенту: бот спросил её у сотрудника, а тот

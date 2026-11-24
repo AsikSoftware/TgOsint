@@ -131,7 +131,7 @@ class ФейкБот:
 ПОСЫЛКА = ('{"версия": 1, "код": "ABCD12", "сделка": {"model": "iPhone 14 Pro", "color": "BLACK",'
            ' "akb_exact": 86, "phone_status": "Не был в ремонте", "panic_full": false}}')
 СТРОКА = {"code": "ABCD12", "chat_id": 777, "user_id": 5, "shop_id": 14, "device_id": None,
-          "photos": "f1||f2||f3", "video": "v1", "checks": None}
+          "photos": "f1||f2||f3||f4", "video": "v1", "checks": None}
 
 
 def _подменить(м, monkeypatch, *, взято=ПОСЫЛКА, сделка=None, падать=None):
@@ -330,7 +330,7 @@ def test_the_price_already_named_to_the_point_is_repeated_in_the_media_request(�
 def test_the_deal_is_made_at_once_when_the_media_is_already_there(бот_модуль, monkeypatch):
     """Старый порядок жив: точка со старой сборкой шлёт посылку после медиа — ждать нечего."""
     строка, взяли, беды, созданы = _без_медиа(бот_модуль, monkeypatch, _полная(бот_модуль),
-                                              photos="f1||f2||f3", video="v1")
+                                              photos="f1||f2||f3||f4", video="v1")
     бот = ФейкБот()
     asyncio.run(бот_модуль._обработать_посылку(бот, "ABCD12"))
     assert взяли == ["ABCD12"] and созданы == ["ABCD12"] and not беды
@@ -929,7 +929,7 @@ def test_a_parcel_without_the_mandatory_values_is_held_not_opened(бот_мод�
     причина уйдёт словами в строку обмена, и касса её покажет."""
     import copy
     строка = {"code": "ABCD12", "chat_id": 777, "user_id": 5, "shop_id": 14, "device_id": None,
-              "photos": "f1||f2||f3", "video": "v1", "checks": None, "media_asked": None,
+              "photos": "f1||f2||f3||f4", "video": "v1", "checks": None, "media_asked": None,
               "quote": None, "parcel": None}
     async def магазины():
         return [{"id": 14, "name": "16/38 Pintel"}]

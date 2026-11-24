@@ -46,6 +46,37 @@ def test_pseudonymize_keeps_every_conclusion(name):
         assert sickw.luhn_ok(after["паспорт"]["imei"])                  # контрольная цифра пересчитана
 
 
+@pytest.mark.parametrize("name", REAL)
+def test_anonymising_neither_eats_nor_invents_a_part_date(name):
+    """Дата изготовления детали — это вывод, и подстановка не имеет права ни съесть её,
+    ни выдумать.
+
+    24.11.2026, прогон 659 эталонов с точек: 90 аппаратов числились «не прочитано, хотя у
+    таких телефонов читается всегда: АКБ: дата выпуска», хотя на самих телефонах дата
+    читалась — её съедало обезличивание. Обратная беда там же: заглушка X0X00000XXXXXXXX,
+    в которой даты нет, после подстановки получала валидную неделю, и эталон приносил дату,
+    которой на аппарате не было. Инструмент, который врёт, хуже отсутствующего: по этим
+    цифрам мы решаем, что чинить.
+
+    Подстановка случайная, поэтому гоняем несколько раз: обе беды проявлялись не на каждой."""
+    snap = _snap(name)
+    было = report_mod.build(snap)
+
+    def даты(rep):
+        return {str(d.get("деталь")): d.get("дата") for d in (rep.get("детали") or [])}
+
+    for _ in range(8):
+        clean, done, why = reference.pseudonymize(snap, report_mod.build)
+        assert done, why
+        стало = report_mod.build(clean)
+        assert даты(стало) == даты(было)
+        assert стало.get("дыры_чтения") == было.get("дыры_чтения")
+        for a, b in zip(было.get("детали") or [], стало.get("детали") or []):
+            серийник = str(a.get("серийник") or "")
+            if len(set(серийник)) > 2:            # в заглушках из одного знака менять нечего
+                assert серийник != str(b.get("серийник") or ""), a.get("деталь")
+
+
 def test_pseudonymize_keeps_equal_serials_equal():
     """Сопряжение деталей сверяет серийники между узлами — равенство обязано сохраниться."""
     table = reference._substitution("соль")

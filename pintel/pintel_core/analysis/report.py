@@ -35,7 +35,10 @@ def build(snap):
     перечитан = False
     if not hist and snap.get("repair_history_raw"):
         записи, meta2 = rh_mod.перечитать(snap["repair_history_raw"])
-        if записи:
+        # Записей может не быть вовсе, а вердикт при этом быть: словарь доверия AuthCP с
+        # чистым аппаратом не даёт ни одной «плохой» детали. Прежде такой слепок шёл дальше
+        # без вердикта — и отчёт говорил, что Apple подлинность не подтвердила.
+        if записи or rh_mod.вердикт_доверия((meta2 or {}).get("компоненты")):
             hist, перечитан = dict(записи), True
             hist_meta = {**hist_meta, **(meta2 or {})}
     # Батарею собираем ПОСЛЕ журнала: процент называет сам телефон (powerd пишет его в
@@ -282,7 +285,8 @@ def build(snap):
     if (комп.get("аккумулятор") or {}).get("IOPSBatteryHealthServiceState"):
         warn.append("Apple: аккумулятор требует обслуживания (износ, деталь при этом оригинальная)")
     hist_source = hist_meta.get("формат") or ("записи обслуживания" if hist else None)
-    if hist:
+    if hist or rh_mod.вердикт_доверия(комп):
+        # Словарь доверия AuthCP — полученный ответ Apple, даже когда замен в нём нет.
         hist_status = "получена"
     elif not hist_ok:
         hist_status = "не поддерживается"

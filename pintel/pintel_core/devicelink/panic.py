@@ -55,8 +55,10 @@ async def probe(ld, timeout=25) -> dict:
     try:
         return разобрать(await asyncio.wait_for(run(), timeout))
     except Exception as e:                                   # noqa: BLE001
-        return {"проверено": False, "panic_full": None,
-                "ошибка": f"{type(e).__name__}: {str(e)[:120]}"}
+        # Словами, а не именем исключения: эту строку читает сотрудник, и из неё должно
+        # быть ясно, что делать (`connect.ОТКАЗЫ_СЛУЖБ`).
+        from .connect import отказ_словами
+        return {"проверено": False, "panic_full": None, "ошибка": отказ_словами(e)}
 
 
 def словами(p: dict) -> str:

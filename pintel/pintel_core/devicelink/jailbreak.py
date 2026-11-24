@@ -42,7 +42,8 @@ async def probe(ld, timeout=20):
     try:
         return await asyncio.wait_for(run(), timeout)
     except Exception as e:                                   # noqa: BLE001
-        return {"проверено": False, "признаки": [], "ошибка": f"{type(e).__name__}: {str(e)[:120]}"}
+        from .connect import отказ_словами
+        return {"проверено": False, "признаки": [], "ошибка": отказ_словами(e)}
 
 
 def verdict(jb):

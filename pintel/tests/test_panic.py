@@ -141,3 +141,40 @@ def test_an_unread_panic_does_not_become_a_deal_at_all():
     # запечатанный аппарат читают не кабелем — с него паника не требуется
     ocenka.проверить_готовность({**ДАННЫЕ_СДЕЛКИ, "panic_full": None, "акб": None,
                                  "состояние": "новый", "статус_ремонта": ocenka.СТАТУС_НОВЫЙ})
+
+
+def test_a_refusal_is_told_in_words_the_employee_can_act_on():
+    """«panic full: NotPairedError: Device is not paired.» сотруднику не говорит ничего.
+
+    А сказать есть что: на телефоне сбросилось доверие, надо нажать «Доверять» и прочитать
+    заново. Три таких аппарата на 659 эталонах (19 и 23 ноября 2026). Незнакомый отказ
+    по-прежнему показываем как есть: соврать про причину хуже, чем показать имя ошибки."""
+    import asyncio
+    from pintel_core.devicelink import panic
+
+    class НеДоверяет(Exception):
+        pass
+    НеДоверяет.__name__ = "NotPairedError"
+
+    class Ld:
+        pass
+
+    async def прогнать(исключение):
+        async def падает(корутина, *a, **kw):
+            корутина.close()                     # иначе pytest ругается на брошенную корутину
+            raise исключение
+        было = panic.asyncio.wait_for
+        panic.asyncio.wait_for = падает
+        try:
+            return await panic.probe(Ld())
+        finally:
+            panic.asyncio.wait_for = было
+
+    итог = asyncio.run(прогнать(НеДоверяет("Device is not paired.")))
+    assert итог["проверено"] is False
+    assert "Доверять" in итог["ошибка"] and "NotPairedError" not in итог["ошибка"], итог
+
+    class Неведомая(Exception):
+        pass
+    итог = asyncio.run(прогнать(Неведомая("что-то новое")))
+    assert "Неведомая" in итог["ошибка"], итог

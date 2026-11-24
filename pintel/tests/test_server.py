@@ -218,6 +218,41 @@ def test_sickw_via_server_uses_db_cache(app, monkeypatch):
     assert k.post("/api/kiosk/sickw", json={"imei": "123"}, headers=H).status_code == 502
 
 
+def test_two_kiosks_asking_the_same_imei_at_once_both_get_an_answer(app, monkeypatch):
+    """Две кассы спросили базу IMEI об одном телефоне одновременно.
+
+    Обе не нашли строку в общем кэше и обе её создали — вторая получала «нарушена
+    уникальность», запрос падал с ошибкой 500, а касса писала «база недоступна». Чёрный
+    список оставался непроверенным, автоцены не было (24.11.2026, 10:16, живой случай).
+    Кэш — ускорение, а не условие: ответ Sickw к этому моменту уже получен."""
+    from pintel_server.db import SessionLocal
+    from pintel_server.models import SickwCache
+    from pintel_server.services import sickw_service
+
+    def fake_get(params, timeout=60):
+        return {"status": "success",
+                "result": 'Model: iPhone 12 64GB Black [A2403]<br>Blacklist Status: '
+                          '<font color="green">CLEAN</font><br>'}
+    monkeypatch.setattr(sickw, "_get", fake_get)
+    H = точка("Гонка-IMEI")
+    k = TestClient(app)
+    IMEI = "352099001761481"
+
+    # соседняя касса успела завести строку, пока мы ходили в базу IMEI
+    соседка = SessionLocal()
+    соседка.add(SickwCache(imei=IMEI, service=61, raw="старое"))
+    соседка.commit()
+    соседка.close()
+    # а наш запрос её ещё не видел — как и бывает в гонке
+    было = sickw_service.select
+    monkeypatch.setattr(sickw_service, "select",
+                        lambda *a, **kw: было(*a, **kw).where(SickwCache.id < 0))
+
+    ответ = k.post("/api/kiosk/sickw", json={"imei": IMEI}, headers=H)
+    assert ответ.status_code == 200, ответ.text
+    assert ответ.json()["в_чёрном_списке"] is False
+
+
 def test_employees_create_update_and_revoke(app):
     admin = client_for(app, "admin", "admin123")
     r = admin.post("/employees", data={"name": "Мадина Ержанова", "login": "madina", "role": "cashier", "password": "madina1", "point_id": ""})

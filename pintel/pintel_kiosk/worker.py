@@ -20,6 +20,7 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal
 
 from pintel_core import previous, reference
+from pintel_core.analysis import authcp
 from pintel_core.analysis import legal as legal_mod
 from pintel_core.analysis import обязательное
 from pintel_core.analysis import report as report_mod
@@ -698,6 +699,14 @@ class Pipeline(QThread):
                                  ("надзор MDM", leg["mdm"] is not True), ("пароль", not leg["пароль"])) if not ok]
         self._step("locks", "done" if not locks else "warn", "чисто" if not locks else ", ".join(locks))
 
+        # Что Apple сказала по кабелю. Это не «ждём ответа», а готовый ответ: проверку
+        # подлинности телефон держит в своём IORegistry и сам читает её оттуда, поэтому
+        # ради неё никого ждать не надо. Журнал с экрана телефона добавляет к ней экран и
+        # камеры — но уже не на пустом месте.
+        кабель_apple = authcp.словами((rep.get("детали_вердикт") or {}).get("apple_кабель"))
+        if кабель_apple:
+            log_line("проверка Apple по кабелю: " + кабель_apple)
+
         # история Apple: у модели вообще есть? (iPhone X и старше, iOS < 15.2 — нет, не держим клиента)
         hist_ok, hist_why = repair_history.supported(pas["код_модели"], pas["ios"])
         if not hist_ok:
@@ -715,14 +724,20 @@ class Pipeline(QThread):
                     "apple", "run", ("экран открыт, читаем…" if listener.meta.get("раздел_открыт")
                                      else f"«Об этом устройстве» на телефоне · {max(0, secs - s)} с")))
             self.apple_prompt.emit(False)
+            # Ожидание кончилось — значит у шага есть ответ. Висеть он права не имеет:
+            # «ждём Apple» без конца это не результат, а тупик, в котором сотрудник решает,
+            # что подвисла программа. Слушатель при этом работает дальше, пока телефон на
+            # кабеле, и пришедший позже вердикт шаг и отчёт дописывают (_дослушать_apple).
+            хвост = (" · " + кабель_apple) if кабель_apple else ""
             if items:
                 self._step("apple", "done", "получена")
             elif listener.state == "opened_unknown":
-                self._step("apple", "warn", "раздел открыт — проверит сотрудник")
+                # «Настройки» держат разбор в памяти: на втором заходе телефон печатает
+                # короткий кусок без вердикта. Советовать «откройте раздел» тут бесполезно —
+                # его уже открыли; помогает закрыть «Настройки» целиком и зайти заново.
+                self._step("apple", "warn", "раздел открыт, вердикта телефон не прислал" + хвост)
             else:
-                # подтвердить подлинность может только Apple, и только с экрана телефона:
-                # шаг остаётся открытым, слушатель работает, пока телефон на кабеле
-                self._step("apple", "warn", "откройте раздел на телефоне")
+                self._step("apple", "warn", "раздел на телефоне не открывали" + хвост)
         snap["repair_history"], snap["repair_history_raw"] = items, raw
         meta = dict(getattr(listener, "meta", None) or {})
         meta.update({"статус": listener.state if hist_ok else "не поддерживается", "почему": hist_why})
@@ -854,8 +869,11 @@ class Pipeline(QThread):
         """Слушаем дальше, пока телефон на кабеле: вердикт мог прийти позже (клиент открыл
         раздел после результата) или ИЗМЕНИТЬСЯ — iOS печатает записи повторно, когда
         подгрузит список ремонтов Apple, и только тогда в них появляются замены."""
-        if not items:
-            self._step("apple", "run", "ждём историю Apple")
+        # Шаг здесь НЕ открываем заново. Прежде он уходил в «ждём историю Apple» и больше
+        # не закрывался никогда: вердикта с экрана телефона могло не быть вовсе (iPhone 14
+        # на iOS 16.5.1, 24.11.2026 — телефон написал свой кусок журнала без вердикта), а
+        # на кассе это выглядело как зависшая программа. Слушаем молча; пришёл вердикт —
+        # шаг закрывается ниже с «получена».
         seen = repair_history.signature(items)
         while not self.cancel.is_set():
             items, raw, waited = await listener.wait_change(seen, keep_going=lambda: not self.cancel.is_set())

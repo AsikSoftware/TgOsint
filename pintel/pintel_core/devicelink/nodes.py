@@ -24,6 +24,17 @@ FIXED_NODES = [
     "AppleSMCCharger",
 ]
 
+# Сопроцессоры подлинности Apple (AuthCP): тот же вердикт, что телефон печатает словарём
+# «AuthCP Components», но по кабелю и без экрана телефона — его собственный демон читает его
+# оттуда же («IOREG Auth Component Trusted»). Первым в обходе стоит узел аккумулятора,
+# см. analysis/authcp.py. Читаем «по возможности»: док-разъёма нет у части моделей, и его
+# отсутствие — не «не прочиталось», а другое устройство.
+AUTHCP_NODES = [
+    "AppleAuthCPRelay",             # аккумулятор
+    "AppleAuthCPAID",               # шина аксессуаров: внутренний модуль разъёма
+    "AppleAuthCPDock",              # док-разъём (есть на Lightning-моделях)
+]
+
 # Запасные имена, если карта узлов недоступна
 CAMERA_FALLBACK = ["AppleH13CamIn", "AppleH10CamIn", "AppleH14CamIn",
                    "AppleH16CamIn", "AppleH17CamIn", "AppleCamera"]

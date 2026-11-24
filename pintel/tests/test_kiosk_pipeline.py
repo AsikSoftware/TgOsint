@@ -850,3 +850,84 @@ def test_a_phone_that_never_gives_the_mandatory_values_is_named_not_hidden(fake_
     assert any("не прочитано обязательное" in x for x in итоги[0]["report"]["не_прочиталось"])
     p.cancel.set()
     p.wait(3000)
+
+
+def _прогнать_с_хвостом(p, хвост=1000, таймаут=15000):
+    """Как `_прогнать`, но после done крутим поток ещё `хвост` мс: то, что киоск делает
+    ПОСЛЕ отчёта (дослушивание журнала Apple), иначе в события не попадает вовсе."""
+    события, итоги, loop = [], [], QEventLoop()
+    p.step.connect(lambda k, s, t: события.append((k, s, t)))
+    p.done.connect(lambda r: (итоги.append(r), QTimer.singleShot(хвост, loop.quit)))
+    p.failed.connect(lambda t: (события.append(("failed", t, "")), loop.quit()))
+    QTimer.singleShot(таймаут, loop.quit)
+    p.start()
+    loop.exec()
+    return события, итоги
+
+
+class МолчитНавсегда(FakeListener):
+    """Телефон журнал пишет, а вердикта в нём нет — и не будет: раздел открыт, разбор в
+    кэше «Настроек». Ровно так вёл себя iPhone 14 на iOS 16.5.1 24.11.2026."""
+
+    def __init__(self, ld, log=None, **kw):
+        super().__init__(ld, log=log, **kw)
+        self.state = "opened_unknown"
+        self.meta["раздел_открыт"] = True
+
+    async def wait_change(self, seen, keep_going=None, grace=2.0):
+        self.calls += 1
+        while keep_going is None or keep_going():
+            await asyncio.sleep(0.02)
+        return {}, "", 0.1
+
+
+def test_the_apple_step_never_hangs_without_an_end(fake_core, monkeypatch):
+    """Шаг Apple обязан закрыться ответом, а не висеть «ждём историю Apple».
+
+    Висящий шаг на кассе читается как зависшая программа — а подумать сотрудник должен о
+    телефоне. Слушатель при этом не выключается: пришёл вердикт позже — шаг закроется
+    «получена» (это проверяет test_pipeline_done_then_late_history)."""
+    QCoreApplication.instance() or QCoreApplication([])
+    monkeypatch.setattr(worker.repair_history, "Listener",
+                        lambda ld, log=None, **kw: МолчитНавсегда(ld, log=log))
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    # После отчёта слушатель живёт дальше, и прежде ИМЕННО там шаг уходил в бесконечное
+    # «ждём историю Apple». Поэтому поток крутим ещё секунду после done — иначе проверка
+    # просто не доживает до той строки и ничего не ловит.
+    события, итоги = _прогнать_с_хвостом(p)
+    p.cancel.set()
+    p.wait(3000)
+    assert итоги, события
+    шаги_apple = [(с, т) for к, с, т in события if к == "apple"]
+    assert шаги_apple, события
+    assert not any("ждём историю" in (т or "") for с, т in шаги_apple), шаги_apple
+    assert шаги_apple[-1][0] != "run", шаги_apple
+    assert "раздел открыт" in (шаги_apple[-1][1] or ""), шаги_apple
+
+
+def test_the_apple_step_says_what_the_cable_already_confirmed(fake_core, monkeypatch):
+    """Аккумулятор телефон подтверждает сам, по кабелю (сопроцессор AuthCP). Шаг обязан это
+    сказать: иначе сотрудник идёт сверять на телефоне то, что уже проверено."""
+    QCoreApplication.instance() or QCoreApplication([])
+    snap = _слепок_из_файла()
+    snap.pop("repair_history", None)
+    snap["nodes"] = {**snap["nodes"], "AppleAuthCPRelay": {
+        "IOClass": "AppleAuthCPRelay", "AuthPassed": True, "AuthFullPass": True, "isTrusted": True,
+        "isTrustedForUI": True, "authError": 0, "authErrorDescription": "AuthSuccess",
+        "FdrValidationStatus": "Pass", "InternalComponent": True}}
+
+    async def collect(ld, diag, log=None, **kw):
+        return _без_диска(snap) if kw.get("память") is False else dict(snap)
+
+    monkeypatch.setattr(worker.snapshot, "collect", collect)
+    monkeypatch.setattr(worker.repair_history, "Listener",
+                        lambda ld, log=None, **kw: МолчитНавсегда(ld, log=log))
+    p = worker.Pipeline({"apple_history_seconds": 1, "currency": "₸", "sickw": False}, FakeClient(), None)
+    события, итоги = _прогнать_с_хвостом(p)
+    p.cancel.set()
+    p.wait(3000)
+    assert итоги, события
+    шаги_apple = [т for к, с, т in события if к == "apple"]
+    assert any("аккумулятор" in (т or "").lower() for т in шаги_apple), шаги_apple
+    деталь = next((d for d in итоги[0]["report"]["детали_вердикт"]["детали"] if d["ключ"] == "Battery"), None)
+    assert деталь and "проверка Apple" in деталь["источник"], деталь

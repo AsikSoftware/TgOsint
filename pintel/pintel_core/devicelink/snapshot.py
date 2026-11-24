@@ -30,7 +30,7 @@ import asyncio, base64, collections, json, time
 from datetime import datetime
 
 from . import jailbreak, mdm, mobilegestalt as mg_mod, nand, panic
-from .nodes import (CAMERA_FALLBACK, CAMERA_RE, DOMAINS, FIXED_NODES, MG_KEYS, MG_KEYS_COLOUR,
+from .nodes import (AUTHCP_NODES, CAMERA_FALLBACK, CAMERA_RE, DOMAINS, FIXED_NODES, MG_KEYS, MG_KEYS_COLOUR,
                     NVME_FALLBACK, NVME_RE, OPTIONAL_CLASSES, OPTIONAL_NODES, PROX_FALLBACK, PROX_RE,
                     collect_entry_names, deep, num, pick_names, txt)
 
@@ -938,6 +938,13 @@ async def collect(ld, diag, log=lambda *a: None, жив=None, память=True,
                     break
         for key, cls in OPTIONAL_CLASSES.items():
             nodes[key] = await узел_по_возможности(cls, diag.ioregistry(ioclass=cls)) or None
+        # Проверка подлинности Apple по кабелю: узлы AuthCP. Ради них не ждём человека у
+        # телефона — телефон читает тот же вердикт отсюда сам.
+        for имя in AUTHCP_NODES:
+            if names_all and имя not in names_all:
+                nodes[имя] = None           # у этой модели такого сопроцессора нет вовсе
+                continue
+            nodes[имя] = await узел_по_возможности(имя, diag.ioregistry(name=имя)) or None
         quality["время_с"]["узлы"] = round(time.monotonic() - t, 2)
 
         # MobileGestalt — лучшим доступным каналом: diagnostics до iOS 17.4, а на 17.4+

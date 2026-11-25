@@ -1,4 +1,6 @@
-# Pintel Diagnostics: тесты сервера (Linux) → сборка pintel-doctor и pintel-kiosk для Windows → релиз
+# Pintel Diagnostics: тесты сервера (Linux) → касса для Windows → релиз → касса для мака.
+# Доктор и сервер из сборок убраны (владелец, 25.11.2026): сервер работает на VPS из
+# исходников, доктор нужен только при разработке. Собирается то, что едет на точки.
 name: Сборка Pintel Diagnostics
 
 on:
@@ -86,68 +88,6 @@ jobs:
           path: pintel/pytest.log
           if-no-files-found: ignore
 
-      - name: Сборка exe
-        run: python -m PyInstaller --clean --noconfirm pintel-doctor.spec
-
-      - name: Дымовой тест exe
-        shell: pwsh
-        run: |
-          $exe = 'dist\pintel-doctor\pintel-doctor.exe'
-          & $exe selfcheck
-          if ($LASTEXITCODE -ne 0) { throw "selfcheck упал" }
-          # отчёт из архивного слепка через СОБРАННЫЙ exe
-          python -c "import sys; sys.path.insert(0,'tests'); sys.path.insert(0,'.'); from fixtures import INVENTORIES, load_snapshot; from pintel_core.devicelink import snapshot; open('archive.snapshot.json','w',encoding='utf-8').write(snapshot.dumps(load_snapshot(INVENTORIES[-1])))"
-          & $exe report archive.snapshot.json
-          if ($LASTEXITCODE -ne 0) { throw "report упал" }
-          Copy-Item config.example.toml dist\pintel-doctor\config.example.toml
-          Copy-Item README.md dist\pintel-doctor\README.md
-
-      - name: Служба Apple ставится сама (чистая Windows, настоящий сервер Apple)
-        # Весь путь, которым пойдёт новый ноутбук на точке: скачать пакет с сервера Apple,
-        # сверить сумму и подпись, поставить с правами администратора, дождаться порта 27015.
-        # Сборку не роняем: упал сервер Apple — релиз всё равно нужен, а здесь будет жёлтая
-        # пометка. Упало из-за нас — чинить до выката (адрес пакета: apple_service.ПАКЕТ).
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $exe = 'dist\pintel-doctor\pintel-doctor.exe'
-          & $exe link
-          Write-Host "до установки: код $LASTEXITCODE (на чистой машине службы нет — это ожидаемо)"
-          & $exe link --install
-          if ($LASTEXITCODE -ne 0) { Write-Output "::warning::Служба Apple не поставилась сама (код $LASTEXITCODE) — смотри шаг сборки"; exit 1 }
-          sc.exe query "Apple Mobile Device Service"
-          $mux = Test-NetConnection -ComputerName 127.0.0.1 -Port 27015 -WarningAction SilentlyContinue
-          if (-not $mux.TcpTestSucceeded) { Write-Output "::warning::Служба Apple поставлена, но порт 27015 молчит"; exit 1 }
-          & $exe selfcheck
-          Write-Host "служба Apple поставлена программой, порт 27015 отвечает"
-
-      - name: Упаковать доктора
-        shell: pwsh
-        run: Compress-Archive -Path dist\pintel-doctor -DestinationPath pintel-doctor_Windows_x64.zip
-
-      - name: Сборка кассы (сервер одним файлом)
-        run: python -m PyInstaller --clean --noconfirm pintel-server.spec
-
-      - name: Дымовой тест кассы
-        shell: pwsh
-        run: |
-          Copy-Item server.example.toml dist\pintel-server\server.example.toml
-          Copy-Item deploy\README.md dist\pintel-server\README-VPS.md
-          $exe = 'dist\pintel-server\pintel-server.exe'
-          & $exe create-admin --login admin --name Admin --password admin123
-          if ($LASTEXITCODE -ne 0) { throw "create-admin упал" }
-          $p = Start-Process -FilePath $exe -ArgumentList 'run','--no-browser' -PassThru -WorkingDirectory 'dist\pintel-server'
-          Start-Sleep -Seconds 8
-          try {
-            $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/healthz; Write-Host $r.Content
-            $login = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/login
-            $css = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/static/app.css
-          } finally { Stop-Process -Id $p.Id -Force }
-          if (-not $r -or $r.StatusCode -ne 200) { throw "касса не ответила на /healthz" }
-          if ($login.StatusCode -ne 200 -or $css.StatusCode -ne 200) { throw "страница входа или стили не отдаются" }
-          Remove-Item dist\pintel-server\pintel.db -ErrorAction SilentlyContinue
-          Compress-Archive -Path dist\pintel-server -DestinationPath pintel-server_Windows_x64.zip
-
       - name: Сборка киоска
         run: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
 
@@ -158,9 +98,9 @@ jobs:
           python -c "import json, io; io.open('dist/pintel-kiosk/build_info.json', 'w', encoding='utf-8').write(json.dumps({'тег': 'doctor-${{ github.run_number }}'}, ensure_ascii=False))"
           type dist\pintel-kiosk\build_info.json
 
-      - name: Значок зашит во все три exe
+      - name: Значок зашит в exe кассы
         # сверка побайтно: сборка без значка тоже зелёная, а на точке у программы заглушка
-        run: python tools/exe_icon.py dist\pintel-kiosk\pintel-kiosk.exe dist\pintel-doctor\pintel-doctor.exe dist\pintel-server\pintel-server.exe
+        run: python tools/exe_icon.py dist\pintel-kiosk\pintel-kiosk.exe
 
       - name: Дымовой тест киоска (импорт без экрана)
         shell: pwsh
@@ -183,25 +123,17 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pintel-doctor_Windows_x64
-          path: pintel/pintel-doctor_Windows_x64.zip
-      - uses: actions/upload-artifact@v4
-        with:
           name: pintel-kiosk_Windows_x64
           path: pintel/pintel-kiosk_Windows_x64.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pintel-server_Windows_x64
-          path: pintel/pintel-server_Windows_x64.zip
 
       - name: Релиз
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip pintel-kiosk_Windows_x64.zip pintel-server_Windows_x64.zip `
+          gh release create "doctor-${{ github.run_number }}" pintel-kiosk_Windows_x64.zip `
             --target $env:GITHUB_SHA --title "Pintel Diagnostics — сборка #${{ github.run_number }}" `
-            --notes "pintel-server: касса сотрудника одним файлом (server.toml, gservice.json рядом; пункт 2 — администратор, пункт 1 — запуск). pintel-kiosk: киоск для клиента — распаковать поверх папки программы и запустить, токен точки и настройки лежат в %LOCALAPPDATA%\PintelKiosk. iTunes ставить не нужно: службу Apple программа скачивает с сервера Apple и ставит сама — кнопка «Починить связь с iPhone» на экране ожидания (один раз Windows спросит разрешение). pintel-doctor: консольный врач. Для всех точек — VPS, pintel/deploy."
+            --notes "Касса для точки. Windows: распаковать поверх папки программы и запустить; дальше касса обновляется сама, в первую свободную минуту. Токен точки и настройки лежат в %LOCALAPPDATA%\PintelKiosk. iTunes ставить не нужно: службу Apple программа ставит сама. Мак: архив pintel-kiosk_macOS_arm64.zip приедет в этот же релиз через несколько минут, установка — pintel/deploy/КАССА_НА_МАКЕ.md. Сервер кассы живёт на VPS и из сборок убран (владелец, 25.11.2026); консольный доктор тоже — он нужен только при разработке, запускается из исходников."
 
   # Касса для мака: точка на маке (владелец, 25.11.2026). Отдельная работа сборки, потому
   # что программу для мака может собрать только мак. Идёт ПОСЛЕ windows-сборки: релиз

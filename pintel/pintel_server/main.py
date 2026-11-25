@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .auth import LoginRequired
 from .config import settings
 from .db import init_db
-from .routers import kiosk_api, web
+from .routers import admin_api, kiosk_api, web
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -65,6 +65,7 @@ def create_app(init_sqlite=True) -> FastAPI:
     app = FastAPI(title="Pintel Diagnostics", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
     app.include_router(kiosk_api.router)
+    app.include_router(admin_api.router)     # данные для административной программы (мак)
     app.include_router(web.router)
 
     @app.exception_handler(LoginRequired)

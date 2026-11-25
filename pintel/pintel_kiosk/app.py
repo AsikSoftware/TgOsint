@@ -434,8 +434,10 @@ class KioskWindow(QMainWindow):
         cfg = self.cfg
         if not cfg.get("update_repo") or self.обновление_ставится or self.обновление_идёт:
             return
+        # Имя архива выбирает сама программа: настройка на сервере одна на все точки, а
+        # касса бывает windows-овая и маковская — чужой архив поставить нельзя.
         self._run(lambda: updater.проверить(cfg["update_repo"], cfg["update_token"],
-                                            cfg.get("update_asset") or ""),
+                                            updater.архив_этой_системы(cfg.get("update_asset"))),
                   ok=self._обновление_найдено, err=self._обновление_не_спросилось)
 
     def _обновление_не_спросилось(self, текст):
@@ -521,7 +523,7 @@ class KioskWindow(QMainWindow):
             архив = os.path.join(data_dir(), "update", f"{тег}.zip")
             updater.скачать(self.обновление["url"], cfg["update_token"], архив)
             новая = updater.распаковать(архив, os.path.join(data_dir(), "update", тег))
-            установлена = config.app_dir()
+            установлена = updater.папка_программы(config.app_dir())   # на маке это весь .app
             updater.перенести_своё(установлена, новая)   # чужое рядом с exe не теряем
             exe = sys.executable if getattr(sys, "frozen", False) else os.path.join(
                 установлена, "pintel-kiosk.exe")

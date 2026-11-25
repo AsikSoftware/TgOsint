@@ -202,3 +202,62 @@ jobs:
           gh release create "doctor-${{ github.run_number }}" pintel-doctor_Windows_x64.zip pintel-kiosk_Windows_x64.zip pintel-server_Windows_x64.zip `
             --target $env:GITHUB_SHA --title "Pintel Diagnostics — сборка #${{ github.run_number }}" `
             --notes "pintel-server: касса сотрудника одним файлом (server.toml, gservice.json рядом; пункт 2 — администратор, пункт 1 — запуск). pintel-kiosk: киоск для клиента — распаковать поверх папки программы и запустить, токен точки и настройки лежат в %LOCALAPPDATA%\PintelKiosk. iTunes ставить не нужно: службу Apple программа скачивает с сервера Apple и ставит сама — кнопка «Починить связь с iPhone» на экране ожидания (один раз Windows спросит разрешение). pintel-doctor: консольный врач. Для всех точек — VPS, pintel/deploy."
+
+  # Касса для мака: точка на маке (владелец, 25.11.2026). Отдельная работа сборки, потому
+  # что программу для мака может собрать только мак. Идёт ПОСЛЕ windows-сборки: релиз
+  # создаёт она, а маковский архив мы кладём в тот же релиз — касса на маке просит его по
+  # своему имени (pintel_kiosk/updater.архив_этой_системы).
+  build-macos:
+    runs-on: macos-latest
+    needs: build
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: pintel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Зависимости (ядро + касса)
+        run: python -m pip install --quiet -e ".[kiosk,test]" pyinstaller
+      - name: Тесты на маке
+        # На маке тесты гоняются целиком: окна Qt здесь настоящие, и беды, которых не видно
+        # на Windows, вылезают именно тут.
+        run: QT_QPA_PLATFORM=offscreen python -m pytest -q tests
+      - name: Сборка кассы для мака
+        run: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
+      - name: Метка сборки
+        # по ней программа понимает, что вышла новая версия. Лежит рядом с самой программой
+        # внутри .app — там же её ищет updater.свой_тег
+        run: |
+          python -c "import json, io; io.open('dist/pintel-kiosk.app/Contents/MacOS/build_info.json', 'w', encoding='utf-8').write(json.dumps({'тег': 'doctor-${{ github.run_number }}'}, ensure_ascii=False))"
+          cat dist/pintel-kiosk.app/Contents/MacOS/build_info.json
+      - name: Дымовой тест собранной программы
+        # Тесты гоняют исходники, а не собранную программу: сборка doctor-85 ушла на точки
+        # без чтения panic full, и поймала это только самопроверка готового exe.
+        run: |
+          ./dist/pintel-kiosk.app/Contents/MacOS/pintel-kiosk --selftest "$PWD/selftest.txt"
+          cat selftest.txt
+          test -f dist/pintel-kiosk.app/Contents/Frameworks/PySide6/Qt/plugins/platforms/libqcocoa.dylib \
+            || (echo "в сборке нет оконной части Qt для мака — программа не покажет экран" && exit 1)
+          test -f dist/pintel-kiosk.app/Contents/Resources/pintel_core/assets/diag.html \
+            || (echo "в сборке нет страницы теста телефона" && exit 1)
+          test -f dist/pintel-kiosk.app/Contents/Resources/pintel_kiosk/assets/fonts/Inter-Medium.ttf \
+            || (echo "в сборке нет шрифтов — экран кассы будет чужим" && exit 1)
+          rm -f selftest.txt
+      - name: Упаковать
+        # ditto, а не zip: внутри .app есть ссылки на файлы, и обычный zip их портит —
+        # распакованная программа не запустится.
+        run: |
+          ARCH=$(uname -m)
+          ditto -c -k --sequesterRsrc --keepParent dist/pintel-kiosk.app "pintel-kiosk_macOS_${ARCH}.zip"
+          ls -lh "pintel-kiosk_macOS_${ARCH}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pintel-kiosk_macOS
+          path: pintel/pintel-kiosk_macOS_*.zip
+      - name: Положить в релиз
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "doctor-${{ github.run_number }}" pintel-kiosk_macOS_*.zip --clobber

@@ -68,7 +68,13 @@ def app_dir():
 
 
 def data_dir():
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    # LOCALAPPDATA — путь Windows, но он же служит подменой пути в тестах, поэтому спрашиваем
+    # его первым. На маке данные кладём туда, где их держат маковские программы: иначе папка
+    # «PintelKiosk» валялась бы прямо в домашней и первый же сотрудник бы её утащил.
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        base = (os.path.expanduser("~/Library/Application Support") if sys.platform == "darwin"
+                else os.path.expanduser("~"))
     d = os.path.join(base, "PintelKiosk")
     for sub in ("queue", "cache", "out", "logs", "эталоны"):
         os.makedirs(os.path.join(d, sub), exist_ok=True)

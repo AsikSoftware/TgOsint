@@ -2,6 +2,7 @@
 # Сборка киоска: python -m PyInstaller --clean --noconfirm pintel-kiosk.spec
 import glob
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
@@ -22,15 +23,19 @@ _cd_datas, _cd_bins, _cd_hidden = collect_all('pymobiledevice3.remote')
 # Собранный exe искал его по пути _internal/pytun_pmd3/wintun/bin/amd64/wintun.dll и не находил:
 # спеки собирали pmd_pytcp, но не сам pytun_pmd3. Найдено на эталоне iPhone 14 Pro (iOS 26.5).
 import importlib.util as _ilu
+# wintun.dll — драйвер Windows, и спрашивать его у маковской сборки бессмысленно: там
+# туннель поднимается средствами самой системы. Но на Windows его отсутствие по-прежнему
+# останавливает сборку: молча уехать на точки без части данных по кабелю хуже, чем не собраться.
 _tun_datas, _tun_bins, _tun_hidden = collect_all('pytun_pmd3')
 _tun_spec = _ilu.find_spec('pytun_pmd3')
 _tun_dir = os.path.dirname(_tun_spec.origin) if _tun_spec and _tun_spec.origin else None
-_wintun = [p for p in glob.glob(os.path.join(_tun_dir or '.', '**', 'wintun.dll'), recursive=True)
-           if 'amd64' in p] or glob.glob(os.path.join(_tun_dir or '.', '**', 'wintun.dll'), recursive=True)
-if not _wintun:
-    raise SystemExit('нет wintun.dll в pytun_pmd3: туннель CoreDevice не заработает, '
-                     'а на iOS 17.4+ пропадёт часть данных по кабелю. Переустановите pymobiledevice3.')
-_tun_datas += [(_wintun[0], os.path.relpath(os.path.dirname(_wintun[0]), os.path.dirname(_tun_dir)))]
+if sys.platform == 'win32':
+    _wintun = [p for p in glob.glob(os.path.join(_tun_dir or '.', '**', 'wintun.dll'), recursive=True)
+               if 'amd64' in p] or glob.glob(os.path.join(_tun_dir or '.', '**', 'wintun.dll'), recursive=True)
+    if not _wintun:
+        raise SystemExit('нет wintun.dll в pytun_pmd3: туннель CoreDevice не заработает, '
+                         'а на iOS 17.4+ пропадёт часть данных по кабелю. Переустановите pymobiledevice3.')
+    _tun_datas += [(_wintun[0], os.path.relpath(os.path.dirname(_wintun[0]), os.path.dirname(_tun_dir)))]
 
 datas = collect_data_files('pymobiledevice3') + _pmd_datas + _cd_datas + _tun_datas + [
     ('pintel_core/analysis/models.json', 'pintel_core/analysis'),
@@ -77,7 +82,31 @@ heavy = ('WebEngine', 'Qml', 'Quick', 'Multimedia', 'Pdf', 'Charts', 'DataVisual
          'd3dcompiler', 'ffmpeg', 'avcodec', 'avformat', 'avutil', 'swresample', 'swscale', 'translations')
 a.binaries = [b for b in a.binaries if not any(h.lower() in b[0].lower() for h in heavy)]
 a.datas = [d for d in a.datas if not any(h.lower() in d[0].lower() for h in heavy)]
+# Значок: мак не умеет .ico и без .icns ставит программе серую заглушку. Второй файл со
+# значком в репозитории разъехался бы с первым, поэтому .icns собирается из того же .ico.
+if sys.platform == 'darwin':
+    _значок = os.path.abspath('pintel_kiosk/assets/icon.icns')
+    if not os.path.exists(_значок):
+        import subprocess as _sp
+        _sp.check_call([sys.executable, 'tools/mac_icon.py', 'pintel_kiosk/assets/icon.ico', _значок])
+else:
+    _значок = 'pintel_kiosk/assets/icon.ico'
+
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='pintel-kiosk', debug=False, bootloader_ignore_signals=False,
-          strip=False, upx=False, console=False, icon='pintel_kiosk/assets/icon.ico')
+          strip=False, upx=False, console=False, icon=_значок)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='pintel-kiosk')
+# На маке программа — это .app, иначе её не запустить двойным щелчком и не положить в Dock.
+# Обновление подменяет именно его целиком (pintel_kiosk/updater.папка_программы).
+if sys.platform == 'darwin':
+    app = BUNDLE(coll, name='pintel-kiosk.app', icon=_значок, bundle_identifier='kz.pintel.kiosk',
+                 info_plist={
+                     'CFBundleName': 'Pintel Касса',
+                     'CFBundleDisplayName': 'Pintel Касса',
+                     'CFBundleShortVersionString': '2.0',
+                     'NSHighResolutionCapable': True,
+                     # Касса просит у сети только наш сервер и GitHub, но без этого мак
+                     # запрещает ей локальную сеть молча — а по ней идёт тест на телефоне клиента.
+                     'NSLocalNetworkUsageDescription': 'Тест на телефоне клиента открывается по локальной сети.',
+                     'LSApplicationCategoryType': 'public.app-category.business',
+                 })

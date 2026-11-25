@@ -7,3 +7,4 @@ dist/
 __pycache__/
 *.egg-info/
 !tests/fixtures_real/*.json
+icon.icns

@@ -6,6 +6,7 @@
 распаковки и текст сценария, который и делает подмену.
 """
 import os
+import sys
 import zipfile
 
 import httpx
@@ -14,6 +15,15 @@ import pytest
 from pintel_kiosk import updater
 
 АРХИВ = "pintel-kiosk_Windows_x64.zip"
+
+
+@pytest.fixture(autouse=True)
+def _точка_на_windows(monkeypatch):
+    """Этот файл — про windows-точку, и решения, зависящие от системы, проверяются на ней.
+
+    Без этого на маке разработчика те же проверки уходят в маковские ветки и показывают
+    поломку там, где её нет: касса для мака проверяется отдельно, в tests/test_kiosk_mac.py."""
+    monkeypatch.setattr(sys, "platform", "win32")
 
 
 def релиз(тег="doctor-46", имя=АРХИВ):

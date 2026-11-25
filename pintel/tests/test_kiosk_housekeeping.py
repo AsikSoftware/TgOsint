@@ -142,3 +142,47 @@ def test_a_network_blip_does_not_fill_the_log_with_a_traceback(tmp_path, monkeyp
 
     поломка = прогнать(KeyError("опечатка в ключе"))
     assert "Traceback" in поломка, поломка
+
+
+def test_the_kiosk_updates_itself_without_waiting_for_a_restart(tmp_path, monkeypatch):
+    """Владелец, 25.11.2026: «при наличии обновления программа сама всё закрывает и сама
+    обновляется — независимо от того, перезапускали софт или нажимали "проверить"».
+
+    До этого спрашивали GitHub один раз, при запуске. Кассу на точке не перезапускают
+    неделями, и всё это время она работала на старой сборке: именно так исправленная
+    ошибка неделями жила на части точек. Но и посреди сделки программу менять нельзя —
+    телефон клиента уже на кабеле, и подмена закрыла бы работу вместе с окном."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from pintel_kiosk import app as kapp
+    from pintel_kiosk import config as kconfig
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    ставили = []
+    monkeypatch.setattr(kapp.KioskWindow, "обновиться", lambda self: ставили.append(self.state))
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_тест",
+                          "point": "16/38 Pintel", "update_repo": ""})
+    try:
+        assert w.обновление_опрос.isActive(), "про обновление спрашивают только при запуске"
+        assert w.обновление_опрос.interval() >= 3 * 60_000
+
+        # нашли сборку, а сотрудник в сделке — ставить нельзя, но и новую работу не начинаем
+        w.state = "work"
+        w._обновление_найдено({"есть": True, "тег": "doctor-110", "url": "u"})
+        assert w.обновление_ставится and ставили == [], "подменили программу посреди сделки"
+        w.начать_сделку()
+        assert w.state == "work", "начали новую сделку на сборке, которая сейчас сменится"
+
+        # сделка закончилась — ставим сами, никто ничего не нажимал
+        w.state = "idle"
+        w._ставить_обновление_когда_свободно()
+        assert ставили == ["idle"], ставили
+    finally:
+        for поток in (w.poller, w.net):
+            поток.stop()
+            поток.wait(2000)
+        w.close()
+        w.deleteLater()

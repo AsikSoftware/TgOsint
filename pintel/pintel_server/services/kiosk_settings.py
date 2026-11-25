@@ -48,6 +48,9 @@ from ..models import Point, Setting
     "update_repo": "AsikSoftware/TgOsint",
     "update_token": "",
     "update_asset": "pintel-kiosk_Windows_x64.zip",
+    # Как часто касса сама спрашивает про новую сборку, пока работает. Ноль ставить нельзя:
+    # точка, которую не перезапускают, месяцами жила бы на старой сборке (25.11.2026).
+    "update_check_minutes": 15,
     # реквизиты в шапке чека
     "company_name": "Pintel.kz",
     "company_phone": "+77472461313",

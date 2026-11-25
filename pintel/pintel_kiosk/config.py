@@ -46,6 +46,10 @@ import sys
     "update_repo": "AsikSoftware/TgOsint",
     "update_token": "",
     "update_asset": "pintel-kiosk_Windows_x64.zip",
+    # Как часто спрашивать GitHub про новую сборку, пока программа работает.
+    # Раньше спрашивали только при запуске — и точка, которую не перезапускали
+    # неделями, всё это время работала на старой сборке (владелец, 25.11.2026).
+    "update_check_minutes": 15,
     "company_name": "Pintel.kz",
     "company_phone": "+77472461313",
     "company_site": "pintelkz.taplink.kz",

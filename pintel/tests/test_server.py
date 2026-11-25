@@ -1459,3 +1459,41 @@ def test_two_copies_of_one_evaluation_at_once_make_one(app, monkeypatch):
     db = SessionLocal()
     assert len(db.scalars(select(Evaluation).where(Evaluation.client_id == "c-гонка")).all()) == 1
     db.close()
+
+
+def test_a_forgotten_password_can_be_changed_without_a_second_admin(monkeypatch, capsys):
+    """Пароль забывают, и до сих пор лекарством было завести второго администратора.
+
+    Пароль не передаётся ключом командной строки: он спрашивается отдельно и не остаётся ни
+    в истории команд, ни на экране. Короткий и несовпавший не принимаются."""
+    from pintel_server import cli
+    from pintel_server.auth import verify_password
+
+    init_db()                      # проверка живёт и сама по себе, без общей подготовки
+    db = SessionLocal()
+    try:
+        логин = "сменим_пароль"
+        if not db.scalar(select(User).where(User.login == логин)):
+            db.add(User(login=логин, name="Тест", role=ROLE_ADMIN,
+                        password_hash=hash_password("старый123"), is_active=False))
+            db.commit()
+    finally:
+        db.close()
+
+    ответы = iter(["новый1234", "новый1234"])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _п="": next(ответы))
+    assert cli.main(["set-password", "--login", логин]) == 0
+
+    db = SessionLocal()
+    try:
+        человек = db.scalar(select(User).where(User.login == логин))
+        assert verify_password("новый1234", человек.password_hash)
+        assert человек.is_active, "смена пароля заодно возвращает доступ"
+    finally:
+        db.close()
+
+    # несовпавшие пароли не меняют ничего
+    ответы = iter(["другой1234", "опечатка12"])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _п="": next(ответы))
+    assert cli.main(["set-password", "--login", логин]) == 2
+    assert cli.main(["set-password", "--login", "нет-такого"]) == 2

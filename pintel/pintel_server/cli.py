@@ -21,6 +21,10 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init-db")
     s = sub.add_parser("create-admin"); s.add_argument("--login", required=True); s.add_argument("--name", required=True); s.add_argument("--password")
+    # Пароль забывают, а команды сменить его не было — приходилось заводить второго
+    # администратора. Пароль здесь НЕ передаётся ключом: он спрашивается отдельно и не
+    # остаётся ни в истории команд, ни на экране.
+    s = sub.add_parser("set-password"); s.add_argument("--login", required=True)
     s = sub.add_parser("create-kiosk"); s.add_argument("--name", required=True); s.add_argument("--point")
     s_prune = sub.add_parser("prune")        # убрать сырые слепки у старых оценок
     s_prune.add_argument("--days", type=int, default=None)
@@ -46,6 +50,20 @@ def main(argv=None):
                 print("такой логин уже есть"); return 2
             db.add(User(login=a.login.lower(), name=a.name, role=ROLE_ADMIN, password_hash=hash_password(pw)))
             db.commit(); print(f"администратор {a.login} создан"); return 0
+        if a.cmd == "set-password":
+            человек = db.scalar(select(User).where(User.login == a.login.lower()))
+            if человек is None:
+                print("нет такого логина"); return 2
+            pw = getpass.getpass(f"новый пароль для {человек.login} ({человек.name}): ")
+            if len(pw) < 6:
+                print("пароль не короче 6 знаков"); return 2
+            if pw != getpass.getpass("ещё раз: "):
+                print("пароли не совпали"); return 2
+            человек.password_hash = hash_password(pw)
+            человек.is_active = True
+            db.commit()
+            print(f"пароль для {человек.login} сменён")
+            return 0
         if a.cmd == "create-kiosk":
             point = None
             if a.point:

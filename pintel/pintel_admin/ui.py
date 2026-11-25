@@ -24,11 +24,14 @@ _КРАЙ = "rgba(255,255,255,0.88)" if СТЕКЛО else C["border"]
 _МЕНЮ = "rgba(255,255,255,0.55)" if СТЕКЛО else C["screen"]
 
 QSS = """
-QWidget { color: %(ink)s; font-size: 14px; }
-QLabel#h1 { font-size: 26px; font-weight: 700; }
+QWidget { color: %(ink)s; font-size: 13.5px; }
+QLabel#h1 { font-size: 25px; font-weight: 700; letter-spacing: -0.3px; }
 QLabel#sub { font-size: 13px; color: %(muted)s; font-weight: 500; }
-QLabel#kicker { font-size: 11px; font-weight: 700; color: %(brand)s; }
-QLabel#muted { font-size: 13px; color: %(muted)s; font-weight: 500; }
+QLabel#kicker { font-size: 10.5px; font-weight: 700; color: %(brand)s; letter-spacing: 1.4px; }
+QLabel#подпись { font-size: 10.5px; font-weight: 700; color: %(muted)s; letter-spacing: 1.4px; }
+QLabel#число { font-size: 30px; font-weight: 700; letter-spacing: -1px; }
+QLabel#muted { font-size: 12.5px; color: %(muted)s; font-weight: 500; }
+QLabel#имя { font-size: 15px; font-weight: 700; }
 QFrame#карта { background: %(заливка)s; border: 1px solid %(край)s; border-radius: 18px; }
 QFrame#меню { background: %(меню)s; border-right: 1px solid %(край)s; }
 QPushButton#пункт { text-align: left; padding: 8px 12px; border-radius: 11px; border: none;
@@ -48,7 +51,8 @@ QTableWidget { background: transparent; border: none; gridline-color: transparen
     selection-background-color: %(tint)s; selection-color: %(ink)s; }
 QHeaderView::section { background: transparent; border: none; color: %(ghost)s;
     font-size: 11px; font-weight: 700; padding: 0 8px 8px; }
-QTableWidget::item { padding: 8px; border-bottom: 1px solid rgba(11,27,51,0.07); }
+QTableWidget::item { padding: 7px 8px; border-bottom: 1px solid rgba(11,27,51,0.07);
+    font-size: 13.5px; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
 QScrollBar::handle:vertical { background: %(ring)s; border-radius: 5px; min-height: 40px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
@@ -107,8 +111,8 @@ class Плитка(Карта):
     def __init__(self, подпись: str, parent=None):
         super().__init__("", parent)
         self.внутри.setSpacing(2)
-        self.подпись = надпись(подпись.upper(), "kicker", цвет=C["muted"])
-        self.значение = надпись("—", шрифт=font(FONT_NUM, 30, W.Bold))
+        self.подпись = надпись(подпись.upper(), "подпись")
+        self.значение = надпись("—", "число", шрифт=font(FONT_NUM, 30, W.Bold))
         self.пояснение = надпись("", "muted")
         for w in (self.подпись, self.значение, self.пояснение):
             self.внутри.addWidget(w)
@@ -129,7 +133,7 @@ class Меню(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("меню")
-        self.setFixedWidth(224)
+        self.setFixedWidth(244)
         self.кнопки = {}
         self._слой = QVBoxLayout(self)
         self._слой.setContentsMargins(12, 14, 12, 12)
@@ -138,9 +142,9 @@ class Меню(QFrame):
     def заголовок(self, текст, подпись=""):
         шапка = QVBoxLayout()
         шапка.setSpacing(0)
-        шапка.addWidget(надпись(текст, шрифт=font(FONT_HEAD, 17, W.Bold)))
+        шапка.addWidget(надпись(текст, "имя"))
         if подпись:
-            шапка.addWidget(надпись(подпись, "muted"))
+            шапка.addWidget(надпись(подпись, "muted", перенос=True))
         обёртка = QWidget()
         обёртка.setLayout(шапка)
         обёртка.setContentsMargins(4, 0, 0, 10)

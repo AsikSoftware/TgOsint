@@ -26,6 +26,17 @@ from .ui import (C, FONT_HEAD, Карта, Меню, Плитка, QSS, Фон, 
 # а сервер не должен отвечать на лишние вопросы с десятка окон.
 ОБНОВЛЯТЬ_СЕК = 60
 
+МЕСЯЦЫ = ("января", "февраля", "марта", "апреля", "мая", "июня",
+          "июля", "августа", "сентября", "октября", "ноября", "декабря")
+
+
+def _датой(день: str) -> str:
+    """«2026-11-25» → «25 ноября». Владелец читает дату, а не формат базы."""
+    части = str(день or "").split("-")
+    if len(части) != 3 or not части[2].isdigit():
+        return str(день or "")
+    return f"{int(части[2])} {МЕСЯЦЫ[int(части[1]) - 1]}"
+
 
 class Задача(QThread):
     """Один запрос к серверу вне окна. Результат и беда приходят сигналами."""
@@ -54,18 +65,41 @@ def таблица(колонки) -> QTableWidget:
     т.setSelectionBehavior(QTableWidget.SelectRows)
     т.setEditTriggers(QTableWidget.NoEditTriggers)
     т.setAlternatingRowColors(False)
-    т.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-    т.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+    # Первая колонка тянется (в ней имена, они разной длины), остальные — по содержимому:
+    # числа должны стоять столбиком у правого края, иначе их не сравнить глазом.
+    шапка = т.horizontalHeader()
+    шапка.setSectionResizeMode(QHeaderView.ResizeToContents)
+    шапка.setSectionResizeMode(0, QHeaderView.Stretch)
+    шапка.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    шапка.setHighlightSections(False)
+    шапка.setStyleSheet("background: transparent;")
+    т.setFocusPolicy(Qt.NoFocus)
+    т.setSelectionMode(QTableWidget.NoSelection)     # строки пока не нажимаются
     return т
+
+
+def _число(текст: str) -> bool:
+    """Строка — это число (может быть с пробелами, ₸ или знаком процента)?"""
+    голое = текст.replace(" ", "").replace("₸", "").replace("%", "").replace("млн", "").replace(",", "")
+    return bool(голое) and голое.lstrip("-").isdigit()
 
 
 def заполнить(т: QTableWidget, строки, цвет_строки=None):
     """Строки в таблицу. `цвет_строки(строка)` → цвет или None: красим беду, а не всё подряд."""
     т.setRowCount(len(строки))
+    # заголовки числовых колонок — вправо, к своим числам
+    for j in range(т.columnCount()):
+        if строки and j and _число(str(строки[0][j] if строки[0][j] is not None else "")):
+            ячейка = т.horizontalHeaderItem(j)
+            if ячейка:
+                ячейка.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
     for i, строка in enumerate(строки):
         цвет = цвет_строки(строка) if цвет_строки else None
         for j, значение in enumerate(строка):
-            ячейка = QTableWidgetItem("" if значение is None else str(значение))
+            текст = "" if значение is None else str(значение)
+            ячейка = QTableWidgetItem(текст)
+            if j and _число(текст):
+                ячейка.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             if j == 0:
                 шрифт = ячейка.font()
                 шрифт.setWeight(W.DemiBold)
@@ -89,7 +123,7 @@ class Раздел(QWidget):
         self.корень.setSpacing(14)
         шапка = QVBoxLayout()
         шапка.setSpacing(2)
-        шапка.addWidget(надпись(заголовок, "h1", шрифт=font(FONT_HEAD, 24, W.Bold)))
+        шапка.addWidget(надпись(заголовок, "h1", шрифт=font(FONT_HEAD, 25, W.Bold)))
         self.подпись = надпись(подпись, "sub")
         шапка.addWidget(self.подпись)
         обёртка = QWidget()
@@ -127,7 +161,7 @@ class Обзор(Раздел):
         self.корень.addWidget(карта, 1)
 
     def показать(self, данные: dict):
-        self.подпись.setText(f"Сегодня, {данные.get('день') or ''}")
+        self.подпись.setText("Сегодня, " + _датой(данные.get("день")))
         self.плитки["проверок"].показать(данные.get("проверок"))
         self.плитки["выкуплено"].показать(
             данные.get("выкуплено"),
@@ -137,8 +171,10 @@ class Обзор(Раздел):
             миллионы(данные.get("выдано")) if данные.get("выдано") else None,
             f"средний чек {деньги(данные.get('средний_чек'))} ₸" if данные.get("средний_чек") else "")
         self.плитки["оценил_человек"].показать(данные.get("оценил_человек"))
-        заполнить(self.таблица, [(т["точка"], т["проверок"], т["выкуп"], деньги(т["выдано"]) + " ₸")
-                                 for т in данные.get("точки") or []])
+        заполнить(self.таблица,
+                  [(т["точка"], т["проверок"], т["выкуп"],
+                    (деньги(т["выдано"]) + " ₸") if т.get("выдано") else "—")
+                   for т in данные.get("точки") or []])
 
 
 class Тревоги(Раздел):

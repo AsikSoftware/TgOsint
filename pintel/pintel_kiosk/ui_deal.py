@@ -32,11 +32,13 @@ from pintel_core import phonetest
 from pintel_core.external import ocenka_media
 
 from .ui_parts_check import СверкаДеталей
-from .ui import (C, FONT_HEAD, FONT_NUM, FONT_TEXT, QrBlock, Ring, Screen, SheenButton, StepRow,
-                 STEPS, Stepper, W, font, kicker, label, logo_label, point_text, qr_pixmap, Успех)
+from .ui import (C, FONT_HEAD, FONT_NUM, FONT_TEXT, ПАЛИТРА_QSS, QrBlock, Ring, Screen,
+                 SheenButton, StepRow, STEPS, Stepper, W, font, kicker, label, logo_label,
+                 point_text, qr_pixmap, стеклянная_тень, Успех)
 
-QSS_DEAL = """
-QLineEdit, QComboBox, QTextEdit { background: %(field)s; border: 1px solid %(line)s; border-radius: 14px;
+QSS_DEAL_ИСХОДНИК = """
+QLineEdit, QComboBox, QTextEdit { background: %(м_поле)s; border: 1px solid %(м_поле_край)s;
+    border-radius: %(р_поле)s;
     padding: 11px 15px; font-size: 21px; color: %(ink)s; selection-background-color: %(action)s; }
 QLineEdit:focus, QComboBox:focus, QTextEdit:focus { border-color: %(action)s; }
 QLineEdit[плохо="да"] { border-color: %(bad)s; }
@@ -45,21 +47,27 @@ QComboBox QAbstractItemView { background: %(card_hi)s; color: %(ink)s; border: 1
     selection-background-color: %(tint)s; selection-color: %(ink)s; outline: none; }
 QCheckBox { font-size: 21px; font-weight: 600; spacing: 12px; color: %(ink)s; }
 QCheckBox::indicator { width: 26px; height: 26px; border: 2px solid %(ring)s; border-radius: 8px;
-    background: %(field)s; }
+    background: %(м_поле)s; }
 QCheckBox::indicator:checked { background: %(action)s; border-color: %(cyan)s; }
-QPushButton#ghost { background: transparent; color: %(body)s; border: 1px solid %(line)s;
-    border-radius: 14px; font-size: 21px; font-weight: 700; min-height: 56px; padding: 0 28px; }
-QPushButton#ghost:pressed { background: %(card_hi)s; }
+QPushButton#ghost { background: %(м_призрак)s; color: %(body)s; border: 1px solid %(м_призрак_край)s;
+    border-radius: %(р_кнопка)s; font-size: 21px; font-weight: 700; min-height: 56px; padding: 0 28px; }
+QPushButton#ghost:pressed { background: %(м_призрак_нажат)s; }
 QPushButton#ghost:disabled { color: %(ghost)s; border-color: %(border)s; }
 QPushButton#small { background: %(tint)s; color: %(brand)s; border: none; border-radius: 12px;
     font-size: 19px; font-weight: 700; min-height: 48px; padding: 0 22px; }
 QPushButton#small:pressed { background: %(tint_border)s; }
-QFrame#карточка { background: %(card)s; border: 1px solid %(border)s; border-radius: 22px; }
-QFrame#фокус { background: %(card_hi)s; border: 2px solid %(tint_border)s; border-radius: 26px; }
-QFrame#всплывашка { background: #FFFFFF; border: 2px solid %(tint_border)s; border-radius: 20px; }
-QFrame#плашка_истории { background: %(card)s; border: 1px solid %(line)s; border-radius: 19px; }
-QFrame#окно_истории { background: %(ground)s; border: 1px solid %(tint_border)s; border-radius: 28px; }
-QFrame#запись { background: %(card)s; border: 1px solid %(border)s; border-radius: 18px; }
+QFrame#карточка { background: %(м_карточка)s; border: 1px solid %(м_карточка_край)s;
+    border-radius: %(р_карточка)s; }
+QFrame#фокус { background: %(м_фокус)s; border: %(м_фокус_край_px)s solid %(м_фокус_край)s;
+    border-radius: %(р_фокус)s; }
+QFrame#всплывашка { background: %(м_окно)s; border: 1px solid %(м_фокус_край)s;
+    border-radius: %(р_фокус)s; }
+QFrame#плашка_истории { background: %(м_карточка)s; border: 1px solid %(м_карточка_край)s;
+    border-radius: 19px; }
+QFrame#окно_истории { background: %(м_окно)s; border: 1px solid %(м_фокус_край)s;
+    border-radius: %(р_фокус)s; }
+QFrame#запись { background: %(м_карточка)s; border: 1px solid %(м_карточка_край)s;
+    border-radius: 18px; }
 QFrame#беда_истории { background: %(warnbg)s; border: none; border-radius: 14px; }
 QFrame#окно_истории QScrollBar:vertical { background: %(screen)s; width: 12px; border-radius: 6px;
     margin: 0; }
@@ -71,7 +79,8 @@ QFrame#окно_истории QScrollBar::add-page:vertical, QFrame#окно_и
     background: transparent; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
-""" % C
+"""
+QSS_DEAL = QSS_DEAL_ИСХОДНИК % ПАЛИТРА_QSS
 
 СОСТОЯНИЕ = {"ok": ("оригинальная", C["ok"]), "repaired": ("меняли, оригинал Apple", C["warntext"]),
              "used": ("б/у деталь", C["warntext"]), "bad": ("не подтверждена", C["badtext"])}
@@ -394,6 +403,7 @@ def _карточка(заголовок):
     """Боковая карточка с надзаголовком: внутрь кладут содержимое."""
     рамка = QFrame()
     рамка.setObjectName("карточка")
+    стеклянная_тень(рамка)                   # на маке: без тени прозрачная карточка не видна
     рамка.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
     внутри = QVBoxLayout(рамка)
     внутри.setContentsMargins(24, 20, 24, 20)
@@ -407,6 +417,7 @@ def _фокус(заголовок):
     экране, и глаз должен находить её первой."""
     рамка = QFrame()
     рамка.setObjectName("фокус")
+    стеклянная_тень(рамка, размытие=44, вниз=10, альфа=46)   # главное на экране — тень глубже
     рамка.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
     внутри = QVBoxLayout(рамка)
     внутри.setContentsMargins(34, 26, 34, 26)

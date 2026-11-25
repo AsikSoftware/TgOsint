@@ -104,3 +104,41 @@ def test_mac_data_lives_where_mac_programs_keep_it(tmp_path, monkeypatch):
     # подмена пути (тесты и Windows) по-прежнему главнее системы
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "подмена"))
     assert config.data_dir() == str(tmp_path / "подмена" / "PintelKiosk")
+
+
+# ---------------------------------------------------------------- облик
+
+
+def test_both_looks_have_the_same_set_of_materials():
+    """Наборы материалов обязаны совпадать ключ в ключ.
+
+    Правило QSS с незаполненным «%(…)s» — это не блеклая кнопка, а падение программы при
+    запуске: на кассе это закрытая точка. Разойтись наборы могут незаметно — добавил ключ
+    ради стекла и забыл про Windows, а проверяешь на маке."""
+    from pintel_kiosk import ui
+
+    assert set(ui._МАТЕРИАЛ_WIN) == set(ui._МАТЕРИАЛ_СТЕКЛО)
+    # и оба набора целиком подставляются в оба набора правил
+    from pintel_kiosk import ui_deal
+    for стекло in (False, True):
+        палитра = ui.материал(стекло)
+        for правила in (ui.QSS_ИСХОДНИК, ui_deal.QSS_DEAL_ИСХОДНИК):
+            собрано = правила % палитра
+            assert "%(" not in собрано
+
+
+def test_the_windows_look_is_not_touched_by_the_mac_glass():
+    """Облик Windows-точек остаётся прежним.
+
+    Там он отработан, сотрудники к нему привыкли, и менять его заодно со стеклом незачем:
+    любая правка облика на точке — это переучивание людей и новые вопросы на кассе."""
+    from pintel_kiosk import ui
+
+    обычный = ui.материал(False)
+    assert обычный["м_карточка"] == ui.C["card"]
+    assert обычный["м_окно"] == ui.C["ground"]
+    assert обычный["р_карточка"] == "22px"
+
+    стекло = ui.материал(True)
+    assert "rgba" in стекло["м_карточка"], "карточка на маке должна пропускать фон"
+    assert "rgba" not in стекло["м_окно"], "сквозь окно поверх экрана не должно быть видно текст"

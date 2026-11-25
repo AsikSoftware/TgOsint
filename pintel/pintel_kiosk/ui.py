@@ -14,6 +14,7 @@
 """
 import math
 import os
+import sys
 import time
 
 from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer,
@@ -42,32 +43,111 @@ C = {
 FONT_TEXT, FONT_HEAD, FONT_NUM = "Inter", "Inter Display", "Space Grotesk"
 W = QFont.Weight
 
+# ---------- материал экранов: на маке стекло ----------
+# Владелец, 25.11.2026: «дизайн на маке сделать более под Apple, то есть glass».
+#
+# На Windows-точках облик остаётся прежним: он там отработан, сотрудники к нему привыкли, и
+# менять его заодно незачем. Маковская касса получает маковский материал: светлая подложка,
+# сквозь карточки виден фон, край карточки — тонкая световая линия, под ней мягкая тень.
+#
+# Размытия фона под карточкой здесь нет, и это не экономия. Фон кассы — ровный световой
+# градиент; размытие такого фона выглядит в точности как он сам, а стоит кадра на каждом
+# движении — на точке это заметно. Стекло здесь делают прозрачность, световой край и тень.
+#
+# PINTEL_GLASS=0 — вернуть прежний облик на маке (нужно, чтобы снимать оба набора рендеров).
+СТЕКЛО = sys.platform == "darwin" and os.environ.get("PINTEL_GLASS", "1") != "0"
+
+# Заливки и рамки ТОЛЬКО для QSS: в коде рисования цвета берутся из C как раньше, поэтому
+# прозрачные значения живут отдельным словарём — QColor такую строку не разберёт.
+_МАТЕРИАЛ_WIN = {
+    "м_карточка": C["card"], "м_карточка_край": C["border"],
+    "м_фокус": C["card_hi"], "м_фокус_край": C["tint_border"], "м_фокус_край_px": "2px",
+    "м_окно": C["ground"], "м_поле": C["field"], "м_поле_край": C["line"],
+    "м_призрак": "transparent", "м_призрак_край": C["line"], "м_призрак_нажат": C["card_hi"],
+    "м_ряд": C["tint"], "м_ряд_край": C["tint_border"], "м_главная_выкл": "#E9EEF6",
+    "р_карточка": "22px", "р_фокус": "26px", "р_кнопка": "14px", "р_поле": "14px",
+    "р_главная": "18px",
+}
+# Прозрачности подобраны на светлой подложке: 0.58 — карточка ещё читается как поверхность,
+# но фон за ней виден; край в 0.85 белого даёт ту самую световую кромку, по которой стекло и
+# узнаётся. Текстовые цвета не меняем: контраст на кассе важнее облика.
+_МАТЕРИАЛ_СТЕКЛО = {
+    "м_карточка": ("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                   "stop:0 rgba(255,255,255,0.72), stop:1 rgba(255,255,255,0.50))"),
+    "м_карточка_край": "rgba(255,255,255,0.85)",
+    "м_фокус": ("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                "stop:0 rgba(255,255,255,0.88), stop:1 rgba(255,255,255,0.66))"),
+    "м_фокус_край": "rgba(22,119,255,0.28)", "м_фокус_край_px": "1px",
+    # Окно поверх экрана — НЕ прозрачное. Сквозь него читался текст и QR с экрана под ним:
+    # стекло, через которое видно чужие буквы, это не облик, а нечитаемый экран. Стеклянным
+    # окно делают тень, край и затемнение под ним, а не прозрачность.
+    "м_окно": "#FDFEFF",
+    "м_поле": "rgba(255,255,255,0.75)", "м_поле_край": "rgba(11,27,51,0.12)",
+    "м_призрак": "rgba(255,255,255,0.55)", "м_призрак_край": "rgba(255,255,255,0.90)",
+    "м_призрак_нажат": "rgba(255,255,255,0.80)",
+    "м_ряд": "rgba(22,119,255,0.10)", "м_ряд_край": "rgba(22,119,255,0.26)",
+    "м_главная_выкл": "rgba(255,255,255,0.55)",
+    "р_карточка": "28px", "р_фокус": "30px", "р_кнопка": "17px", "р_поле": "16px",
+    "р_главная": "22px",
+}
+
+
+def материал(стекло: bool) -> dict:
+    """Словарь подстановок для QSS: цвета плюс материал выбранного облика.
+
+    Отдельной функцией, чтобы оба облика проверялись тестами на любой машине: ключи наборов
+    обязаны совпадать до одного, иначе на точке другой системы правило останется с «%(…)s»
+    и программа упадёт при запуске — на кассе это значит закрытую точку."""
+    return {**C, **(_МАТЕРИАЛ_СТЕКЛО if стекло else _МАТЕРИАЛ_WIN)}
+
+
+# Этим словарём подставляются ОБА набора правил — и общий (ниже), и QSS сделки (ui_deal).
+ПАЛИТРА_QSS = материал(СТЕКЛО)
+
+
+def стеклянная_тень(виджет, размытие=34, вниз=8, альфа=38):
+    """Мягкая тень под карточкой — на маке. На Windows не трогаем ничего.
+
+    Тень тут не украшение: у прозрачной карточки нет своей заливки, и без тени она не
+    отделяется от фона — на экране кассы это значит «не видно, где главное»."""
+    if not СТЕКЛО or виджет is None:
+        return виджет
+    from PySide6.QtWidgets import QGraphicsDropShadowEffect
+    эффект = QGraphicsDropShadowEffect(виджет)
+    эффект.setBlurRadius(размытие)
+    эффект.setOffset(0, вниз)
+    эффект.setColor(QColor(11, 27, 51, альфа))
+    виджет.setGraphicsEffect(эффект)
+    return виджет
+
 # В QSS только размер и насыщенность: семейство приходит от шрифта приложения (Inter), а
 # заголовки и надзаголовки с межбуквенным интервалом задаются кодом (QSS его не умеет).
-QSS = """
+# Исходник правил хранится отдельно: по нему тесты собирают ОБА облика на любой машине.
+QSS_ИСХОДНИК = """
 QWidget { color: %(ink)s; }
 QLabel#lead { font-size: 30px; font-weight: 500; color: %(body)s; }
 QLabel#lead_s { font-size: 24px; font-weight: 500; color: %(body)s; }
 QLabel#muted { font-size: 19px; font-weight: 500; color: %(muted)s; }
 QLabel#step { font-size: 28px; font-weight: 600; }
 QFrame#row { background: transparent; border: 1px solid transparent; border-radius: 14px; }
-QFrame#row_active { background: %(tint)s; border: 1px solid %(tint_border)s; border-radius: 14px; }
+QFrame#row_active { background: %(м_ряд)s; border: 1px solid %(м_ряд_край)s; border-radius: 14px; }
 QLabel#rowtitle { font-size: 20px; font-weight: 600; color: %(ink)s; }
 QLabel#rowtitle_wait { font-size: 20px; font-weight: 500; color: %(ghost)s; }
 QLabel#rowstate { font-size: 17px; font-weight: 500; color: %(muted)s; }
 QLabel#rowstate_active { font-size: 17px; font-weight: 700; color: %(brand)s; }
 QLabel#note { font-size: 19px; font-weight: 400; color: %(muted)s; }
 QPushButton#primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1A7CFF, stop:1 #35B2FF);
-    color: #FFFFFF; border-radius: 18px; font-size: 26px; font-weight: 700; min-height: 76px;
+    color: #FFFFFF; border-radius: %(р_главная)s; font-size: 26px; font-weight: 700; min-height: 76px;
     border: none; padding: 0 34px; }
 QPushButton#primary:pressed { background: %(action_dark)s; }
-QPushButton#primary:disabled { background: #E9EEF6; color: %(ghost)s; }
+QPushButton#primary:disabled { background: %(м_главная_выкл)s; color: %(ghost)s; }
 QPushButton#update { background: %(tint)s; color: %(brand)s; border: 1px solid %(tint_border)s;
-    border-radius: 14px; font-size: 20px; font-weight: 700; min-height: 54px; padding: 0 24px; }
+    border-radius: %(р_кнопка)s; font-size: 20px; font-weight: 700; min-height: 54px; padding: 0 24px; }
 QPushButton#update:pressed { background: %(tint_border)s; }
 QPushButton#update:disabled { color: %(ghost)s; }
 QLabel#footer { font-size: 18px; font-weight: 500; color: %(muted)s; }
-""" % C
+"""
+QSS = QSS_ИСХОДНИК % ПАЛИТРА_QSS
 
 
 def load_fonts():
@@ -218,7 +298,11 @@ def аврора(t=0.0, сила=1.0, размер=(320, 180)):
     """
     w, h = размер
     img = QImage(w, h, QImage.Format_RGB32)
-    img.fill(QColor("#FFFFFF"))
+    # На стекле подложка чуть прохладнее белого, а свет сильнее: сквозь карточки должно быть
+    # ВИДНО фон — на чисто белом прозрачность не читается вовсе, и стекло выглядит как
+    # обычная белая карточка с бледной рамкой.
+    img.fill(QColor("#EDF2F9" if СТЕКЛО else "#FFFFFF"))
+    сила = сила * (1.9 if СТЕКЛО else 1.0)
     p = QPainter(img)
     p.setRenderHint(QPainter.Antialiasing)
     p.setPen(Qt.NoPen)

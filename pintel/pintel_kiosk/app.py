@@ -57,8 +57,12 @@ class Poller(QThread):
 
 
 class NetThread(QThread):
-    """Фон: пульс на сервер и досылка очереди. Прайс киоску не нужен — цену считает бот."""
+    """Фон: пульс на сервер и досылка очереди. Прайс киоску не нужен — цену считает бот.
+
+    Ответом на пульс приходит команда от администратора («обновись сейчас»): отдельный
+    канал пришлось бы держать живым на всех машинах, а этот и так стучится раз в минуту."""
     status = Signal(bool, str)
+    команда = Signal(str)
 
     def __init__(self, client, cfg, parent=None):
         super().__init__(parent)
@@ -71,9 +75,13 @@ class NetThread(QThread):
             if self.client.enabled:
                 try:
                     sent = self.client.flush_queue()
-                    self.client.heartbeat({"драйвер": self.device_state != NO_DRIVER, "телефон": self.device_state,
-                                           "в_очереди": self.client.queued(),
-                                           "отвергнуто": self.client.rejected(), "версия": __version__})
+                    ответ = self.client.heartbeat(
+                        {"драйвер": self.device_state != NO_DRIVER, "телефон": self.device_state,
+                         "в_очереди": self.client.queued(),
+                         "отвергнуто": self.client.rejected(), "версия": __version__})
+                    приказ = str((ответ or {}).get("команда") or "")
+                    if приказ:
+                        self.команда.emit(приказ)
                     # журнал и эталоны — туда же: раньше они лежали только на этой машине
                     строк = self.client.отправить_логи(забрать_логи())
                     эталоны = self.client.отправить_эталоны(
@@ -293,6 +301,7 @@ class KioskWindow(QMainWindow):
         self.sealed = None
         self.обновление = None
         self.обновление_ставится = False
+        self.закрыты = False                     # сервер закрыл эту машину или точку
         # Установка уже идёт — второй раз начинать нельзя. Скачивание и подмену папки
         # запускают два разных места: опрос раз в 15 минут и кнопка «повторить» после
         # неудачи. Без этой отметки два потока пишут в один и тот же архив и дважды
@@ -355,6 +364,7 @@ class KioskWindow(QMainWindow):
         self.poller.start()
         self.net = NetThread(self.client, cfg, self)
         self.net.status.connect(self.on_net)
+        self.net.команда.connect(self._команда_с_сервера)
         self.net.start()
         QShortcut(QKeySequence("Escape"), self, activated=self.toggle_fullscreen)
         QShortcut(QKeySequence("Ctrl+Q"), self, activated=self.close)
@@ -696,8 +706,22 @@ class KioskWindow(QMainWindow):
 
     # ---------- события ----------
     def on_net(self, ok, text):
+        # «Отключён администратором» — не обрыв связи, а решение человека, и на экране это
+        # должно читаться именно так: сотрудник иначе будет перетыкать кабель и звонить в
+        # поддержку, пока точка стоит.
+        self.закрыты = (not ok) and ("отключ" in text.lower())
+        if self.закрыты:
+            self.s_main.set_status(text, ok=False)
+            return
         if self.state == "idle" and self.client.enabled:
             self.s_main.set_status("Готов к работе" if ok else f"Автономно: {text}", ok=ok)
+
+    def _команда_с_сервера(self, команда):
+        """Что велел администратор из своей программы. Пока команда одна — «обновиться»."""
+        log_line("команда с сервера: " + str(команда))
+        if команда == "обновиться":
+            self.обновление_молчок = ""      # про эту проверку в журнал написать стоит
+            self._проверить_обновление()
 
     # ---------- связь с iPhone: служба Apple ----------
     def _связь_пропала(self):
@@ -1053,6 +1077,11 @@ class KioskWindow(QMainWindow):
     def начать_сделку(self):
         """Сделка начинается с анкеты — состояние и клиент до кабеля, как у продавца в боте
         Оценки. Телефон, подключённый раньше времени, ждёт."""
+        if getattr(self, "закрыты", False):
+            # Сервер не пускает эту машину: сделка всё равно не создастся, и лучше сказать
+            # это сразу, чем после прочитанного телефона и заполненной анкеты.
+            self.s_main.set_status("Касса закрыта администратором", ok=False)
+            return
         if self.обновление_ставится:            # на старой сборке сделку не начинаем
             self.s_main.set_status("Идёт обновление — подождите, программа перезапустится",
                                    ok=False)

@@ -113,6 +113,26 @@ class Клиент:
         from urllib.parse import quote
         return self._запрос("DELETE", f"/api/admin/blacklist/{quote(str(imei))}").get("записи") or []
 
+    # ---------- действия ----------
+    def машине_обновиться(self, kiosk_id: int) -> dict:
+        return self._запрос("POST", f"/api/admin/machines/{int(kiosk_id)}/command",
+                            {"команда": "обновиться"})
+
+    def машина_доступ(self, kiosk_id: int, работает: bool) -> dict:
+        return self._запрос("POST", f"/api/admin/machines/{int(kiosk_id)}/active",
+                            {"работает": bool(работает)})
+
+    def машину_забыть(self, kiosk_id: int) -> dict:
+        return self._запрос("DELETE", f"/api/admin/machines/{int(kiosk_id)}")
+
+    def точка_доступ(self, point_id: int, работает: bool) -> dict:
+        return self._запрос("POST", f"/api/admin/points/{int(point_id)}/active",
+                            {"работает": bool(работает)})
+
+    def доступ_человеку(self, user_id: int, доступ: bool) -> dict:
+        return self._запрос("POST", f"/api/admin/people/{int(user_id)}/access",
+                            {"доступ": bool(доступ)})
+
 
 def _отказ(ответ):
     """401 и 403 — разные разговоры с человеком: «войдите заново» и «вам сюда нельзя»."""

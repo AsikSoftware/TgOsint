@@ -174,3 +174,83 @@ def чёрный_убрать(imei: str, db: DbSession = Depends(get_db), кто
     записи = admin_data.чёрный_убрать(db, imei)
     audit.log(db, кто, "чёрный_список_убрал", "убрал аппарат из чёрного списка")
     return {"записи": записи}
+
+
+# ---------------------------------------------------------------- действия
+#
+# Всё, что меняет мир, живёт здесь и каждое пишется в журнал. Правило простое: через год
+# спросят «кто закрыл точку в субботу» — и ответ должен быть, а не догадки.
+
+
+def _действие(db, кто: User, что: str, словами: str):
+    """Запись в журнал и сразу на диск: `audit.log` только добавляет строку в сессию, а
+    обработчик после себя ничего не сохраняет — без этого запись пропадала бы."""
+    audit.log(db, кто, что, словами)
+    db.commit()
+
+
+@router.post("/machines/{kiosk_id}/command")
+async def команда_машине(kiosk_id: int, request: Request, db: DbSession = Depends(get_db),
+                         кто: User = Depends(админ)):
+    """Сейчас одна команда — «обновиться». Машина заберёт её ближайшим пульсом, раз в минуту."""
+    данные = await request.json()
+    команда = str((данные or {}).get("команда") or "обновиться")
+    if команда not in ("обновиться",):
+        raise HTTPException(400, "неизвестная команда")
+    admin_data.команда_машине(db, kiosk_id, команда)
+    _действие(db, кто, "команда_машине", f"велел машине {kiosk_id}: {команда}")
+    return {"ок": True, "команда": команда}
+
+
+@router.post("/machines/{kiosk_id}/active")
+async def машина_работает(kiosk_id: int, request: Request, db: DbSession = Depends(get_db),
+                          кто: User = Depends(админ)):
+    данные = await request.json()
+    работает = bool((данные or {}).get("работает"))
+    try:
+        итог = admin_data.машина_работает(db, kiosk_id, работает)
+    except ValueError as беда:
+        raise HTTPException(404, str(беда)) from беда
+    _действие(db, кто, "машина_доступ",
+              ("открыл" if работает else "закрыл") + f" машину «{итог['машина']}»")
+    return итог
+
+
+@router.delete("/machines/{kiosk_id}")
+def машину_забыть(kiosk_id: int, db: DbSession = Depends(get_db), кто: User = Depends(админ)):
+    try:
+        итог = admin_data.машину_забыть(db, kiosk_id)
+    except ValueError as беда:
+        raise HTTPException(404, str(беда)) from беда
+    _действие(db, кто, "машину_забыли", f"убрал машину «{итог['машина']}» из списка")
+    return итог
+
+
+@router.post("/points/{point_id}/active")
+async def точка_работает(point_id: int, request: Request, db: DbSession = Depends(get_db),
+                         кто: User = Depends(админ)):
+    данные = await request.json()
+    работает = bool((данные or {}).get("работает"))
+    try:
+        итог = admin_data.точка_работает(db, point_id, работает)
+    except ValueError as беда:
+        raise HTTPException(404, str(беда)) from беда
+    _действие(db, кто, "точка_доступ",
+              ("открыл" if работает else "закрыл") + f" точку «{итог['точка']}»")
+    return итог
+
+
+@router.post("/people/{user_id}/access")
+async def доступ_человеку(user_id: int, request: Request, db: DbSession = Depends(get_db),
+                          кто: User = Depends(админ)):
+    данные = await request.json()
+    доступ = bool((данные or {}).get("доступ"))
+    if user_id == кто.id and not доступ:
+        raise HTTPException(400, "себе доступ не закрывают: войти обратно будет некому")
+    try:
+        итог = admin_data.доступ_человеку(db, user_id, доступ)
+    except ValueError as беда:
+        raise HTTPException(404, str(беда)) from беда
+    _действие(db, кто, "доступ_человеку",
+              ("открыл" if доступ else "закрыл") + f" доступ сотруднику «{итог['сотрудник']}»")
+    return итог

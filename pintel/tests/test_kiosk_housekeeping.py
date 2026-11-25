@@ -380,3 +380,69 @@ def test_the_update_check_writes_one_line_per_reason_not_per_check(tmp_path, mon
             поток.wait(2000)
         w.close()
         w.deleteLater()
+
+
+def test_the_kiosk_obeys_a_command_from_the_server(tmp_path, monkeypatch):
+    """«Обновись сейчас» из административной программы доходит до кассы пульсом.
+
+    Пульс — единственное, что касса делает каждую минуту сама; отдельный канал пришлось бы
+    держать живым на всех машинах, а этот и так стучится."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from pintel_kiosk import app as kapp
+    from pintel_kiosk import config as kconfig
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    спросили = []
+    monkeypatch.setattr(kapp.KioskWindow, "_проверить_обновление",
+                        lambda self: спросили.append(True))
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_test",
+                          "point": "16/38 Pintel", "update_repo": ""})
+    try:
+        спросили.clear()
+        w._команда_с_сервера("обновиться")
+        assert спросили, "команда администратора до кассы не дошла"
+        w._команда_с_сервера("чего-то непонятного")
+        assert len(спросили) == 1, "касса выполнила неизвестную команду"
+    finally:
+        for поток in (w.poller, w.net):
+            поток.stop()
+            поток.wait(2000)
+        w.close()
+        w.deleteLater()
+
+
+def test_a_closed_kiosk_says_so_and_refuses_new_deals(tmp_path, monkeypatch):
+    """Машину закрыли из административной программы — касса говорит об этом словами.
+
+    «Отключён администратором» это не обрыв связи: иначе сотрудник будет перетыкать кабель
+    и звонить в поддержку, пока точка стоит."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from pintel_kiosk import app as kapp
+    from pintel_kiosk import config as kconfig
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_test",
+                          "point": "16/38 Pintel", "update_repo": ""})
+    try:
+        w.state = "idle"
+        w.on_net(False, "Этот компьютер отключён администратором")
+        assert w.закрыты
+        w.начать_сделку()
+        assert w.state == "idle", "на закрытой кассе начали сделку"
+
+        w.on_net(True, "сервер на связи")
+        assert not w.закрыты, "кассу открыли, а она всё ещё считает себя закрытой"
+    finally:
+        for поток in (w.poller, w.net):
+            поток.stop()
+            поток.wait(2000)
+        w.close()
+        w.deleteLater()

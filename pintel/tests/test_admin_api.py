@@ -352,3 +352,87 @@ def test_stock_admits_it_cannot_see_sales(db):
     assert итог["штук"] == 1 and итог["сумма"] == 88_000
     assert итог["список"][0]["дней"] == 0
     assert "МойСклад" in итог["оговорка"]
+
+
+# ---------------------------------------------------------------- действия
+
+
+def test_closing_a_machine_actually_stops_it(db):
+    """Закрытая машина не пускается на сервер вовсе — иначе «закрыть» было бы пометкой
+    в списке, а не решением."""
+    данные, м = _сервер()["данные"], _м
+    т = точка(db, "Мега Алматы")
+    k = касса(db, т, "KASSA-MEGA-1")
+    данные.машина_работает(db, k.id, False)
+    db.refresh(k)
+    assert k.is_active is False
+    данные.машина_работает(db, k.id, True)
+    db.refresh(k)
+    assert k.is_active is True
+
+    with pytest.raises(ValueError):
+        данные.машина_работает(db, 99999, False)
+
+
+def test_a_command_reaches_the_machine_once(db):
+    """Команда «обновись» забирается пульсом РОВНО один раз: застрявшая в базе перезапускала
+    бы кассу каждую минуту."""
+    данные = _сервер()["данные"]
+    т = точка(db, "Тарлан")
+    k = касса(db, т, "KASSA-TARLAN")
+    данные.команда_машине(db, k.id, "обновиться")
+    assert данные.забрать_команду(db, k.id) == "обновиться"
+    assert данные.забрать_команду(db, k.id) == "", "команда повторилась"
+
+
+def test_closing_a_point_closes_all_its_machines(db):
+    """Закрытая точка не пускает ни одну свою кассу: токен принадлежит точке."""
+    данные = _сервер()["данные"]
+    т = точка(db, "Шымкент · Мега", "Шымкент")
+    данные.точка_работает(db, т.id, False)
+    db.refresh(т)
+    assert т.is_active is False
+
+
+def test_access_can_be_closed_for_a_person(db):
+    """Доступ сотруднику закрывается здесь же — и он не войдёт ни в кассу, ни в админку."""
+    данные = _сервер()["данные"]
+    т = точка(db, "Абая 150")
+    человек = _м("User")(login="ersan", name="Ержан Б.", role=_м("ROLE_CASHIER"),
+                         point_id=т.id, password_hash="x", is_active=True)
+    db.add(человек)
+    db.commit()
+    данные.доступ_человеку(db, человек.id, False)
+    db.refresh(человек)
+    assert человек.is_active is False
+
+
+def test_every_action_is_written_down(client):
+    """Каждое действие идёт в журнал: через год спросят «кто закрыл точку в субботу»."""
+    токен = {"x-admin-token": client.post("/api/admin/login",
+                                          json={"логин": "vladelec", "пароль": "admin123"}
+                                          ).json()["токен"]}
+    with _сервер()["Сессия"]() as сессия:
+        p = _м("Point")(name="Журнальная точка", token="pk_jurnal")
+        сессия.add(p)
+        сессия.commit()
+        point_id = p.id
+
+    ответ = client.post(f"/api/admin/points/{point_id}/active", json={"работает": False},
+                        headers=токен)
+    assert ответ.status_code == 200 and ответ.json()["работает"] is False
+
+    журнал = client.get("/api/admin/audit", headers=токен).json()["журнал"]
+    assert any("закрыл точку" in з["что"] for з in журнал), журнал
+    assert журнал[0]["кто"] == "Владелец"
+
+
+def test_nobody_locks_himself_out(client):
+    """Себе доступ не закрывают: войти обратно будет некому."""
+    вход = client.post("/api/admin/login", json={"логин": "vladelec", "пароль": "admin123"}).json()
+    токен = {"x-admin-token": вход["токен"]}
+    люди = client.get("/api/admin/people", headers=токен).json()["люди"]
+    свой = next(ч for ч in люди if ч["логин"] == "vladelec")
+    ответ = client.post(f"/api/admin/people/{свой['id']}/access", json={"доступ": False},
+                        headers=токен)
+    assert ответ.status_code == 400

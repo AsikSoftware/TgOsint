@@ -14,6 +14,7 @@ from ..auth import current_kiosk
 from ..config import settings
 from ..db import get_db, now
 from ..models import Evaluation, Kiosk, KioskLog, PhoneTest, Point, ReferenceBundle
+from ..services import admin_data
 from ..services import evaluations as ev_service
 from ..services import history as history_service
 from ..services import kiosk_settings
@@ -351,4 +352,11 @@ def heartbeat(body: HeartbeatIn, kiosk: Kiosk = Depends(current_kiosk), db: DbSe
     kiosk.status = body.status or kiosk.status
     kiosk.last_seen_at = now()
     db.commit()
-    return {"ok": True, "время_сервера": now().isoformat()}
+    # Пульс — единственное, что касса делает каждую минуту сама. Поэтому команда
+    # администратора («обновись сейчас») едет ответом на него: отдельный канал пришлось бы
+    # держать живым на девятнадцати машинах, а этот и так работает.
+    команда = admin_data.забрать_команду(db, kiosk.id)
+    ответ = {"ok": True, "время_сервера": now().isoformat()}
+    if команда:
+        ответ["команда"] = команда
+    return ответ

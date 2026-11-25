@@ -155,9 +155,11 @@ class Раздел(QWidget):
         ряд = QHBoxLayout()
         ряд.setSpacing(8)
         self.кнопки = {}
-        for ключ, имя, опасно in кнопки:
+        for номер, (ключ, имя, опасно) in enumerate(кнопки):
             b = QPushButton(имя)
-            b.setObjectName("главная" if не_опасно(опасно) else "тихая")
+            # Яркой остаётся ОДНА кнопка — самая частая. Две синие рядом спорят друг с
+            # другом, а красная «отвязать» притягивала бы палец сама.
+            b.setObjectName("главная" if номер == 0 and не_опасно(опасно) else "тихая")
             b.clicked.connect(lambda _=False, к=ключ: self._нажали(к))
             self.кнопки[ключ] = b
             ряд.addWidget(b)

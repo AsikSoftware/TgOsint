@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """Касса на маке: обновление, папка данных, упаковка.
 
+ВАЖНО про сами эти тесты: сборка гоняет их на трёх системах — Linux (тесты сервера, Qt там
+нет вовсе), Windows (сборка для точек) и мак. Значит, проверки маковских решений обязаны
+проходить и на Windows: пути там разбираются по своим правилам, и os.path.abspath припишет
+к «/Applications» букву диска. Поэтому пути сверяем приведёнными к одному виду.
+
 Владелец, 25.11.2026: «сможем ли мы сделать ещё версию для мака?» — точка на маке.
 
 Проверять это на самом маке мало: сборка идёт на машине GitHub, а гонять тесты мы будем и
@@ -15,6 +20,11 @@ import zipfile
 import pytest
 
 from pintel_kiosk import updater
+
+
+def _как_путь(п: str) -> str:
+    """Путь к одному виду: на машине сборки под Windows разделитель свой."""
+    return str(п).replace("\\", "/")
 
 
 def test_each_kind_of_point_asks_for_its_own_archive(monkeypatch):
@@ -38,7 +48,7 @@ def test_on_a_mac_the_whole_app_is_replaced(monkeypatch):
     и сломать программу совсем."""
     monkeypatch.setattr(sys, "platform", "darwin")
     внутри = "/Applications/pintel-kiosk.app/Contents/MacOS"
-    assert updater.папка_программы(внутри) == "/Applications/pintel-kiosk.app"
+    assert _как_путь(updater.папка_программы(внутри)) == "/Applications/pintel-kiosk.app"
     # .app нет вовсе (запущено из исходников) — подменять нечего, путь не выдумываем
     assert updater.папка_программы("/Users/kassa/pintel") == "/Users/kassa/pintel"
 
@@ -98,12 +108,14 @@ def test_mac_data_lives_where_mac_programs_keep_it(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path))
     путь = config.data_dir()
-    assert путь == str(tmp_path / "Library" / "Application Support" / "PintelKiosk"), путь
+    # Хвост, а не путь целиком: домашнюю папку Windows берёт не из HOME, и на машине сборки
+    # начало пути будет своё. Важно одно — данные лежат в «Библиотеке», как у маковских программ.
+    assert _как_путь(путь).endswith("/Library/Application Support/PintelKiosk"), путь
     assert os.path.isdir(os.path.join(путь, "logs"))
 
     # подмена пути (тесты и Windows) по-прежнему главнее системы
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "подмена"))
-    assert config.data_dir() == str(tmp_path / "подмена" / "PintelKiosk")
+    assert _как_путь(config.data_dir()).endswith("/подмена/PintelKiosk")
 
 
 # ---------------------------------------------------------------- облик

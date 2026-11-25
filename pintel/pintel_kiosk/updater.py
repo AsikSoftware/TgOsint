@@ -69,7 +69,7 @@ def папка_программы(рядом_с_exe: str) -> str:
     половину прошлой версии и сломать саму программу."""
     if sys.platform != "darwin":
         return рядом_с_exe
-    часть = os.path.abspath(рядом_с_exe)
+    часть = рядом_с_exe.rstrip("/")
     while часть and часть != os.path.dirname(часть):
         if часть.endswith(".app"):
             return часть

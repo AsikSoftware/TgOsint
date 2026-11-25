@@ -53,6 +53,8 @@ QHeaderView::section { background: transparent; border: none; color: %(ghost)s;
     font-size: 11px; font-weight: 700; padding: 0 8px 8px; }
 QTableWidget::item { padding: 7px 8px; border-bottom: 1px solid rgba(11,27,51,0.07);
     font-size: 13.5px; }
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
 QScrollBar::handle:vertical { background: %(ring)s; border-radius: 5px; min-height: 40px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
@@ -135,9 +137,28 @@ class Меню(QFrame):
         self.setObjectName("меню")
         self.setFixedWidth(244)
         self.кнопки = {}
-        self._слой = QVBoxLayout(self)
-        self._слой.setContentsMargins(12, 14, 12, 12)
+        # Пунктов полтора десятка, и на невысоком экране они выдавливали заголовок за край.
+        # Поэтому список прокручивается, а шапка и низ стоят на месте.
+        from PySide6.QtWidgets import QScrollArea
+        внешний = QVBoxLayout(self)
+        внешний.setContentsMargins(12, 14, 12, 12)
+        внешний.setSpacing(6)
+        self._шапка = QVBoxLayout()
+        self._шапка.setSpacing(0)
+        внешний.addLayout(self._шапка)
+        прокрутка = QScrollArea()
+        прокрутка.setWidgetResizable(True)
+        прокрутка.setFrameShape(QScrollArea.NoFrame)
+        прокрутка.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        внутри = QWidget()
+        self._слой = QVBoxLayout(внутри)
+        self._слой.setContentsMargins(0, 0, 4, 0)
         self._слой.setSpacing(2)
+        прокрутка.setWidget(внутри)
+        внешний.addWidget(прокрутка, 1)
+        self._низ = QVBoxLayout()
+        self._низ.setSpacing(4)
+        внешний.addLayout(self._низ)
 
     def заголовок(self, текст, подпись=""):
         шапка = QVBoxLayout()
@@ -147,8 +168,8 @@ class Меню(QFrame):
             шапка.addWidget(надпись(подпись, "muted", перенос=True))
         обёртка = QWidget()
         обёртка.setLayout(шапка)
-        обёртка.setContentsMargins(4, 0, 0, 10)
-        self._слой.addWidget(обёртка)
+        обёртка.setContentsMargins(4, 0, 0, 6)
+        self._шапка.addWidget(обёртка)
 
     def раздел(self, текст):
         l = надпись(текст.upper(), "kicker", цвет=C["ghost"])
@@ -169,7 +190,7 @@ class Меню(QFrame):
         self._слой.addStretch(1)
 
     def низ(self, виджет):
-        self._слой.addWidget(виджет)
+        self._низ.addWidget(виджет)
 
     def выбрать(self, ключ):
         for к, b in self.кнопки.items():

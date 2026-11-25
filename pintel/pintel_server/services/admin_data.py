@@ -15,10 +15,11 @@
 """
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from ..db import now
-from ..models import (Evaluation, Kiosk, Point, ReferenceBundle, ST_BOUGHT, ST_DECLINED, User)
+from ..models import (AuditLog, Evaluation, Kiosk, Point, ReferenceBundle, ROLE_ADMIN,
+                      ROLE_CASHIER, ROLE_SENIOR, ST_BOUGHT, ST_DECLINED, STATUSES, Setting, User)
 from .evaluations import local_day
 
 # Насколько касса на точке может молчать, прежде чем это станет бедой. Два часа: точка
@@ -251,3 +252,281 @@ def воронка(db, дней: int = 30) -> dict:
         "причины": sorted(({"причина": к, "случаев": н} for к, н in причины.items()),
                           key=lambda п: -п["случаев"]),
     }
+
+
+# ---------------------------------------------------------------- деньги и товар
+
+
+def деньги(db, дней: int = 30) -> dict:
+    """Выкупы за период: сколько выдано, по каким моделям и каким точкам.
+
+    Продаж мы на сервере НЕ видим — они живут в МойСкладе, и пока он сюда не заведён, слова
+    «маржа» здесь не будет: придумывать её по памяти нельзя.
+    """
+    порог = now() - timedelta(days=дней)
+    строки = db.execute(select(Evaluation.model_name, Evaluation.capacity_gb,
+                               Evaluation.final_price, Evaluation.price_offer,
+                               Evaluation.point_id, Evaluation.created_at)
+                        .where(Evaluation.created_at >= порог,
+                               Evaluation.status == ST_BOUGHT)).all()
+    точки = {p.id: p.name for p in db.scalars(select(Point)).all()}
+    по_моделям, по_точкам = {}, {}
+    всего = выдано = 0
+    for модель, память, цена, автоцена, point_id, _когда in строки:
+        цена = int(цена or 0)
+        всего += 1
+        выдано += цена
+        м = по_моделям.setdefault(модель or "без модели", {"модель": модель or "без модели",
+                                                           "штук": 0, "сумма": 0, "переплат": 0})
+        м["штук"] += 1
+        м["сумма"] += цена
+        if автоцена and цена - int(автоцена) >= ПЕРЕПЛАТА:
+            м["переплат"] += 1
+        т = по_точкам.setdefault(point_id, {"точка": точки.get(point_id) or "без точки",
+                                            "штук": 0, "сумма": 0})
+        т["штук"] += 1
+        т["сумма"] += цена
+    for м in по_моделям.values():
+        м["средний_выкуп"] = round(м["сумма"] / м["штук"]) if м["штук"] else None
+    return {
+        "дней": дней,
+        "выкуплено": всего,
+        "выдано": выдано or None,
+        "средний_чек": round(выдано / всего) if всего else None,
+        "модели": sorted(по_моделям.values(), key=lambda м: -м["штук"]),
+        "точки": sorted(по_точкам.values(), key=lambda т: -т["сумма"]),
+        "оговорка": "продажи и маржа появятся, когда сюда заведут МойСклад: сейчас сервер "
+                    "видит только выкупы",
+    }
+
+
+def товар_на_руках(db, дней: int = 120) -> dict:
+    """Что выкуплено и сколько дней назад.
+
+    Честно: признака «продан» у сервера нет — продажа происходит в МойСкладе. Поэтому это
+    список выкупленного с возрастом, а не остаток склада. Старые строки почти наверняка уже
+    проданы, и пока МойСклада нет, об этом сказано словами, а не спрятано."""
+    порог = now() - timedelta(days=дней)
+    строки = db.scalars(select(Evaluation).where(Evaluation.created_at >= порог,
+                                                 Evaluation.status == ST_BOUGHT)
+                        .order_by(Evaluation.created_at.desc())).all()
+    точки = {p.id: p.name for p in db.scalars(select(Point)).all()}
+    сейчас = now()
+    готово = []
+    for ev in строки:
+        дней_лежит = (сейчас - ev.created_at).days
+        готово.append({
+            "аппарат": " · ".join(x for x in (ev.model_name, f"{ev.capacity_gb} ГБ"
+                                              if ev.capacity_gb else "") if x),
+            "батарея": ev.battery_health,
+            "точка": точки.get(ev.point_id) or "",
+            "выкуплен": ev.created_at,
+            "дней": дней_лежит,
+            "выкуп": ev.final_price,
+            "номер": ev.number or ev.id,
+        })
+    старше_месяца = [т for т in готово if т["дней"] >= 30]
+    return {
+        "штук": len(готово),
+        "сумма": sum(int(т["выкуп"] or 0) for т in готово) or None,
+        "старше_месяца": len(старше_месяца),
+        "сумма_старше": sum(int(т["выкуп"] or 0) for т in старше_месяца) or None,
+        "список": готово[:300],
+        "оговорка": "признака «продан» у сервера нет — продажи идут в МойСкладе; это список "
+                    "выкупленного с возрастом",
+    }
+
+
+# ---------------------------------------------------------------- работа точек
+
+
+def проверки_без_сделки(db, дней: int = 30) -> dict:
+    """Телефон прочитали, а выкупа не было: сколько времени ушло и кому можно перезвонить."""
+    порог = now() - timedelta(days=дней)
+    строки = db.scalars(select(Evaluation).where(Evaluation.created_at >= порог,
+                                                 Evaluation.status != ST_BOUGHT)
+                        .order_by(Evaluation.created_at.desc())).all()
+    точки = {p.id: p.name for p in db.scalars(select(Point)).all()}
+    причины = {}
+    с_телефоном = 0
+    список = []
+    for ev in строки:
+        причина = (ev.decision_note or "").strip() or ("ещё в работе" if ev.status != ST_DECLINED
+                                                       else "причина не записана")
+        причины[причина] = причины.get(причина, 0) + 1
+        if ev.client_phone:
+            с_телефоном += 1
+        список.append({
+            "аппарат": " · ".join(x for x in (ev.model_name, f"{ev.capacity_gb} ГБ"
+                                              if ev.capacity_gb else "") if x),
+            "точка": точки.get(ev.point_id) or "",
+            "когда": ev.created_at,
+            "автоцена": ev.price_offer,
+            "чем_кончилось": причина,
+            "можно_позвонить": bool(ev.client_phone),
+        })
+    return {
+        "дней": дней,
+        "проверок": len(строки),
+        "с_телефоном": с_телефоном,
+        "причины": sorted(({"причина": к, "случаев": н} for к, н in причины.items()),
+                          key=lambda п: -п["случаев"]),
+        "список": список[:300],
+    }
+
+
+def сертификаты(db, дней: int = 30) -> dict:
+    """Сертификаты, выданные клиентам: номер, аппарат, точка, ссылка.
+
+    Сколько раз ссылку открывали, сервер пока не считает — и вместо выдуманного числа здесь
+    так и сказано."""
+    порог = now() - timedelta(days=дней)
+    строки = db.scalars(select(Evaluation).where(Evaluation.created_at >= порог)
+                        .order_by(Evaluation.created_at.desc())).all()
+    точки = {p.id: p.name for p in db.scalars(select(Point)).all()}
+    список = []
+    for ev in строки:
+        чек = (ev.report or {}).get("чек")
+        if not чек:
+            continue
+        список.append({
+            "номер": ev.number or ev.id,
+            "аппарат": ev.model_name or "",
+            "точка": точки.get(ev.point_id) or "",
+            "когда": ev.created_at,
+            "ссылка": f"/r/{ev.public_token}",
+        })
+    return {"дней": дней, "выдано": len(список), "список": список[:300],
+            "оговорка": "сколько раз сертификат открывали, сервер пока не считает"}
+
+
+# ---------------------------------------------------------------- данные
+
+
+def эталоны(db, сколько: int = 300) -> dict:
+    """Список эталонов: что собрано с точек и на чём проверяется каждая новая сборка."""
+    точки = {p.id: p.name for p in db.scalars(select(Point)).all()}
+    строки = db.scalars(select(ReferenceBundle)
+                        .order_by(ReferenceBundle.created_at.desc()).limit(сколько)).all()
+    итог = эталоны_коротко(db)
+    итог["список"] = [{
+        "аппарат": б.model_name or "",
+        "ios": б.ios or "",
+        "точка": точки.get(б.point_id) or "",
+        "когда": б.created_at,
+        "вердикт": б.verdict or "",
+        "размер_мб": round((б.size or 0) / 1048576, 1) or None,
+    } for б in строки]
+    return итог
+
+
+def телефон(db, запрос: str) -> dict:
+    """Всё, что мы знаем про один аппарат: по IMEI или серийному номеру.
+
+    Сводить это руками из трёх мест — то, на что уходит время при споре с клиентом."""
+    запрос = (запрос or "").strip()
+    if len(запрос) < 5:
+        return {"найдено": False, "почему": "нужно хотя бы пять знаков IMEI или серийника"}
+    цифры = "".join(c for c in запрос if c.isdigit())
+    условия = [Evaluation.serial.ilike(f"%{запрос}%")]
+    if цифры:
+        условия.append(Evaluation.imei.ilike(f"%{цифры}%"))
+    строки = db.scalars(select(Evaluation).where(or_(*условия))
+                        .order_by(Evaluation.created_at.desc()).limit(50)).all()
+    if not строки:
+        return {"найдено": False, "почему": "такого аппарата у нас не было"}
+    точки = {p.id: p.name for p in db.scalars(select(Point)).all()}
+    первый = строки[0]
+    return {
+        "найдено": True,
+        "аппарат": " · ".join(x for x in (первый.model_name, f"{первый.capacity_gb} ГБ"
+                                          if первый.capacity_gb else "") if x),
+        "ios": первый.ios or "",
+        "батарея": первый.battery_health,
+        "циклы": первый.battery_cycles,
+        "детали": первый.apple_summary or "",
+        "блокировки": первый.locks_summary or "",
+        "проверок": len(строки),
+        "история": [{
+            "номер": ev.number or ev.id,
+            "когда": ev.created_at,
+            "точка": точки.get(ev.point_id) or "",
+            "автоцена": ev.price_offer,
+            "выкуп": ev.final_price,
+            "чем_кончилось": STATUSES.get(ev.status, ev.status),
+            "заметка": (ev.decision_note or "").strip(),
+        } for ev in строки],
+    }
+
+
+def журнал(db, сколько: int = 200) -> list:
+    """Кто что делал: сотрудники, кассы и сам сервер."""
+    точки = {p.id: p.name for p in db.scalars(select(Point)).all()}
+    строки = db.scalars(select(AuditLog).order_by(AuditLog.at.desc()).limit(сколько)).all()
+    return [{
+        "когда": з.at,
+        "кто": з.actor_name or з.actor_type,
+        "что": з.text or з.action,
+        "где": точки.get(з.point_id) or "",
+    } for з in строки]
+
+
+def роли(db) -> dict:
+    """Какие роли есть и что каждая видит. Матрица описана здесь же: это правило, а не данные."""
+    есть = dict(db.execute(select(User.role, func.count()).group_by(User.role)).all())
+    права = [
+        {"роль": "Администратор", "ключ": ROLE_ADMIN, "сделки": "по всей сети",
+         "деньги": "да", "люди": "да", "машины": "да", "админка": "да"},
+        {"роль": "Старший", "ключ": ROLE_SENIOR, "сделки": "своей точки",
+         "деньги": "нет", "люди": "свою смену", "машины": "свою кассу", "админка": "нет"},
+        {"роль": "Кассир", "ключ": ROLE_CASHIER, "сделки": "свои",
+         "деньги": "нет", "люди": "нет", "машины": "нет", "админка": "нет"},
+    ]
+    for п in права:
+        п["людей"] = int(есть.get(п["ключ"]) or 0)
+    return {"роли": права,
+            "оговорка": "владелец и бухгалтер появятся отдельными ролями, когда понадобится "
+                        "развести деньги и работу точек"}
+
+
+# ---------------------------------------------------------------- чёрный список
+
+
+КЛЮЧ_ЧЁРНОГО = "чёрный_список"
+
+
+def чёрный_список(db) -> list:
+    """Наши собственные отметки: этот аппарат не берём и вот почему.
+
+    Лежит в настройках, а не отдельной таблицей: записей десятки, а не тысячи, и лишняя
+    таблица на боевом сервере — это миграция ради списка из двадцати строк."""
+    строка = db.get(Setting, КЛЮЧ_ЧЁРНОГО)
+    значения = (строка.value or {}).get("записи") if строка else None
+    return list(значения or [])
+
+
+def чёрный_добавить(db, imei: str, почему: str, кто: str) -> list:
+    цифры = "".join(c for c in str(imei or "") if c.isdigit())
+    if len(цифры) < 8:
+        raise ValueError("IMEI слишком короткий")
+    записи = [з for з in чёрный_список(db) if з.get("imei") != цифры]
+    записи.insert(0, {"imei": цифры, "почему": (почему or "").strip() or "без причины",
+                      "кто": кто, "когда": now().isoformat(timespec="seconds")})
+    _чёрный_сохранить(db, записи)
+    return записи
+
+
+def чёрный_убрать(db, imei: str) -> list:
+    цифры = "".join(c for c in str(imei or "") if c.isdigit())
+    записи = [з for з in чёрный_список(db) if з.get("imei") != цифры]
+    _чёрный_сохранить(db, записи)
+    return записи
+
+
+def _чёрный_сохранить(db, записи: list):
+    строка = db.get(Setting, КЛЮЧ_ЧЁРНОГО)
+    if строка is None:
+        строка = Setting(key=КЛЮЧ_ЧЁРНОГО, value={})
+        db.add(строка)
+    строка.value = {"записи": записи}
+    db.commit()

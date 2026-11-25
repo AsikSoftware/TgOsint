@@ -14,7 +14,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session as DbSession
 
-from .. import auth
+from .. import audit, auth
 from ..db import get_db
 from ..models import ROLE_ADMIN, User
 from ..services import admin_data
@@ -94,3 +94,83 @@ def воронка(request: Request, db: DbSession = Depends(get_db), _=Depends(
 @router.get("/references")
 def эталоны(db: DbSession = Depends(get_db), _=Depends(админ)):
     return admin_data.эталоны_коротко(db)
+
+
+# ---------------------------------------------------------------- остальные разделы
+
+
+def _дней(request: Request, по_умолчанию: int = 30) -> int:
+    значение = request.query_params.get("дней") or request.query_params.get("days") or ""
+    return int(значение) if str(значение).isdigit() else по_умолчанию
+
+
+@router.get("/money")
+def деньги(request: Request, db: DbSession = Depends(get_db), _=Depends(админ)):
+    return admin_data.деньги(db, _дней(request))
+
+
+@router.get("/stock")
+def товар(request: Request, db: DbSession = Depends(get_db), _=Depends(админ)):
+    return admin_data.товар_на_руках(db, _дней(request, 120))
+
+
+@router.get("/checks")
+def проверки(request: Request, db: DbSession = Depends(get_db), _=Depends(админ)):
+    return admin_data.проверки_без_сделки(db, _дней(request))
+
+
+@router.get("/certificates")
+def сертификаты(request: Request, db: DbSession = Depends(get_db), _=Depends(админ)):
+    return admin_data.сертификаты(db, _дней(request))
+
+
+@router.get("/reference-list")
+def эталоны_списком(db: DbSession = Depends(get_db), _=Depends(админ)):
+    return admin_data.эталоны(db)
+
+
+@router.get("/phone")
+def телефон(request: Request, db: DbSession = Depends(get_db), _=Depends(админ)):
+    return admin_data.телефон(db, request.query_params.get("q") or "")
+
+
+@router.get("/audit")
+def журнал(db: DbSession = Depends(get_db), _=Depends(админ)):
+    return {"журнал": admin_data.журнал(db)}
+
+
+@router.get("/roles")
+def роли(db: DbSession = Depends(get_db), _=Depends(админ)):
+    return admin_data.роли(db)
+
+
+# ---------------------------------------------------------------- чёрный список
+#
+# Единственное место, где программа пока ПИШЕТ. Каждая правка идёт в журнал: «кто добавил
+# аппарат в чёрный список» — это разговор, который однажды случится.
+
+
+@router.get("/blacklist")
+def чёрный(db: DbSession = Depends(get_db), _=Depends(админ)):
+    return {"записи": admin_data.чёрный_список(db)}
+
+
+@router.post("/blacklist")
+async def чёрный_добавить(request: Request, db: DbSession = Depends(get_db),
+                          кто: User = Depends(админ)):
+    данные = await request.json()
+    try:
+        записи = admin_data.чёрный_добавить(db, (данные or {}).get("imei"),
+                                            (данные or {}).get("почему"), кто.name)
+    except ValueError as беда:
+        raise HTTPException(400, str(беда)) from беда
+    audit.log(db, кто, "чёрный_список_добавил",
+              f"добавил аппарат в чёрный список: {(данные or {}).get('почему') or 'без причины'}")
+    return {"записи": записи}
+
+
+@router.delete("/blacklist/{imei}")
+def чёрный_убрать(imei: str, db: DbSession = Depends(get_db), кто: User = Depends(админ)):
+    записи = admin_data.чёрный_убрать(db, imei)
+    audit.log(db, кто, "чёрный_список_убрал", "убрал аппарат из чёрного списка")
+    return {"записи": записи}

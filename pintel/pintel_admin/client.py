@@ -76,6 +76,43 @@ class Клиент:
     def эталоны(self) -> dict:
         return self._запрос("GET", "/api/admin/references")
 
+    # ---------- остальные разделы ----------
+    def деньги(self, дней: int = 30) -> dict:
+        return self._запрос("GET", f"/api/admin/money?дней={int(дней)}")
+
+    def товар(self, дней: int = 120) -> dict:
+        return self._запрос("GET", f"/api/admin/stock?дней={int(дней)}")
+
+    def проверки(self, дней: int = 30) -> dict:
+        return self._запрос("GET", f"/api/admin/checks?дней={int(дней)}")
+
+    def сертификаты(self, дней: int = 30) -> dict:
+        return self._запрос("GET", f"/api/admin/certificates?дней={int(дней)}")
+
+    def эталоны_списком(self) -> dict:
+        return self._запрос("GET", "/api/admin/reference-list")
+
+    def телефон(self, запрос: str) -> dict:
+        from urllib.parse import quote
+        return self._запрос("GET", f"/api/admin/phone?q={quote(запрос or '')}")
+
+    def журнал(self) -> list:
+        return self._запрос("GET", "/api/admin/audit").get("журнал") or []
+
+    def роли(self) -> dict:
+        return self._запрос("GET", "/api/admin/roles")
+
+    def чёрный_список(self) -> list:
+        return self._запрос("GET", "/api/admin/blacklist").get("записи") or []
+
+    def чёрный_добавить(self, imei: str, почему: str) -> list:
+        return self._запрос("POST", "/api/admin/blacklist",
+                            {"imei": imei, "почему": почему}).get("записи") or []
+
+    def чёрный_убрать(self, imei: str) -> list:
+        from urllib.parse import quote
+        return self._запрос("DELETE", f"/api/admin/blacklist/{quote(str(imei))}").get("записи") or []
+
 
 def _отказ(ответ):
     """401 и 403 — разные разговоры с человеком: «войдите заново» и «вам сюда нельзя»."""

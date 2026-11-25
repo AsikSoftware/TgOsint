@@ -186,3 +186,197 @@ def test_the_kiosk_updates_itself_without_waiting_for_a_restart(tmp_path, monkey
             поток.wait(2000)
         w.close()
         w.deleteLater()
+
+
+def test_the_kiosk_installs_the_update_once_and_never_locks_itself(tmp_path, monkeypatch):
+    """Обновление ставится РОВНО один раз, а сорвалось — точка работает дальше.
+
+    Скачивание и подмену папки запускают два разных места: опрос раз в 15 минут и кнопка
+    «повторить» после неудачи. На пробе оба запускались одновременно: два потока писали в
+    один архив и дважды подменяли папку программы. Второй случай страшнее первого: если
+    после неудачи отметка «ставим» осталась бы висеть, касса больше не дала бы начать
+    сделку — выкуп на точке встал бы из-за моргнувшего интернета."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from pintel_kiosk import app as kapp
+    from pintel_kiosk import config as kconfig
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    качали = []
+    monkeypatch.setattr(kapp.KioskWindow, "_run",
+                        lambda self, fn, ok=None, err=None: качали.append(fn))
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_тест",
+                          "point": "16/38 Pintel", "update_repo": "", "update_token": ""})
+    try:
+        w.state = "idle"
+        w.обновление = {"есть": True, "тег": "doctor-999", "url": "u"}
+        качали[:] = []                       # запуск программы сам ходит в сеть — не считаем
+
+        # кнопка «повторить» и опрос раз в 15 минут сошлись в одну минуту
+        w.обновиться()
+        w._обновление_найдено({"есть": True, "тег": "doctor-999", "url": "u"})
+        assert len(качали) == 1, "обновление скачивается дважды в один архив"
+        w.обновиться()
+        assert len(качали) == 1, "обновление скачивается дважды в один архив"
+
+        # сорвалось: интернет моргнул — работаем на этой версии и сделку начать можно
+        w._обновление_сорвалось("ConnectError: нет связи")
+        assert not w.обновление_ставится and not w.обновление_идёт
+        w.начать_сделку()
+        assert w.state != "idle", "после неудачного обновления касса не даёт работать"
+
+        # и следующий опрос пробует снова, а не молчит навсегда
+        w.state, качали[:] = "idle", []
+        w.cfg["update_repo"] = "AsikSoftware/TgOsint"
+        w._проверить_обновление()
+        assert len(качали) == 1, "после неудачи обновление больше не спрашивают"
+    finally:
+        for поток in (w.poller, w.net):
+            поток.stop()
+            поток.wait(2000)
+        w.close()
+        w.deleteLater()
+
+
+def _крутить(мс):
+    """Дать событиям Qt пройти: ожидание свободной минуты живёт на таймере, и проверять
+    его прямым вызовом нельзя — именно так поломка и проскочила мимо тестов."""
+    from PySide6.QtCore import QEventLoop, QTimer
+    петля = QEventLoop()
+    QTimer.singleShot(мс, петля.quit)
+    петля.exec()
+
+
+def _касса_с_обновлением(tmp_path, monkeypatch, ставили):
+    """Касса, у которой подмена программы только отмечается, а не делается."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from pintel_kiosk import app as kapp
+    from pintel_kiosk import config as kconfig
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    monkeypatch.setattr(kapp.KioskWindow, "обновиться", lambda self: ставили.append(self.state))
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_test",
+                          "point": "16/38 Pintel", "update_repo": ""})
+    w.обновление_опрос.stop()                    # проверки GitHub в этих тестах не нужны
+    w.обновление_жду.setInterval(100)            # ждём свободную минуту быстро
+    return w
+
+
+def _закрыть(w):
+    for поток in (w.poller, w.net):
+        поток.stop()
+        поток.wait(2000)
+    w.close()
+    w.deleteLater()
+
+
+def test_the_kiosk_keeps_waiting_for_a_free_minute_and_does_not_freeze(tmp_path, monkeypatch):
+    """Касса возвращается к обновлению столько раз, сколько нужно, и ставит его сразу, как
+    точка освободилась.
+
+    Эту поломку тест прямым вызовом не видел, а на пробе она вышла сразу: ожидание висело
+    на одноразовом таймере, а Qt останавливает такой таймер уже ПОСЛЕ возврата из
+    обработчика — перезапуск изнутри него отменяется. Касса один раз смотрела, занята ли
+    точка, и больше не возвращалась. Отметка «ставим обновление» при этом оставалась: новую
+    сделку начать нельзя, обновление не ставится — точка стоит мёртвой до перезапуска."""
+    ставили = []
+    w = _касса_с_обновлением(tmp_path, monkeypatch, ставили)
+    try:
+        w.state = "work"                         # сотрудник в сделке, телефон на кабеле
+        w._обновление_найдено({"есть": True, "тег": "doctor-999", "url": "u"})
+        _крутить(500)                            # несколько подходов
+        assert ставили == [], "подменили программу посреди сделки"
+        assert w.обновление_жду.isActive(), "касса больше не вернётся к обновлению"
+        assert w.обновление_ставится
+
+        w.state = "idle"                         # сделка закончилась
+        _крутить(300)
+        assert ставили == ["idle"], ставили
+        assert not w.обновление_жду.isActive(), "таймер крутится после установки"
+    finally:
+        _закрыть(w)
+
+
+def test_a_late_answer_does_not_wipe_the_update_we_are_installing(tmp_path, monkeypatch):
+    """Запоздавший ответ прошлой проверки не стирает найденную сборку.
+
+    Проверок может идти две разом: одна при запуске, вторая кнопкой в меню. Если медленная
+    вернётся «нет связи» после быстрой, она обнуляла найденное обновление, а отметка
+    «ставим» оставалась — и точка замирала так же насмерть."""
+    ставили = []
+    w = _касса_с_обновлением(tmp_path, monkeypatch, ставили)
+    try:
+        w.state = "work"
+        w._обновление_найдено({"есть": True, "тег": "doctor-999", "url": "u"})
+        w._обновление_найдено({"есть": False, "почему": "нет связи: ConnectError"})
+        assert w.обновление and w.обновление_ставится, "потеряли найденную сборку"
+        w.state = "idle"
+        _крутить(300)
+        assert ставили == ["idle"], ставили
+    finally:
+        _закрыть(w)
+
+
+def test_the_point_is_never_locked_with_nothing_to_install(tmp_path, monkeypatch):
+    """Отметка «ставим обновление» без самого обновления снимается сама.
+
+    Касса, которая не берёт работу и не обновляется, хуже кассы на старой сборке: выкуп
+    на точке встанет совсем."""
+    ставили = []
+    w = _касса_с_обновлением(tmp_path, monkeypatch, ставили)
+    try:
+        w.обновление, w.обновление_ставится, w.state = None, True, "idle"
+        w._ставить_обновление_когда_свободно()
+        assert not w.обновление_ставится and not w.обновление_жду.isActive()
+        w.начать_сделку()
+        assert w.state != "idle", "касса не даёт работать, а обновления нет"
+    finally:
+        _закрыть(w)
+
+
+def test_the_update_check_writes_one_line_per_reason_not_per_check(tmp_path, monkeypatch):
+    """Проверка каждые 15 минут не засоряет журнал точки.
+
+    Ответ GitHub почти всегда один и тот же — «уже последняя». С восьми касс это 768 строк
+    в сутки, а журнал точки читают глазами: в таком шуме тонет настоящая беда. Поэтому в
+    журнал идёт смена причины, а не каждая проверка."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from pintel_kiosk import app as kapp
+    from pintel_kiosk import config as kconfig
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(kapp.Poller, "run", lambda self: None)
+    monkeypatch.setattr(kapp.NetThread, "run", lambda self: None)
+    w = kapp.KioskWindow({**kconfig.УМОЛЧАНИЯ, "server": kconfig.СЕРВЕР, "token": "pk_тест",
+                          "point": "16/38 Pintel", "update_repo": ""})
+    строки = []
+    monkeypatch.setattr(kapp, "log_line", lambda s: строки.append(s))
+    try:
+        for _ in range(4):                   # час работы: четыре проверки, ответ один
+            w._обновление_найдено({"есть": False, "почему": "уже последняя"})
+        assert len(строки) == 1, строки
+
+        w._обновление_найдено({"есть": False, "почему": "нет связи: ConnectError"})
+        assert len(строки) == 2, "новую беду в журнал не написали"
+        w._обновление_найдено({"есть": False, "почему": "нет связи: ConnectError"})
+        assert len(строки) == 2, строки
+
+        # а вот новую сборку пишем всегда
+        w.state = "work"
+        w._обновление_найдено({"есть": True, "тег": "doctor-999", "url": "u"})
+        assert any("doctor-999" in s for s in строки), строки
+    finally:
+        for поток in (w.poller, w.net):
+            поток.stop()
+            поток.wait(2000)
+        w.close()
+        w.deleteLater()

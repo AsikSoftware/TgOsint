@@ -570,3 +570,23 @@ def test_the_repair_button_fits_under_the_check_steps(открыть, крупн
     экран.сказать("Перезапускаем службу Apple — Windows спросит разрешение, нажмите «Да»", беда=False)
     QApplication.processEvents()
     assert _замечания(экран) == [], "идёт починка: короткое слово в кнопке, ход — строкой внизу"
+
+
+def test_no_qt_effects_live_on_the_screens(открыть, отчёт):
+    """На экранах кассы не должно быть ни одного эффекта Qt.
+
+    Все экраны живут внутри сцены (`app.ScaledHost`) и масштабируются целиком. Эффект
+    внутри сцены composite'ится по своим правилам: картинка виджета кэшируется и
+    накладывается со сдвигом. На маке 26.11.2026 это выглядело так, что строки списка точек
+    наползали друг на друга, а правая карточка обрезалась — рабочий экран превратился в
+    кашу. Тени рисует сам экран красками (`ui.нарисовать_тени`), а эффекты запрещены.
+    """
+    from PySide6.QtWidgets import QGraphicsEffect
+
+    экраны = [открыть(ui_admin.TokenScreen), открыть(ui_admin.AdminScreen),
+              открыть(ui_start.StartScreen), открыть(ui_link.LinkScreen),
+              открыть(ui_deal.WorkScreen), открыть(ui.MainScreen)]
+    for экран in экраны:
+        эффекты = экран.findChildren(QGraphicsEffect)
+        assert not эффекты, (f"на экране {type(экран).__name__} остались эффекты Qt: "
+                             f"{[type(э).__name__ for э in эффекты]}")

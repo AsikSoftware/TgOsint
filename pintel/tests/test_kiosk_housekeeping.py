@@ -446,3 +446,31 @@ def test_a_closed_kiosk_says_so_and_refuses_new_deals(tmp_path, monkeypatch):
             поток.wait(2000)
         w.close()
         w.deleteLater()
+
+
+def test_the_phone_test_takes_the_next_port_when_its_own_is_busy():
+    """Порт теста занят другой программой — берём следующий, а не отказываемся от теста.
+
+    На одной машине у нас живёт не только касса: на маке 8765 держала другая наша
+    программа, и тест на телефоне пропадал целиком. Номер порта уезжает в сам QR — телефону
+    всё равно, какой он."""
+    pytest.importorskip("PySide6")
+    import socket
+
+    from pintel_kiosk import phoneweb
+
+    phoneweb.остановить()
+    # Порт берём свободный у системы, а не 8765: на машине разработчика его как раз и
+    # держит запущенная касса — проверка не должна зависеть от того, что сейчас открыто.
+    занятый = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    занятый.bind(("0.0.0.0", 0))
+    занятый.listen(1)
+    порт = занятый.getsockname()[1]
+    try:
+        assert phoneweb.запустить(порт) is not None, "тест на телефоне отвалился совсем"
+        взяли = phoneweb.текущий_порт()
+        assert порт < взяли <= порт + 4, f"взяли порт {взяли}, ожидали следующий за {порт}"
+        assert str(взяли) in phoneweb.ссылка("кодкод", взяли)
+    finally:
+        phoneweb.остановить()
+        занятый.close()

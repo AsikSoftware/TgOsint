@@ -11,8 +11,8 @@
 """
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
-                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 from pintel_kiosk.ui import C, FONT_HEAD, FONT_NUM, FONT_TEXT, W, аврора, font, load_fonts
 
@@ -62,15 +62,15 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 
 
 def тень(виджет, размытие=28, вниз=6, альфа=32):
-    """Мягкая тень под карточкой: у прозрачной карточки нет своей заливки, и без тени она
-    не отделяется от фона."""
+    """Пометить карточку: под ней рисуется мягкая тень. Рисует её фон окна, а не эффект Qt.
+
+    Почему не эффект: он кэширует картинку виджета, и всё, что внутри прокручивается
+    (а внутри карточек у нас таблицы), начинает двоиться и наползать. В кассе это уже
+    стоило сломанного экрана на маке (26.11.2026); здесь не повторяем."""
     if not СТЕКЛО:
         return виджет
-    эффект = QGraphicsDropShadowEffect(виджет)
-    эффект.setBlurRadius(размытие)
-    эффект.setOffset(0, вниз)
-    эффект.setColor(QColor(11, 27, 51, альфа))
-    виджет.setGraphicsEffect(эффект)
+    виджет.setProperty("тень", True)
+    виджет.setProperty("тень_сила", float(альфа))
     return виджет
 
 
@@ -199,13 +199,31 @@ class Меню(QFrame):
 
 
 class Фон(QWidget):
-    """Окно рисует световой фон само: сквозь карточки должно быть ВИДНО, что за ними."""
+    """Окно рисует световой фон само: сквозь карточки должно быть ВИДНО, что за ними.
+
+    Здесь же рисуются тени под карточками — до того, как нарисуются они сами (дети рисуются
+    после родителя)."""
 
     def paintEvent(self, e):                                     # noqa: N802 — имя от Qt
+        from PySide6.QtCore import QPointF, QRectF
         from PySide6.QtGui import QPainter
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.drawPixmap(self.rect(), аврора(t=2.4, сила=0.5))
+        if not СТЕКЛО:
+            return
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        for ребёнок in self.findChildren(QWidget):
+            if not ребёнок.property("тень") or not ребёнок.isVisible():
+                continue
+            место = QRectF(ребёнок.rect())
+            место.moveTopLeft(QPointF(ребёнок.mapTo(self, ребёнок.rect().topLeft())))
+            сила = float(ребёнок.property("тень_сила") or 32.0)
+            for шаг in range(1, 7):
+                p.setBrush(QColor(11, 27, 51, max(1, int(сила / 8))))
+                p.drawRoundedRect(место.adjusted(-шаг * 1.4, 4 - шаг * 0.7,
+                                                 шаг * 1.4, 4 + шаг * 1.6), 20, 20)
 
 
 # ---------------------------------------------------------------- числа словами

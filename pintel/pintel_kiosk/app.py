@@ -353,7 +353,10 @@ class KioskWindow(QMainWindow):
         self.медиа_опрос.timeout.connect(self._спросить_медиа)
         self.веб_телефона = phoneweb.запустить(int(cfg.get("phone_test_port") or phoneweb.ПОРТ))
         if self.веб_телефона is None:
-            log_line(f"тест на телефоне: порт {cfg.get('phone_test_port') or phoneweb.ПОРТ} занят")
+            log_line(f"тест на телефоне: порт {cfg.get('phone_test_port') or phoneweb.ПОРТ} "
+                     "и четыре следующих заняты — теста на телефоне не будет")
+        elif phoneweb.текущий_порт() != int(cfg.get("phone_test_port") or phoneweb.ПОРТ):
+            log_line(f"тест на телефоне: порт занят, взяли {phoneweb.текущий_порт()}")
         self.сделка, self.кабель = {}, NO_DEVICE
         self._ждём_сделку = False        # посылка у бота, ждём от него номер сделки
         self.return_timer = QTimer(self)
@@ -1991,7 +1994,7 @@ class KioskWindow(QMainWindow):
         её без конца, а сотрудник не знает почему."""
         if токен != self.код_теста or self._тест_закрыт():
             return
-        порт = int(self.cfg.get("phone_test_port") or phoneweb.ПОРТ)
+        порт = phoneweb.текущий_порт()           # тот, что заняли на самом деле
         ссылка = phoneweb.ссылка(токен, порт) if self.веб_телефона else ""
         if not self.веб_телефона:
             подсказка = f"Порт {порт} занят другой программой — тест на телефоне не открыть."

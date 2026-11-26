@@ -95,10 +95,19 @@ def test_the_client_asks_the_server_and_does_not_count_anything():
 
 
 def test_the_token_file_is_not_readable_by_the_neighbours():
-    """Токен — это доступ ко всей сети. Файл с ним закрыт от чужих программ."""
+    """Токен — это доступ ко всей сети. Файл с ним закрыт от чужих программ.
+
+    Проверяется там, где права такие бывают: на Windows их раздаёт не режим файла, а список
+    доступа папки пользователя, и 0o600 туда не ложится вовсе (поймано сборкой 25.11.2026).
+    Программа живёт на маке, но тесты гоняются и под Windows."""
+    import sys as _sys
+
     config.save(токен="t0ken")
-    режим = os.stat(os.path.join(config.data_dir(), config.ФАЙЛ)).st_mode & 0o777
-    assert режим == 0o600, oct(режим)
+    путь = os.path.join(config.data_dir(), config.ФАЙЛ)
+    assert os.path.isfile(путь)
+    if _sys.platform != "win32":
+        режим = os.stat(путь).st_mode & 0o777
+        assert режим == 0o600, oct(режим)
 
 
 # ---------------------------------------------------------------- экраны

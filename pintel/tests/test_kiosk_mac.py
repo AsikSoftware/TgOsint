@@ -156,3 +156,53 @@ def test_the_windows_look_is_not_touched_by_the_mac_glass():
     стекло = ui.материал(True)
     assert "rgba" in стекло["м_карточка"], "карточка на маке должна пропускать фон"
     assert "rgba" not in стекло["м_окно"], "сквозь окно поверх экрана не должно быть видно текст"
+
+
+def test_unpacking_keeps_the_program_runnable(tmp_path, monkeypatch):
+    """После распаковки программа внутри .app обязана остаться запускаемой, а ссылки — ссылками.
+
+    Это не придирка. 26.11.2026 касса на маке обновилась и умерла: `zipfile` снял право на
+    запуск с самой программы и превратил ссылки внутри рамок Qt в текстовые файлы. Папка на
+    месте, вид правильный, запускать нечего."""
+    import subprocess
+    import zipfile
+
+    if sys.platform != "darwin":
+        pytest.skip("распаковка ditto проверяется на маке: на Windows её нет")
+
+    # собираем .app как это делает сборка: ditto сохраняет права и ссылки
+    исходник = tmp_path / "pintel-kiosk.app" / "Contents" / "MacOS"
+    исходник.mkdir(parents=True)
+    программа = исходник / "pintel-kiosk"
+    программа.write_text("#!/bin/sh\necho я программа\n", encoding="utf-8")
+    программа.chmod(0o755)
+    рамки = tmp_path / "pintel-kiosk.app" / "Contents" / "Frameworks" / "QtCore.framework"
+    рамки.mkdir(parents=True)
+    (рамки / "Versions").mkdir()
+    (рамки / "QtCore").symlink_to("Versions/Current/QtCore")
+
+    архив = tmp_path / "сборка.zip"
+    subprocess.check_call(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
+                           str(tmp_path / "pintel-kiosk.app"), str(архив)])
+
+    путь = updater.распаковать(str(архив), str(tmp_path / "новая"))
+    снова = os.path.join(путь, "Contents", "MacOS", "pintel-kiosk")
+    assert os.access(снова, os.X_OK), "программа после распаковки не запускается"
+    assert os.path.islink(os.path.join(путь, "Contents", "Frameworks", "QtCore.framework",
+                                       "QtCore")), "ссылка внутри рамки Qt стала файлом"
+
+    # защита от архива, который лезет мимо папки, осталась на месте
+    злой = tmp_path / "злой.zip"
+    with zipfile.ZipFile(злой, "w") as z:
+        z.writestr("../сбежал.txt", "ой")
+    with pytest.raises(RuntimeError):
+        updater.распаковать(str(злой), str(tmp_path / "куда"))
+
+
+def test_the_mac_script_rolls_back_when_the_new_program_cannot_run():
+    """Откат смотрит на саму программу, а не на папку: испорченная сборка оставляет папку
+    на месте, и проверка «папка есть» пропустила бы мёртвую кассу."""
+    текст = updater.сценарий_мак("/tmp/новая/pintel-kiosk.app",
+                                 "/Applications/pintel-kiosk.app", 4242)
+    assert '[ ! -x "/Applications/pintel-kiosk.app/Contents/MacOS/pintel-kiosk" ]' in текст
+    assert 'mv "/Applications/pintel-kiosk.app.bak" "/Applications/pintel-kiosk.app"' in текст

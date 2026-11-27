@@ -27,6 +27,16 @@ def _как_путь(п: str) -> str:
     return str(п).replace("\\", "/")
 
 
+def _ditto_питоном(команда, *_, **__):
+    """Подмена `ditto` для работ сборки без мака: распаковать тем же питоном.
+
+    Права на запуск и ссылки при этом теряются — ровно поэтому настоящую распаковку
+    проверяет отдельный тест, и только на маке. Здесь нужен лишь распакованный архив."""
+    архив, куда = команда[-2], команда[-1]
+    with zipfile.ZipFile(архив) as z:
+        z.extractall(куда)
+
+
 def test_each_kind_of_point_asks_for_its_own_archive(monkeypatch):
     """Имя архива выбирает сама программа, а не настройка с сервера: настройка одна на все
     точки, а касса бывает windows-овая и маковская."""
@@ -73,8 +83,15 @@ def test_the_mac_script_waits_for_the_program_and_can_roll_back():
 
 
 def test_the_mac_archive_is_unpacked_to_the_app(tmp_path, monkeypatch):
-    """В маковском архиве лежит .app, и распаковка должна вернуть путь к нему."""
+    """В маковском архиве лежит .app, и распаковка должна вернуть путь к нему.
+
+    `ditto` подменён: он есть только на маке, а поиск .app в архиве одинаково нужен во всех
+    трёх работах сборки. Сборка doctor-118 упала именно здесь — на линуксовой работе
+    `/usr/bin/ditto` нет, а система была подменена на маковскую, и распаковка пошла его
+    звать. Сам вызов `ditto` проверяет `test_unpacking_keeps_the_program_runnable`, на
+    настоящем маке."""
     monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(updater.subprocess, "check_call", _ditto_питоном)
     архив = tmp_path / "сборка.zip"
     with zipfile.ZipFile(архив, "w") as z:
         z.writestr("pintel-kiosk.app/Contents/MacOS/pintel-kiosk", "программа")

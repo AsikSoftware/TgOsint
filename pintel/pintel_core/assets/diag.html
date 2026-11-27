@@ -69,11 +69,21 @@ button:active{transform:scale(.96)}
 #grid{position:fixed;inset:0;display:grid;z-index:10;background:#FFFFFF}
 #grid div{border:1px solid rgba(11,27,51,.07)}
 #grid div.hit{background:rgba(22,168,112,.50);border-color:transparent}
+/* Красным показываем то, что осталось незакрашенным: человек должен увидеть МЕСТО, а не
+   процент. По этой картинке и решают, экран молчит или палец туда не доехал. */
+#grid div.miss{background:rgba(217,66,59,.45);border-color:transparent}
 #gridHud{position:fixed;left:0;right:0;bottom:24px;z-index:11;text-align:center;
   pointer-events:none}
 #gridHud b{font-size:40px;font-weight:300}
+#gridLeft{color:#64799A;font-size:14px;min-height:20px}
 #gridBtns{position:fixed;left:0;right:0;top:14px;z-index:12;text-align:center;pointer-events:none}
-#gridBtns button{pointer-events:auto;opacity:.85}
+#gridBtns button{pointer-events:auto}
+/* Через шесть секунд без новой клетки кнопка выхода начинает звать: именно в эту минуту
+   человек и решает, что из теста нет выхода. */
+#gridBtns .зачем{color:#B3261E;font-size:14px;font-weight:700;margin-top:8px;opacity:0;
+  transition:opacity .4s}
+#gridBtns.зовём .зачем{opacity:1}
+#gridBtns.зовём button{animation:зов 2s ease-in-out infinite}
 #colorbox{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;
   justify-content:center;padding-bottom:46px}
 #colorbox span{color:rgba(128,128,128,.85);font-size:15px;background:rgba(0,0,0,.35);
@@ -108,8 +118,12 @@ input[type=file]{display:none}
 <!-- 1. сенсор: тач-сетка -->
 <div class="screen" id="s1">
   <div id="grid"></div>
-  <div id="gridBtns"><button class="ghost small" onclick="сенсорНеКрасится()">Есть места, где не красится</button></div>
-  <div id="gridHud"><div class="step">ЗАКРАСЬТЕ ВЕСЬ ЭКРАН ПАЛЬЦЕМ</div><b id="gridPct">0%</b></div>
+  <div id="gridBtns">
+    <button class="bad small" onclick="сенсорНеКрасится()">Дальше не закрашивается</button>
+    <div class="зачем">экран не отзывается? нажмите сюда</div>
+  </div>
+  <div id="gridHud"><div class="step">ЗАКРАСЬТЕ ВЕСЬ ЭКРАН ПАЛЬЦЕМ</div><b id="gridPct">0%</b>
+    <div id="gridLeft"></div></div>
 </div>
 
 <!-- 2. мультитач -->
@@ -206,7 +220,7 @@ var ТЕСТЫ = [
   {к:"camera_front", имя:"Камера спереди", пуск:камПуск}
 ];
 var ИМЕНА={}; for(var _i=0;_i<ТЕСТЫ.length;_i++) ИМЕНА[ТЕСТЫ[_i].к]=ТЕСТЫ[_i].имя;
-var res={}, заметки=[], шаг=0, вернуться=false, отправлено=false;
+var res={}, заметки=[], шаг=0, вернуться=false, отправлено=false, заметка_ответа="";
 
 function экран(id){
   var все=document.querySelectorAll(".screen");
@@ -242,6 +256,7 @@ function заново(){ пуск(); }
    только потом отвечает — и всегда может пройти тест заново. */
 function вопрос(о){
   полоска();
+  заметка_ответа=о.заметка||"";
   document.getElementById("qStep").textContent=подпись(шаг);
   document.getElementById("qName").textContent=ТЕСТЫ[шаг].имя;
   var a=document.getElementById("qAuto");
@@ -268,12 +283,17 @@ function вопрос(о){
 function ответить(о){
   if(о==="__again"){ заново(); return; }
   if(о==="__play"){ микСлушать(); return; }
+  /* Заметку кладём только к ответу «не прошёл»: она описывает дефект, а при «в порядке»
+     описывать нечего. Строка уходит в сделку и на экран кассы — это и есть то, что человек
+     за стойкой прочитает про чужой телефон, которого больше не увидит. */
+  if(о==="fail"&&заметка_ответа) заметки.push(заметка_ответа);
+  заметка_ответа="";
   res[ТЕСТЫ[шаг].к]=о;
   дальше();
 }
 
 /* ─── 1. сенсор ─── */
-var cells=[], hit=0, cols=8, rows=0;
+var cells=[], hit=0, cols=8, rows=0, сенсорЧасы=null;
 function сенсорПуск(){
   экран("s1");
   var g=document.getElementById("grid");
@@ -296,8 +316,13 @@ function сенсорПуск(){
       if(el&&!el.classList.contains("hit")){el.classList.add("hit");hit++;}
     }
     document.getElementById("gridPct").textContent=Math.round(100*hit/cells.length)+"%";
+    document.getElementById("gridLeft").textContent=
+      hit<cells.length?("осталось мест: "+(cells.length-hit)):"";
+    сенсорЗовёт();
     if(hit===cells.length){
       g.ontouchstart=g.ontouchmove=null;
+      clearTimeout(сенсорЧасы);
+      document.getElementById("gridBtns").classList.remove("зовём");
       setTimeout(function(){
         вопрос({вывод:"закрашено целиком",класс:"ok",
                 вопрос:"Экран отзывался везде, без мёртвых мест?",
@@ -306,12 +331,60 @@ function сенсорПуск(){
     }
   }
   g.ontouchstart=g.ontouchmove=function(e){e.preventDefault();paint(e.touches)};
+  document.getElementById("gridLeft").textContent="";
+  document.getElementById("gridBtns").classList.remove("зовём");
+  сенсорЗовёт();
 }
+
+/* Шесть секунд без новой клетки — и кнопка выхода начинает звать. Владелец, 27.11.2026:
+   «тест сенсора нельзя завершить пока всё не закрасится». Выход был и раньше, но тихой
+   серой кнопкой наверху: человек, у которого экран не отзывается, видел только проценты,
+   которые перестали расти, и решал, что застрял. Зовём ровно в ту минуту, когда он застрял. */
+function сенсорЗовёт(){
+  clearTimeout(сенсорЧасы);
+  сенсорЧасы=setTimeout(function(){
+    if(hit<cells.length) document.getElementById("gridBtns").classList.add("зовём");
+  },6000);
+}
+
+/* Где именно экран промолчал. Мёртвая зона после замены экрана почти всегда полоса у края,
+   и назвать её словом важнее, чем назвать процент: по «справа» сотрудник понимает, что с
+   телефоном, по «закрашено 83%» — ничего. */
+function сенсорГде(пусто){
+  if(!пусто.length) return "";
+  var x0=cols,x1=-1,y0=rows,y1=-1;
+  for(var i=0;i<пусто.length;i++){
+    var x=пусто[i]%cols, y=Math.floor(пусто[i]/cols);
+    if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+  }
+  if(x1<cols/2) return "слева";
+  if(x0>=cols/2) return "справа";
+  if(y1<rows/2) return "сверху";
+  if(y0>=rows/2) return "снизу";
+  return "в разных местах";
+}
+
 function сенсорНеКрасится(){
-  var проц=Math.round(100*hit/(cells.length||1));
-  вопрос({вывод:"закрашено "+проц+"%",класс:"fail",
-          вопрос:"Есть места, где экран не отзывается на палец. Так и записать?",
-          ответы:[{т:"Да, не отзывается",о:"fail",вид:"bad"},{т:"Пройти ещё раз",о:"__again"}]});
+  if(!cells.length) return;
+  clearTimeout(сенсорЧасы);
+  var g=document.getElementById("grid");
+  g.ontouchstart=g.ontouchmove=null;
+  var пусто=[];
+  for(var i=0;i<cells.length;i++){
+    if(!cells[i].classList.contains("hit")){ пусто.push(i); cells[i].classList.add("miss"); }
+  }
+  var проц=Math.round(100*hit/(cells.length||1)), место=сенсорГде(пусто);
+  /* Сначала показываем красным, ГДЕ не отозвалось, и только потом спрашиваем: ответ «да,
+     не отзывается» должен даваться по картинке, а не по памяти. */
+  setTimeout(function(){
+    вопрос({вывод:"закрашено "+проц+"%",класс:"fail",
+            вопрос:hit?("Не отозвалось мест: "+пусто.length+" — "+место
+                        +". Вы провели по ним пальцем, и экран промолчал?")
+                      :"Экран не отозвался нигде. Вы провели по нему пальцем?",
+            заметка:"сенсор: не отозвалось "+пусто.length+" мест из "+cells.length
+                    +" ("+место+")",
+            ответы:[{т:"Да, не отзывается",о:"fail",вид:"bad"},{т:"Пройти ещё раз",о:"__again"}]});
+  },900);
 }
 
 /* ─── 2. мультитач ─── */

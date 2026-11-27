@@ -12,7 +12,8 @@
   Семь тестов, и у каждого один и тот же порядок: СНАЧАЛА проверка, ПОТОМ вопрос с ответом
   и кнопкой «пройти заново». Человек не отвечает про то, чего ещё не видел, и может
   переделать любой тест — в конце весь список на одном экране, тап по строке повторяет
-  именно её. Часть ответов ставится сама: сетка закрашена целиком — сенсор жив; пять
+  именно её. Часть ответов ставится сама: сетка закрашена целиком за 15 секунд — сенсор жив,
+  не успели — не прошёл; пять
   касаний поймались — мультитач жив; снимок не чёрный — камера снимает. Остальное может
   оценить только человек, который смотрит и слушает.
   Пропустить тест на странице нельзя (решение владельца, 13.11.2026): кнопкой «Пропустить»
@@ -75,15 +76,11 @@ button:active{transform:scale(.96)}
 #gridHud{position:fixed;left:0;right:0;bottom:24px;z-index:11;text-align:center;
   pointer-events:none}
 #gridHud b{font-size:40px;font-weight:300}
-#gridLeft{color:#64799A;font-size:14px;min-height:20px}
-#gridBtns{position:fixed;left:0;right:0;top:14px;z-index:12;text-align:center;pointer-events:none}
-#gridBtns button{pointer-events:auto}
-/* Через шесть секунд без новой клетки кнопка выхода начинает звать: именно в эту минуту
-   человек и решает, что из теста нет выхода. */
-#gridBtns .зачем{color:#B3261E;font-size:14px;font-weight:700;margin-top:8px;opacity:0;
-  transition:opacity .4s}
-#gridBtns.зовём .зачем{opacity:1}
-#gridBtns.зовём button{animation:зов 2s ease-in-out infinite}
+/* Обратный отсчёт. Кнопки выхода на этом экране нет вовсе: пока выход был кнопкой, человек
+   с мёртвой полосой на экране её выходом не читал и решал, что застрял. Теперь тест
+   кончается сам, а видимый счётчик делает это ожидаемым, а не внезапным. */
+#gridLeft{color:#64799A;font-size:15px;min-height:22px;font-weight:600}
+#gridLeft.мало{color:#B3261E;font-weight:800}
 #colorbox{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;
   justify-content:center;padding-bottom:46px}
 #colorbox span{color:rgba(128,128,128,.85);font-size:15px;background:rgba(0,0,0,.35);
@@ -118,10 +115,6 @@ input[type=file]{display:none}
 <!-- 1. сенсор: тач-сетка -->
 <div class="screen" id="s1">
   <div id="grid"></div>
-  <div id="gridBtns">
-    <button class="bad small" onclick="сенсорНеКрасится()">Дальше не закрашивается</button>
-    <div class="зачем">экран не отзывается? нажмите сюда</div>
-  </div>
   <div id="gridHud"><div class="step">ЗАКРАСЬТЕ ВЕСЬ ЭКРАН ПАЛЬЦЕМ</div><b id="gridPct">0%</b>
     <div id="gridLeft"></div></div>
 </div>
@@ -193,7 +186,7 @@ input[type=file]{display:none}
     <span id="qAuto" class="ok">—</span></div></div>
   <p class="sub" id="qAsk"></p>
   <div class="pair" id="qAns"></div>
-  <div class="pair">
+  <div class="pair" id="qRetry">
     <button class="ghost small" onclick="заново()">↺ Пройти заново</button>
   </div>
 </div>
@@ -240,6 +233,7 @@ function подпись(i){ return "ТЕСТ "+(i+1)+" ИЗ "+ТЕСТЫ.length;
 
 function начать(){ шаг=0; вернуться=false; res={}; пуск(); }
 function пуск(){
+  сенсорСтоп();                    // отсчёт сенсора не должен пережить уход с его экрана
   delete res[ТЕСТЫ[шаг].к];        // пока тест не доведён, прежний ответ не считается
   полоска();
   ТЕСТЫ[шаг].пуск();
@@ -266,6 +260,11 @@ function вопрос(о){
   var ряд=document.getElementById("qAns");
   ряд.innerHTML="";
   var ответы=о.ответы||[{т:"Дальше →",о:"ok"}];
+  /* Запасную «↺ Пройти заново» прячем, когда тест и так предлагает пройти ещё раз: две
+     кнопки с одним делом на одном экране — это выбор, которого нет. */
+  var есть_повтор=false;
+  for(var i=0;i<ответы.length;i++) if(ответы[i].о==="__again") есть_повтор=true;
+  document.getElementById("qRetry").style.display=есть_повтор?"none":"";
   for(var i=0;i<ответы.length;i++){
     (function(в){
       var b=document.createElement("button");
@@ -293,7 +292,11 @@ function ответить(о){
 }
 
 /* ─── 1. сенсор ─── */
-var cells=[], hit=0, cols=8, rows=0, сенсорЧасы=null;
+var cells=[], hit=0, cols=8, rows=0, сенсорЧасы=null, сенсорОсталось=0;
+/* Сколько даём на сенсор. Пятнадцати секунд хватает провести пальцем по всему экрану с
+   запасом; не хватает их ровно там, где экран и не отзывается. Решение владельца,
+   27.11.2026: не успели — значит не прошли, и тест идёт дальше сам. */
+var СЕНСОР_СЕКУНД=15;
 function сенсорПуск(){
   экран("s1");
   var g=document.getElementById("grid");
@@ -303,9 +306,9 @@ function сенсорПуск(){
   g.innerHTML=""; cells=[]; hit=0;
   document.getElementById("gridPct").textContent="0%";
   for(var i=0;i<cols*rows;i++){var d=document.createElement("div");g.appendChild(d);cells.push(d);}
-  /* Клетку считаем по координатам, а не по тому, что под пальцем: кнопка и подпись сверху
-     перекрывали сетку, elementFromPoint возвращал их, и те клетки закрасить было нельзя —
-     тест не доходил до ста процентов никогда. */
+  /* Клетку считаем по координатам, а не по тому, что под пальцем: подпись поверх сетки
+     elementFromPoint возвращал вместо клетки, и те клетки закрасить было нельзя — тест не
+     доходил до ста процентов никогда. */
   function paint(t){
     var r=g.getBoundingClientRect();
     for(var i=0;i<t.length;i++){
@@ -316,13 +319,10 @@ function сенсорПуск(){
       if(el&&!el.classList.contains("hit")){el.classList.add("hit");hit++;}
     }
     document.getElementById("gridPct").textContent=Math.round(100*hit/cells.length)+"%";
-    document.getElementById("gridLeft").textContent=
-      hit<cells.length?("осталось мест: "+(cells.length-hit)):"";
-    сенсорЗовёт();
     if(hit===cells.length){
       g.ontouchstart=g.ontouchmove=null;
-      clearTimeout(сенсорЧасы);
-      document.getElementById("gridBtns").classList.remove("зовём");
+      сенсорСтоп();
+      document.getElementById("gridLeft").textContent="";
       setTimeout(function(){
         вопрос({вывод:"закрашено целиком",класс:"ok",
                 вопрос:"Экран отзывался везде, без мёртвых мест?",
@@ -331,20 +331,26 @@ function сенсорПуск(){
     }
   }
   g.ontouchstart=g.ontouchmove=function(e){e.preventDefault();paint(e.touches)};
-  document.getElementById("gridLeft").textContent="";
-  document.getElementById("gridBtns").classList.remove("зовём");
-  сенсорЗовёт();
+  сенсорПошёл();
 }
 
-/* Шесть секунд без новой клетки — и кнопка выхода начинает звать. Владелец, 27.11.2026:
-   «тест сенсора нельзя завершить пока всё не закрасится». Выход был и раньше, но тихой
-   серой кнопкой наверху: человек, у которого экран не отзывается, видел только проценты,
-   которые перестали расти, и решал, что застрял. Зовём ровно в ту минуту, когда он застрял. */
-function сенсорЗовёт(){
-  clearTimeout(сенсорЧасы);
-  сенсорЧасы=setTimeout(function(){
-    if(hit<cells.length) document.getElementById("gridBtns").classList.add("зовём");
-  },6000);
+/* Обратный отсчёт теста. Секунды видно всё время: тест, который кончается сам, не должен
+   кончаться неожиданно — человек должен понимать, сколько у него есть. */
+function сенсорПошёл(){
+  сенсорСтоп();
+  сенсорОсталось=СЕНСОР_СЕКУНД;
+  сенсорПодпись();
+  сенсорЧасы=setInterval(function(){
+    сенсорОсталось--;
+    сенсорПодпись();
+    if(сенсорОсталось<=0) сенсорНеУспели();
+  },1000);
+}
+function сенсорСтоп(){ clearInterval(сенсорЧасы); сенсорЧасы=null; }
+function сенсорПодпись(){
+  var э=document.getElementById("gridLeft");
+  э.textContent="осталось "+Math.max(сенсорОсталось,0)+" с";
+  э.className=сенсорОсталось<=5?"мало":"";
 }
 
 /* Где именно экран промолчал. Мёртвая зона после замены экрана почти всегда полоса у края,
@@ -364,9 +370,15 @@ function сенсорГде(пусто){
   return "в разных местах";
 }
 
-function сенсорНеКрасится(){
+/* Время вышло, а сетка не закрашена. Это ответ «не прошёл», и тест идёт дальше — но не
+   молча: сначала человек видит красным, ГДЕ экран промолчал, а потом сам решает, записать
+   так или пройти ещё раз. Записываем только по его нажатию: страница на чужом телефоне не
+   вправе ставить телефону диагноз за спиной у хозяина. */
+function сенсорНеУспели(){
   if(!cells.length) return;
-  clearTimeout(сенсорЧасы);
+  сенсорСтоп();
+  var п=document.getElementById("gridLeft");
+  п.textContent="время вышло"; п.className="мало";
   var g=document.getElementById("grid");
   g.ontouchstart=g.ontouchmove=null;
   var пусто=[];
@@ -374,16 +386,16 @@ function сенсорНеКрасится(){
     if(!cells[i].classList.contains("hit")){ пусто.push(i); cells[i].classList.add("miss"); }
   }
   var проц=Math.round(100*hit/(cells.length||1)), место=сенсорГде(пусто);
-  /* Сначала показываем красным, ГДЕ не отозвалось, и только потом спрашиваем: ответ «да,
-     не отзывается» должен даваться по картинке, а не по памяти. */
   setTimeout(function(){
     вопрос({вывод:"закрашено "+проц+"%",класс:"fail",
-            вопрос:hit?("Не отозвалось мест: "+пусто.length+" — "+место
-                        +". Вы провели по ним пальцем, и экран промолчал?")
-                      :"Экран не отозвался нигде. Вы провели по нему пальцем?",
-            заметка:"сенсор: не отозвалось "+пусто.length+" мест из "+cells.length
-                    +" ("+место+")",
-            ответы:[{т:"Да, не отзывается",о:"fail",вид:"bad"},{т:"Пройти ещё раз",о:"__again"}]});
+            вопрос:(hit?("Экран отозвался не везде: "+пусто.length+" мест — "+место+". ")
+                       :"Экран не отозвался нигде. ")
+                   +"Запишем «сенсор не прошёл». Если мешал чехол или палец не доехал — "
+                   +"пройдите ещё раз.",
+            заметка:"сенсор: за "+СЕНСОР_СЕКУНД+" с не отозвалось "+пусто.length
+                    +" мест из "+cells.length+" ("+место+")",
+            ответы:[{т:"Пройти ещё раз",о:"__again"},
+                    {т:"Не отзывается, дальше →",о:"fail",вид:"bad"}]});
   },900);
 }
 
